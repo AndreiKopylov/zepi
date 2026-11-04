@@ -1,0 +1,39 @@
+Zepi
+====
+
+Zepi — Windows-воркспейс, собранный на плечах других проектов. Ниже — что взято и под какой
+лицензией.
+
+Основа
+------
+- Zed — https://github.com/zed-industries/zed
+  Copyright Zed Industries, Inc. Двойная лицензия Apache-2.0 / GPL-3.0-or-later.
+  Zepi распространяется под GPL-3.0-or-later (см. LICENSE): используется код Zed и его
+  производный оверлей native/overlay/**.
+- eido — https://github.com/tony3liu/eido
+  Первая связка Zed + pi на Windows, от которой Zepi ведёт происхождение (GPL-3.0-or-later).
+- pi — https://github.com/badlogic/pi-mono
+  Агент и протокол ACP, пакеты @earendil-works/pi-* (GPL-3.0-or-later), включены в packages/.
+
+Вендорные движки документов (сохраняют свои лицензии)
+-----------------------------------------------------
+- gridcraft (xlsx) — https://github.com/storytold — MIT OR Apache-2.0
+- deckcraft (pptx) — https://github.com/storytold — MIT OR Apache-2.0
+- wordcraft (docx) — https://github.com/storytold — MIT OR Apache-2.0
+
+Тексты лицензий лежат в native/overlay/vendor/<проект>/LICENSE-*.
+
+Прочие компоненты
+-----------------
+- Node.js (deps/node) — MIT, https://nodejs.org
+- CPython (deps/python) — PSF License, https://python.org
+- Playwright Chromium (deps/browsers) — BSD-3-Clause (Playwright), Chromium — BSD-3-Clause и
+  сторонние лицензии внутри дистрибутива Chromium
+- python-docx, openpyxl, python-pptx, pypdf, Pillow — MIT / BSD / Apache-2.0 (см. их dist-info
+  в deps/python/Lib/site-packages)
+- Все прочие зависимости — согласно Cargo.toml и package.json.
+
+Товарные знаки
+--------------
+Zed, pi, Node.js, Python, Chromium и прочие названия принадлежат их владельцам. Zepi не
+аффилирован с Zed Industries, Earendil Works или storytold.
