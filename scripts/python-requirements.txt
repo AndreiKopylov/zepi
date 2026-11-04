@@ -1,0 +1,6 @@
+# Pinned wheels for deps/python (CPython 3.13, win_amd64, no build step).
+python-pptx==1.0.2
+python-docx==1.2.0
+openpyxl==3.1.5
+pillow==13.0.0
+pypdf==6.21.4
