@@ -10,6 +10,8 @@
 # Development documents stay local by default.
 *.[Mm][Dd]
 !docs/BUILD.md
+!README.ru.md
+!CHANGELOG.md
 *.[Mm][Aa][Rr][Kk][Dd][Oo][Ww][Nn]
 *.[Mm][Dd][Xx]
 *.[Dd][Oo][Cc]

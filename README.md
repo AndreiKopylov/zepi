@@ -1,96 +1,97 @@
 # Zepi
 
-**Windows-воркспейс для кода и офисных документов — с агентом внутри.**
+[English](README.md) | [Русский](README.ru.md)
 
-Zepi соединяет редактор [Zed](https://github.com/zed-industries/zed) и агента
-[pi](https://github.com/badlogic/pi-mono) через протокол ACP. В одном окне: код, терминал, git, чат с
-моделью — и просмотр/правка `.pptx`, `.docx`, `.xlsx` без установленного Microsoft Office.
+**A Windows workspace for code and office documents — with an agent built in.**
 
-> Статус: **бета (0.0.1)**. Собрано на Zed v1.26.2, pi 1.5.0.
+Zepi wires the [Zed](https://github.com/zed-industries/zed) editor to the
+[pi](https://github.com/badlogic/pi-mono) agent over ACP. One window holds code, terminal, git and a
+chat with your model — plus viewing and editing `.pptx`, `.docx` and `.xlsx` without Microsoft Office.
 
-## Возможности
+> Status: **beta (0.0.1)**. Built on Zed v1.26.2 and pi 1.5.0.
 
-| Область | Что умеет |
+## What it does
+
+| Area | Capabilities |
 | :--- | :--- |
-| **Код** | Полноценный редактор Zed: LSP, git, терминал, панели, темы, мультикурсор, командная палитра |
-| **Агент** | Чат с моделями провайдера, инструменты (файлы, поиск, PowerShell, codemode), субагенты, сессии (`/fork`, `/export`, `/compact`), MCP, скиллы |
-| **Презентации** | `.pptx`: лента слайдов с зумом и поиском, правка текста, отправка слайда или выделенной области агенту |
-| **Документы** | `.docx`: постраничный просмотр, поиск, правка, отправка фрагмента агенту |
-| **Таблицы** | `.xlsx`: листы, формулы, редактирование ячеек с сохранением на диск |
-| **Рендер** | `zepi office render` превращает pptx/docx в PNG тем же движком, что рисует вьюер — без LibreOffice и Office |
+| **Code** | Full Zed editor: LSP, git, terminal, panels, themes, multi-cursor, command palette |
+| **Agent** | Chat with your provider's models, tools (files, search, PowerShell, codemode), subagents, sessions (`/fork`, `/export`, `/compact`), MCP, skills |
+| **Presentations** | `.pptx`: slide strip with zoom and search, text editing, send a slide or a region to the agent |
+| **Documents** | `.docx`: paginated view, search, editing, send a fragment to the agent |
+| **Spreadsheets** | `.xlsx`: sheets, formulas, cell editing saved straight to disk |
+| **Rendering** | `zepi office render` turns pptx/docx into PNGs with the same engine the viewer draws with — no LibreOffice, no Office |
 
-Агент умеет работать с документами сам: в комплекте скиллы `zepi-office-docs`, `zepi-docx`,
-`zepi-xlsx`, `zepi-deck-build`, `zepi-deck-design`, `zepi-office-qa` и встроенный Python 3.13
-с python-docx, openpyxl, python-pptx, pypdf и Pillow — ставить ничего не нужно.
+The agent handles documents on its own: bundled skills `zepi-office-docs`, `zepi-docx`, `zepi-xlsx`,
+`zepi-deck-build`, `zepi-deck-design`, `zepi-office-qa` plus a bundled Python 3.13 with python-docx,
+openpyxl, python-pptx, pypdf and Pillow. Nothing to install.
 
-## Установка
+## Install
 
-1. Скачать `zepi-<версия>-setup.exe` со страницы [Releases](../../releases).
-2. Запустить, подтвердить UAC. Программа ставится в `C:\Program Files\Zepi` и появляется
-   в «Параметры → Приложения».
-3. Выбрать компоненты:
-   - **Zepi** — редактор и агент (обязательно);
-   - **Python для документов Office** — нужен для `.docx`/`.xlsx`/`.pptx` (56 МБ);
-   - **Встроенный браузер** — Chromium для браузерных инструментов агента (702 МБ, можно пропустить).
-4. Указать провайдера моделей: в настройках агента (`Settings → Agent`) или в
-   `%LOCALAPPDATA%\Zepi\pi\models.json`. Готовых провайдеров в поставке нет — ключи и адреса
-   каждый задаёт свои.
+1. Download `zepi-<version>-setup.exe` from [Releases](../../releases).
+2. Run it and accept the UAC prompt. Zepi installs to `C:\Program Files\Zepi` and appears under
+   Settings → Apps.
+3. Pick components:
+   - **Zepi** — editor and agent (required);
+   - **Python for Office documents** — needed for `.docx`/`.xlsx`/`.pptx` (56 MB);
+   - **Bundled browser** — Chromium for the agent's browser tools (702 MB, optional).
+4. Configure a model provider in the agent settings (`Settings → Agent`) or in
+   `%LOCALAPPDATA%\Zepi\pi\models.json`. No providers ship with the build: bring your own endpoint
+   and key.
 
-Настройки, сессии и скиллы живут в `%LOCALAPPDATA%\Zepi` и не затрагиваются обновлением.
+Settings, sessions and skills live in `%LOCALAPPDATA%\Zepi`; updates never touch them.
 
-### Требования
+### Requirements
 
 - Windows 10/11 x64.
-- Ключ и endpoint провайдера моделей (любой OpenAI-совместимый или встроенный список pi).
-- Системный Node.js, Python и git **не нужны** — всё в поставке.
+- A model provider (any OpenAI-compatible endpoint, or one of pi's built-in providers).
+- No system Node.js, Python or git required — everything is bundled.
 
-## Как это устроено
+## How it is built
 
 ```
-zepi.exe                 редактор + хост агента (Rust, Zed + оверлей Zepi)
-packages/, node_modules/ ACP-адаптер и pi
-deps/node/               Node 24 для агента
-deps/python/             CPython 3.13 + документные библиотеки
-deps/browsers/           Chromium (Playwright) для браузерных инструментов
-native/                  внешний вид, дефолты pi, скиллы
+zepi.exe                 editor + agent host (Rust: Zed plus the Zepi overlay)
+packages/, node_modules/ ACP adapter and pi
+deps/node/               Node 24 for the agent
+deps/python/             CPython 3.13 with document libraries
+deps/browsers/           Chromium (Playwright) for browser tools
+native/                  appearance, pi defaults, skills
 ```
 
-Состояние — в `%LOCALAPPDATA%\Zepi\{zed,pi}`, временные картинки вьюеров и рендеры —
-в `%LOCALAPPDATA%\Zepi\{temp,render}` (чистятся по TTL 7 дней).
+State lives in `%LOCALAPPDATA%\Zepi\{zed,pi}`; viewer images and renders go to
+`%LOCALAPPDATA%\Zepi\{temp,render}` and expire after 7 days.
 
-## Сборка из исходников
+## Building from source
 
-Кратко (подробности — в [`docs/BUILD.md`](docs/BUILD.md)):
+Short version (details in [`docs/BUILD.md`](docs/BUILD.md)):
 
 ```powershell
 npm ci
-python scripts\native.py prepare   # тарбол Zed по пину native/zed.json + оверлей Zepi
+python scripts\native.py prepare   # Zed tarball pinned by native/zed.json + the Zepi overlay
 win-build.cmd                      # cargo build -p zed --bin zepi --profile release-fast
-python scripts\win-run.py          # запуск собранного exe
+python scripts\win-run.py          # run the freshly built exe
 ```
 
-Нужны MSVC v143 + Windows SDK, Rust 1.98.1, Node >= 22, Python 3.10+, cmake и nasm.
+You need MSVC v143 + Windows SDK, Rust 1.98.1, Node >= 22, Python 3.10+, cmake and nasm.
 
-## Ограничения беты
+## Beta limitations
 
-- Установщик не подписан — SmartScreen предупредит о «неизвестном издателе».
-- Автообновления нет: новая версия ставится поверх, данные сохраняются.
-- `.xlsx` не имеет растрового рендера: визуальная проверка таблиц не поддерживается, значения
-  проверяются программно.
-- Модели и провайдеры не поставляются: без ключа агент не отвечает.
+- The installer is unsigned, so SmartScreen warns about an unknown publisher.
+- No auto-update: install a newer build over the old one, data is preserved.
+- `.xlsx` has no rasteriser: no visual check for spreadsheets, values are verified programmatically.
+- No models are bundled; without a key the agent stays silent.
 
-## Благодарности
+## Credits
 
-- [Zed Industries](https://github.com/zed-industries/zed) — редактор и платформа gpui.
-- [tony3liu](https://github.com/tony3liu/eido) — eido: первая связка Zed + pi на Windows,
-  от которой Zepi ведёт происхождение.
-- [Mario Zechner](https://github.com/badlogic/pi-mono) — агент pi и протокол ACP.
-- [storytold](https://github.com/storytold) — gridcraft, deckcraft, wordcraft (движки документов).
-- Сообщества Node.js, Playwright и всех зависимостей из `Cargo.toml`/`package.json`.
+- [Zed Industries](https://github.com/zed-industries/zed) — editor and the gpui platform.
+- [tony3liu](https://github.com/tony3liu/eido) — eido: the first Zed + pi pairing on Windows, from
+  which Zepi descends.
+- [Mario Zechner](https://github.com/badlogic/pi-mono) — the pi agent and the ACP protocol.
+- [storytold](https://github.com/storytold) — gridcraft, deckcraft, wordcraft (document engines).
+- The Node.js, Playwright and crate/npm dependency communities.
 
-## Лицензии
+## License
 
-Код репозитория — **GPL-3.0-or-later** (`LICENSE`): оверлей производен от Zed (Apache-2.0 или
-GPL-3.0-or-later, выбран GPL) и от eido. Пакеты pi — GPL-3.0-or-later. Вендорные
-gridcraft/deckcraft/wordcraft остаются на MIT OR Apache-2.0, тексты и атрибуция — в их каталогах,
-сводка — в `NOTICE`. Товарные знаки принадлежат владельцам.
+Code in this repository is **GPL-3.0-or-later** (`LICENSE`): the overlay is derived from Zed
+(Apache-2.0 or GPL-3.0-or-later, GPL chosen) and from eido. pi packages are GPL-3.0-or-later.
+Vendored gridcraft/deckcraft/wordcraft keep MIT OR Apache-2.0; their texts and attribution live in
+their directories, summarised in `NOTICE`. Trademarks belong to their owners.
