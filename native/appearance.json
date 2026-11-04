@@ -1,0 +1,38 @@
+{
+  "theme": {
+    "mode": "dark",
+    "light": "Zepi Light",
+    "dark": "Zepi Dark"
+  },
+  "ui_font_family": ".ZedSans",
+  "ui_font_size": 14,
+  "agent_ui_font_family": ".ZedSans",
+  "agent_ui_font_size": 14,
+  "agent_buffer_font_size": 12,
+  "buffer_font_size": 14,
+  "agent": {
+    "max_content_width": null,
+    "message_editor_min_lines": 3,
+    "dock": "left",
+    "threads_sidebar": {
+      "position": "left",
+      "auto_open": true
+    }
+  },
+  "terminal": {
+    "font_size": 13
+  },
+  "title_bar": {
+    "show_sign_in": false,
+    "show_user_menu": false,
+    "show_worktree_name": false
+  },
+  "collaboration_panel": {
+    "button": false
+  },
+  "diff_view_style": "unified",
+  "git_panel": {
+    "dock": "right",
+    "entry_primary_click_action": "file_diff"
+  }
+}

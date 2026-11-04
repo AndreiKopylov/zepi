@@ -1,0 +1,50 @@
+[package]
+name = "zepi_ui"
+version = "0.0.1"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+path = "src/zepi_ui.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+project.workspace = true
+editor.workspace = true
+db.workspace = true
+wordcraft-doc = { path = "../../vendor/wordcraft/crates/doc" }
+wordcraft-docx = { path = "../../vendor/wordcraft/crates/docx" }
+wordcraft-layout = { path = "../../vendor/wordcraft/crates/layout" }
+wordcraft-render = { path = "../../vendor/wordcraft/crates/render" }
+gridcraft-core = { path = "../../vendor/gridcraft/crates/core" }
+gridcraft-model = { path = "../../vendor/gridcraft/crates/model" }
+gridcraft-numfmt = { path = "../../vendor/gridcraft/crates/numfmt" }
+gridcraft-xlsx = { path = "../../vendor/gridcraft/crates/xlsx" }
+# vendored from github.com/storytold/deckcraft rev a3fbf02952839c223df600dc33106a2dbc65be1b
+deckcraft-geom = { path = "../../vendor/deckcraft/crates/geom" }
+deckcraft-model = { path = "../../vendor/deckcraft/crates/model" }
+deckcraft-pptx = { path = "../../vendor/deckcraft/crates/pptx" }
+deckcraft-render = { path = "../../vendor/deckcraft/crates/render" }
+image.workspace = true
+theme.workspace = true
+agent_settings.workspace = true
+agent_ui.workspace = true
+gpui.workspace = true
+log.workspace = true
+paths.workspace = true
+project_panel.workspace = true
+search.workspace = true
+serde_json.workspace = true
+serde_json_lenient.workspace = true
+settings.workspace = true
+terminal_view.workspace = true
+ui.workspace = true
+util.workspace = true
+workspace.workspace = true
+
+[dev-dependencies]
+db = { workspace = true, features = ["test-support"] }

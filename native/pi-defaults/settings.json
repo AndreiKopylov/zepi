@@ -1,0 +1,11 @@
+{
+  "defaultTools": [
+    "-bash",
+    "+powershell",
+    "+grep",
+    "+find",
+    "+ls",
+    "+codemode"
+  ],
+  "defaultThinkingLevel": "high"
+}

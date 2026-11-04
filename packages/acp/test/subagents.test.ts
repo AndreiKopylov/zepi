@@ -1,0 +1,428 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, mkdir, realpath, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { client, methods, type ClientConnection, type SessionNotification } from "@agentclientprotocol/sdk";
+import { startZepiAgent } from "../src/server.ts";
+import { SUBAGENT_RUN } from "../src/subagents.ts";
+import { call, declaredTools, fixtureModel, lastToolText, type FixtureStep } from "./fixture-model.ts";
+import { createExtensionCenter } from "../../runtime/src/pi/extensions.mjs";
+import {policyRemote} from './fixture-mcp-policy.ts';
+
+type Run = {childSessionId: string; parentSessionId: string; task: string; toolCallId: string};
+async function harness(steps: FixtureStep[], runHooks: {prepare?: (cwd: string) => Promise<void>; beforeLoad?: () => Promise<void>; settled?: () => void} = {}) {
+  const cwd = await realpath(await mkdtemp(join(tmpdir(), "zepi-subagents-")));
+  await writeFile(join(cwd, "settings.json"), JSON.stringify({defaultProvider: "zepi-fixture", defaultModel: "scripted", compaction: {enabled: false}}));
+  await writeFile(join(cwd, "source.ts"), "disk content");
+  await runHooks.prepare?.(cwd);
+  const fixture = await fixtureModel(cwd, steps);
+  const toAgent = new TransformStream(), toClient = new TransformStream();
+  const server = await startZepiAgent(cwd, join(cwd, "sessions"), {readable: toAgent.readable, writable: toClient.writable}, fixture.runtime);
+  const updates: SessionNotification[] = [], runs: Run[] = [], readSessions: string[] = [], permissions: string[] = [];
+  const attached = new Set<string>();
+  let writes = 0;
+  const runErrors: unknown[] = [];
+  const connection: ClientConnection = client({name: "zepi-subagent-test"})
+    .onNotification(methods.client.session.update, ({params}) => {
+      if (params.update.sessionUpdate === "agent_message_chunk" && runs.some(run => run.childSessionId === params.sessionId)) {
+        assert.ok(attached.has(params.sessionId), "Child output arrived before native registration");
+      }
+      updates.push(params);
+    })
+    .onRequest(methods.client.session.requestPermission, ({params}) => {permissions.push(params.sessionId); return {outcome: {outcome: "selected", optionId: "allow_once"}};})
+    .onRequest(methods.client.fs.readTextFile, ({params}) => {readSessions.push(params.sessionId); return {content: "current unsaved buffer"};})
+    .onRequest(methods.client.fs.writeTextFile, () => {writes++; return {};})
+    .onRequest(SUBAGENT_RUN, {parse: raw => raw as Run}, async ({params, signal}) => {
+      runs.push(params);
+      assert.ok(updates.some(({sessionId, update}) => sessionId === params.parentSessionId && update.sessionUpdate === "tool_call_update" && update._meta?.subagent_session_info));
+      const work = (async () => {
+        try {
+          await runHooks.beforeLoad?.();
+          attached.add(params.childSessionId);
+          await connection.agent.request(methods.agent.session.load, {sessionId: params.childSessionId, cwd, mcpServers: []});
+          return await connection.agent.request(methods.agent.session.prompt, {sessionId: params.childSessionId, prompt: [{type: "text", text: params.task}]});
+        } catch (error) { runErrors.push(error); throw error; }
+        finally { runHooks.settled?.(); }
+      })();
+      let cancel!: () => void;
+      const cancelled = new Promise<{stopReason: "cancelled"}>(resolve => {
+        cancel = () => resolve({stopReason: "cancelled"});
+        if (signal.aborted) cancel();
+        else signal.addEventListener("abort", cancel, {once: true});
+      });
+      try { return await Promise.race([work, cancelled]); }
+      finally { signal.removeEventListener("abort", cancel); }
+    })
+    .connect({readable: toClient.readable, writable: toAgent.writable});
+  await connection.agent.request(methods.agent.initialize, {protocolVersion: 1, clientCapabilities: {_meta: {zepiSubagents: 1}}});
+  const parent = await connection.agent.request(methods.agent.session.new, {cwd, mcpServers: []});
+  return {cwd, server, connection, parent, updates, runs, readSessions, permissions, runErrors, requests: fixture.requests, writes: () => writes,
+    prompt: (text: string) => connection.agent.request(methods.agent.session.prompt, {sessionId: parent.sessionId, prompt: [{type: "text", text}]}),
+    dispose: async () => {await server.agent.dispose(); connection.close(); server.connection.close(); await rm(cwd, {recursive: true, force: true});},
+  };
+}
+
+test('child roles select native tools independently of empty parent defaults', {timeout:30_000}, async () => {
+  const h = await harness([
+    context => {assert.ok(!declaredTools(context).includes('read')); return call('subagent',{agent:'scout',task:'Inspect available tools.'});},
+    context => {assert.deepEqual(declaredTools(context).sort(),['find','grep','ls','read']); return 'Scout tools verified.';},
+    context => {assert.match(lastToolText(context,'subagent'),/Scout tools verified/); return call('subagent',{agent:'explicit',task:'Inspect explicit dormant plugin selection.'});},
+    context => {assert.deepEqual(declaredTools(context).sort(),['dormant','find','grep','ls','read']); return 'Explicit selection verified.';},
+    context => {assert.match(lastToolText(context,'subagent'),/Explicit selection verified/); return 'Roles verified.';},
+  ], {prepare:async cwd => {
+    await writeFile(join(cwd,'settings.json'),JSON.stringify({defaultProvider:'zepi-fixture',defaultModel:'scripted',defaultTools:[]}));
+    await mkdir(join(cwd,'agents'));
+    await writeFile(join(cwd,'agents/explicit.md'),'---\nname: explicit\ndescription: Test explicit tools\ntools: [read, "tool:dormant"]\n---\nInspect tools only.');
+    await mkdir(join(cwd,'extensions'));
+    await writeFile(join(cwd,'extensions/dormant.js'),`export default pi => pi.registerTool({name:'dormant',label:'Dormant',description:'Dormant fixture',defaultActive:false,parameters:{type:'object',properties:{}},execute:async()=>({content:[]})});`);
+  }});
+  try {assert.equal((await h.prompt('Verify independent role tools.')).stopReason,'end_turn'); assert.equal(h.requests(),5);}
+  finally {await h.dispose();}
+});
+
+test('Full Access reaches parent and child tools while preserving read-only role restrictions', {timeout:30_000}, async () => {
+  const h=await harness([
+    ()=>call('subagent',{agent:'scout',task:'Inspect source.ts.'}),
+    context=>{assert.ok(!declaredTools(context).includes('write'));return call('write',{path:'source.ts',content:'forbidden'});},
+    context=>{const last=context.messages.findLast(message=>message.role==='toolResult');assert.ok(last?.role==='toolResult'&&last.isError);return call('read',{path:'source.ts'});},
+    context=>{assert.match(lastToolText(context,'read'),/current unsaved buffer/);return 'Read verified.';},
+    context=>{assert.match(lastToolText(context,'subagent'),/Read verified/);return 'Delegation verified.';},
+  ],{prepare:async cwd=>{const path=join(cwd,'settings.json');await writeFile(path,JSON.stringify({...JSON.parse(await readFile(path,'utf8')),zepi:{fullAccess:true}}));}});
+  try {
+    assert.equal((await h.prompt('Inspect with Full Access.')).stopReason,'end_turn');
+    assert.deepEqual(h.permissions,[]);assert.equal(h.writes(),0);assert.equal(h.readSessions.length,1);assert.equal(h.requests(),5);
+    assert.equal(await readFile(join(h.cwd,'source.ts'),'utf8'),'disk content');
+  } finally {await h.dispose();}
+});
+
+test("delegation registers an independent pi child, reads native buffers and replays its ownership", {timeout: 30_000}, async () => {
+  const h = await harness([
+    () => call("subagent", {title: "Inspect current buffer", task: "Read source.ts and report its state."}),
+    context => {assert.doesNotMatch(JSON.stringify(context.messages), /parent-only-secret/); return call("read", {path: "source.ts"});},
+    context => {assert.match(lastToolText(context, "read"), /current unsaved buffer/); return "The current buffer contains unsaved content.";},
+    context => {assert.match(lastToolText(context, "subagent"), /unsaved content/); return "Inspection received.";},
+  ]);
+  try {
+    assert.equal((await h.prompt("parent-only-secret. Delegate an inspection.")).stopReason, "end_turn");
+    assert.equal(h.runs.length, 1);
+    const child = h.runs[0]!.childSessionId;
+    assert.notEqual(child, h.parent.sessionId);
+    assert.deepEqual(h.readSessions, [child]);
+    assert.equal(h.writes(), 0);
+    assert.equal(await readFile(join(h.cwd, "source.ts"), "utf8"), "disk content");
+    const list = await h.connection.agent.request(methods.agent.session.list, {cwd: h.cwd});
+    assert.deepEqual(list.sessions.map(session => session.sessionId), [h.parent.sessionId]);
+    await h.connection.agent.request(methods.agent.session.close, {sessionId: h.parent.sessionId});
+    h.updates.length = 0;
+    await h.connection.agent.request(methods.agent.session.load, {sessionId: h.parent.sessionId, cwd: h.cwd, mcpServers: []});
+    assert.ok(h.updates.some(({update}) => update.sessionUpdate === "tool_call_update" && update._meta?.subagent_session_info));
+    await h.connection.agent.request(methods.agent.session.load, {sessionId: child, cwd: h.cwd, mcpServers: []});
+    assert.ok(h.updates.some(({sessionId, update}) => sessionId === child && update.sessionUpdate === "agent_message_chunk" && update.content.type === "text" && update.content.text.includes("unsaved content")));
+    assert.equal(h.runs.length, 1, "Loading history must never rerun a delegation");
+
+    await h.server.agent.dispose(); h.connection.close(); h.server.connection.close();
+    const freshModel = await fixtureModel(h.cwd, []);
+    const toAgent = new TransformStream(), toClient = new TransformStream();
+    const restarted = await startZepiAgent(h.cwd, join(h.cwd, "sessions"), {readable: toAgent.readable, writable: toClient.writable}, freshModel.runtime);
+    const replay: SessionNotification[] = [];
+    const connection = client({name: "zepi-restarted-test"})
+      .onNotification(methods.client.session.update, ({params}) => {replay.push(params);})
+      .connect({readable: toClient.readable, writable: toAgent.writable});
+    try {
+      await connection.agent.request(methods.agent.initialize, {protocolVersion: 1, clientCapabilities: {_meta: {zepiSubagents: 1}}});
+      const restoredList = await connection.agent.request(methods.agent.session.list, {cwd: h.cwd});
+      assert.deepEqual(restoredList.sessions.map(session => session.sessionId), [h.parent.sessionId]);
+      await connection.agent.request(methods.agent.session.load, {sessionId: child, cwd: h.cwd, mcpServers: []});
+      assert.ok(replay.some(({update}) => update.sessionUpdate === "agent_message_chunk" && update.content.type === "text" && update.content.text.includes("unsaved content")));
+      assert.ok(replay.some(({update}) => update.sessionUpdate === "session_info_update" && update.title === "Inspect current buffer"));
+      await assert.rejects(connection.agent.request(methods.agent.session.prompt, {sessionId: child, prompt: [{type: "text", text: "Duplicate launch"}]}), /no longer awaiting a prompt/);
+      assert.equal(freshModel.requests(), 0, "Restart must replay without inference");
+    } finally {await restarted.agent.dispose(); connection.close(); restarted.connection.close();}
+  } finally {await h.dispose();}
+});
+
+test("cancelling before native registration rejects the late child prompt without inference", {timeout: 30_000}, async () => {
+  let ready!: () => void, release!: () => void, settled!: () => void;
+  const loading = new Promise<void>(resolve => {ready = resolve;});
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  const done = new Promise<void>(resolve => {settled = resolve;});
+  const h = await harness([
+    () => call("subagent", {title: "Delayed inspector", task: "Inspect after native loading."}),
+    () => "Parent is still usable.",
+  ], {beforeLoad: async () => {ready(); await gate;}, settled});
+  try {
+    const running = h.prompt("Delegate an inspection.");
+    await loading;
+    await h.connection.agent.notify(methods.agent.session.cancel, {sessionId: h.parent.sessionId});
+    assert.equal((await running).stopReason, "cancelled");
+    release();
+    await done;
+    assert.equal(h.runErrors.length, 1);
+    assert.match(String(h.runErrors[0]), /no longer awaiting a prompt/);
+    assert.equal(h.requests(), 1, "A cancelled child must not start a model request");
+    assert.equal((await h.prompt("Continue after cancellation.")).stopReason, "end_turn");
+    assert.equal(h.requests(), 2);
+  } finally {release(); await h.dispose();}
+});
+
+test("stopping the parent cancels its running child and releases the next turn", {timeout: 30_000}, async () => {
+  let started!: () => void;
+  const childStarted = new Promise<void>(resolve => {started = resolve;});
+  let childAborted = false;
+  const h = await harness([
+    () => call("subagent", {title: "Held inspector", task: "Inspect without finishing yet."}),
+    async (_context, signal) => {
+      started();
+      await new Promise<void>(resolve => {
+        if (signal?.aborted) {childAborted = true; resolve();}
+        else signal?.addEventListener("abort", () => {childAborted = true; resolve();}, {once: true});
+      });
+      throw new Error("Cancelled fixture child");
+    },
+    () => "Parent remains usable.",
+  ]);
+  try {
+    const running = h.prompt("Delegate an inspection.");
+    await childStarted;
+    await h.connection.agent.notify(methods.agent.session.cancel, {sessionId: h.parent.sessionId});
+    assert.equal((await running).stopReason, "cancelled");
+    assert.equal(childAborted, true);
+    assert.equal((await h.prompt("Continue after cancellation.")).stopReason, "end_turn");
+  } finally {await h.dispose();}
+});
+
+test("stopping only the child reports failure to the parent without cancelling the main task", {timeout: 30_000}, async () => {
+  let started!: () => void;
+  const childStarted = new Promise<void>(resolve => {started = resolve;});
+  let reportReceived = false;
+  const h = await harness([
+    () => call("subagent", {title: "Stoppable inspector", task: "Inspect this task."}),
+    async (_context, signal) => {
+      started();
+      await new Promise<void>(resolve => signal?.addEventListener("abort", () => resolve(), {once: true}));
+      throw new Error("Stopped child");
+    },
+    context => {
+      const result = context.messages.findLast(message => message.role === "toolResult" && message.toolName === "subagent");
+      assert.ok(result?.role === "toolResult" && result.isError);
+      reportReceived = true;
+      return "The inspection was stopped; the main task is still available.";
+    },
+  ]);
+  try {
+    const running = h.prompt("Delegate an inspection.");
+    await childStarted;
+    await h.connection.agent.notify(methods.agent.session.cancel, {sessionId: h.runs[0]!.childSessionId});
+    assert.equal((await running).stopReason, "end_turn");
+    assert.equal(reportReceived, true);
+  } finally {await h.dispose();}
+});
+
+test("parallel agents actually overlap and preserve independent results and replay", {timeout: 30_000}, async () => {
+  let count = 0, release!: () => void;
+  const both = new Promise<void>(resolve => {release = resolve;});
+  const child: FixtureStep = async context => {
+    const own = context.messages.findLast(m => m.role === "user");
+    const text = JSON.stringify(own);
+    assert.ok(text.includes("Inspect A") || text.includes("Inspect B"));
+    if (++count === 2) release();
+    await both;
+    return text.includes("Inspect A") ? "Result A" : "Result B";
+  };
+  const h = await harness([
+    () => call("subagent", {tasks: [{title: "A", task: "Inspect A"}, {title: "B", task: "Inspect B"}]}), child, child,
+    context => {const result = lastToolText(context, "subagent"); assert.match(result, /Result A/); assert.match(result, /Result B/); return "Both inspected.";},
+  ]);
+  try {
+    assert.equal((await h.prompt("Run parallel inspection.")).stopReason, "end_turn");
+    assert.equal(count, 2);
+    assert.equal(new Set(h.runs.map(r => r.childSessionId)).size, 2);
+    assert.equal(new Set(h.runs.map(r => r.toolCallId)).size, 2);
+    const requests = h.requests();
+    await h.connection.agent.request(methods.agent.session.close, {sessionId: h.parent.sessionId});
+    h.updates.length = 0;
+    await h.connection.agent.request(methods.agent.session.load, {sessionId: h.parent.sessionId, cwd: h.cwd, mcpServers: []});
+    for (const run of h.runs) assert.ok(h.updates.some(({update}) => update.sessionUpdate === "tool_call_update" && update.toolCallId === run.toolCallId && update.status === "completed"));
+    assert.equal(h.requests(), requests);
+  } finally {release(); await h.dispose();}
+});
+
+test("a failed parallel agent does not cancel its independent sibling", {timeout: 30_000}, async () => {
+  const inspect: FixtureStep = context => {
+    if (JSON.stringify(context.messages).includes("Fail this inspection")) throw new Error("Fixture inspection failed");
+    return "Independent result survives.";
+  };
+  const h = await harness([
+    () => call("subagent", {tasks: [{title: "Fail", task: "Fail this inspection"}, {title: "Survive", task: "Complete independently"}]}), inspect, inspect,
+    context => {
+      const result = context.messages.findLast(m => m.role === "toolResult" && m.toolName === "subagent");
+      assert.ok(result?.role === "toolResult" && result.isError);
+      assert.match(JSON.stringify(result.content), /Independent result survives/);
+      return "Partial failure reported.";
+    },
+  ]);
+  try {assert.equal((await h.prompt("Run both inspections.")).stopReason, "end_turn"); assert.equal(h.runs.length, 2);}
+  finally {await h.dispose();}
+});
+
+test("chain passes verified output forward and blocks later steps after failure", {timeout: 30_000}, async () => {
+  const h = await harness([
+    () => call("subagent", {chain: [{task: "Inspect first"}, {task: "Review {previous}"}, {task: "Must never run"}]}),
+    () => "first verified result",
+    context => {assert.match(JSON.stringify(context.messages), /Review first verified result/); throw new Error("Second step failed");},
+    context => {
+      const result = context.messages.findLast(m => m.role === "toolResult" && m.toolName === "subagent");
+      assert.ok(result?.role === "toolResult" && result.isError);
+      assert.match(JSON.stringify(result.content), /Blocked/);
+      return "Chain failure reported.";
+    },
+  ]);
+  try {
+    assert.equal((await h.prompt("Run the chain.")).stopReason, "end_turn");
+    assert.equal(h.runs.length, 2);
+    assert.ok(h.updates.some(({update}) => update.sessionUpdate === "tool_call_update" && JSON.stringify(update.content).includes("Blocked by step 2")));
+  } finally {await h.dispose();}
+});
+
+test("worker delegates a nested review while read-only roles cannot write", {timeout: 30_000}, async () => {
+  const h = await harness([
+    () => call("subagent", {agent: "worker", task: "Delegate review"}),
+    () => call("subagent", {agent: "reviewer", task: "Try a forbidden write"}),
+    () => call("write", {path: "source.ts", content: "should not be written"}),
+    context => {assert.match(JSON.stringify(context.messages), /not (enabled|found|available)|Unknown tool/i); return "No write performed.";},
+    context => {assert.match(lastToolText(context, "subagent"), /No write performed/); return "Review collected.";},
+    context => {assert.match(lastToolText(context, "subagent"), /Review collected/); return "Nested review done.";},
+  ]);
+  try {
+    assert.equal((await h.prompt("Delegate implementation review.")).stopReason, "end_turn");
+    assert.equal(h.runs.length, 2);
+    assert.equal(h.runs[1]?.parentSessionId, h.runs[0]?.childSessionId);
+    assert.equal(h.writes(), 0);
+  } finally {await h.dispose();}
+});
+
+test("an explicit user follow-up continues the same child and records its result in the parent", {timeout: 30_000}, async () => {
+  const h = await harness([
+    () => call("subagent", {title: "Reviewer", task: "Inspect initial state"}),
+    () => "Initial review.", () => "Review collected.",
+    context => {assert.match(JSON.stringify(context.messages), /Initial review/); return "Updated review after user correction.";},
+  ]);
+  try {
+    await h.prompt("Delegate review.");
+    const id = h.runs[0]!.childSessionId;
+    const response = await h.connection.agent.request(methods.agent.session.prompt, {sessionId: id, prompt: [{type: "text", text: "Check this correction"}], _meta: {zepiUserMessage: true}});
+    assert.equal(response.stopReason, "end_turn");
+    assert.ok(h.updates.some(({sessionId, update}) => sessionId === h.parent.sessionId && update.sessionUpdate === "agent_message_chunk" && update.content.type === "text" && update.content.text.includes("Updated review")));
+    assert.equal(h.runs.length, 1);
+  } finally {await h.dispose();}
+});
+
+test("a child local command does not report the preceding assistant reply as a new result", {timeout: 30_000}, async () => {
+  const h = await harness([
+    () => call("subagent", {title: "Inspector", task: "Inspect initial state"}),
+    () => "Previous inspection result.", () => "Inspection collected.",
+  ]);
+  try {
+    await h.prompt("Delegate inspection.");
+    h.updates.length = 0;
+    const response = await h.connection.agent.request(methods.agent.session.prompt, {
+      sessionId: h.runs[0]!.childSessionId, prompt: [{type: "text", text: "/session"}], _meta: {zepiUserMessage: true},
+    });
+    assert.equal(response.stopReason, "end_turn");
+    assert.equal(h.requests(), 3, "Local commands must not invoke the model");
+    const reports = h.updates.filter(({sessionId, update}) => sessionId === h.parent.sessionId && update.sessionUpdate === "agent_message_chunk")
+      .map(({update}) => update.sessionUpdate === "agent_message_chunk" && update.content.type === "text" ? update.content.text : "").join("");
+    assert.match(reports, /Follow-up from Inspector \[Completed\]/);
+    assert.match(reports, /Command completed/);
+    assert.doesNotMatch(reports, /Previous inspection result/);
+  } finally {await h.dispose();}
+});
+
+test("child roles execute installed plugin and MCP tools without exposing them to read-only scouts", {timeout: 30_000}, async () => {
+  const h = await harness([
+    () => call("subagent", {agent: "integrator", title: "Check integrations", task: "Use the fixture plugin and MCP server."}),
+    context => {assert.doesNotMatch(JSON.stringify(context.messages.filter(m => m.role === "system")), /fixture_other/); return call("fixture_plugin");},
+    context => {assert.match(lastToolText(context, "fixture_plugin"), /Plugin executed/); return call("mcp__fixture__ping");},
+    context => {assert.match(lastToolText(context, "mcp__fixture__ping"), /MCP fixture reached/); return "Child integrations verified.";},
+    context => {assert.match(lastToolText(context, "subagent"), /Child integrations verified/); return call("subagent", {agent: "scout", title: "Inspect isolation", task: "Report your available tools."});},
+    context => {assert.doesNotMatch(JSON.stringify(context.messages.filter(m => m.role === "system")), /fixture_plugin|mcp__fixture__ping/); return "Only read is available.";},
+    context => {assert.match(lastToolText(context, "subagent"), /Only read/); return "Role isolation verified.";},
+  ], {prepare: async cwd => {
+    const pkg = join(cwd, "plugin"); await mkdir(pkg);
+    await writeFile(join(pkg, "package.json"), JSON.stringify({name: "pi-child-fixture", version: "1.0.0", pi: {extensions: ["index.js"]}}));
+    await writeFile(join(pkg, "index.js"), `export default api => {for (const name of ["fixture_plugin", "fixture_other"]) api.registerTool({name, label: name, description: "Fixture plugin", parameters: {type:"object", properties:{}}, async execute(){return {content:[{type:"text",text:"Plugin executed"}]}}});};`);
+    const script = join(cwd, "mcp.mjs");
+    await writeFile(script, `import readline from 'node:readline';
+readline.createInterface({input:process.stdin}).on('line', l => {const r=JSON.parse(l);if(r.id===undefined)return;
+const result=r.method==='initialize'?{protocolVersion:r.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'fixture',version:'1'}}:
+r.method==='tools/list'?{tools:[{name:'ping',description:'Ping local fixture',inputSchema:{type:'object',properties:{}}}]}:
+r.method==='tools/call'?{content:[{type:'text',text:'MCP fixture reached'}]}:{};
+process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result})+'\\n');});`);
+    const center = createExtensionCenter(cwd);
+    await center.execute({operation: "install", source: pkg});
+    await center.execute({operation: "mcp-save", text: JSON.stringify({mcpServers: {fixture: {command: process.execPath, args: [script], exposure:"direct"}}})});
+    await mkdir(join(cwd, "agents"));
+    await writeFile(join(cwd, "agents", "integrator.md"), '---\nname: integrator\ndescription: Check plugin and MCP integration\ntools: [read, "tool:fixture_plugin", "mcp:fixture"]\n---\nUse only assigned integrations.\n');
+  }});
+  try {
+    assert.equal((await h.prompt("Verify role integration and isolation.")).stopReason, "end_turn");
+    assert.equal(h.runs.length, 2);
+    assert.equal(h.requests(), 7);
+    assert.ok(h.permissions.includes(h.runs[0]!.childSessionId), "MCP permission belongs to the child task");
+    assert.equal(h.writes(), 0);
+  } finally {await h.dispose();}
+});
+
+test('codemode respects child role boundaries and assigns nested native and MCP calls to their child', {timeout:30_000}, async () => {
+  const remote = await policyRemote(); remote.tools(['ping']);
+  const h = await harness([
+    () => call('subagent',{agent:'restricted',title:'Read with script',task:'Check your callable tools and read source.ts.'}),
+    () => call('codemode',{code:'text("mcp__remote__ping" in tools); text(await tools.read({path:"source.ts"}));'}),
+    context => {assert.match(lastToolText(context,'codemode'),/false/); assert.match(lastToolText(context,'codemode'),/current unsaved buffer/); return 'Role boundary verified.';},
+    () => call('subagent',{agent:'integrator',title:'MCP with script',task:'Call the remote ping fixture.'}),
+    () => call('codemode',{code:'const result = await tools.mcp__remote__ping({}); text(result.content[0].text);'}),
+    context => {assert.match(lastToolText(context,'codemode'),/ping fixture reached/); return 'Child MCP verified.';},
+    context => {assert.match(lastToolText(context,'subagent'),/Child MCP verified/); return 'Both roles verified.';},
+  ], {prepare: async cwd => {
+    await writeFile(join(cwd,'mcp.json'),JSON.stringify({mcpServers:{remote:{url:remote.url}}}));
+    await mkdir(join(cwd,'agents'));
+    await writeFile(join(cwd,'agents/restricted.md'),'---\nname: restricted\ndescription: Read through pi codemode\ntools: [read, "tool:codemode"]\n---\nRead only.\n');
+    await writeFile(join(cwd,'agents/integrator.md'),'---\nname: integrator\ndescription: Use the MCP fixture\ntools: ["mcp:remote"]\n---\nCheck the fixture.\n');
+  }});
+  try {
+    assert.equal((await h.prompt('Verify script role boundaries.')).stopReason,'end_turn');
+    assert.equal(h.requests(),7); assert.deepEqual(remote.calls,['ping']);
+    assert.deepEqual(h.readSessions,[h.runs[0]!.childSessionId]);
+    assert.equal(h.permissions.filter(id => id === h.runs[0]!.childSessionId).length,2);
+    assert.equal(h.permissions.filter(id => id === h.runs[1]!.childSessionId).length,2);
+  } finally {await h.dispose(); await remote.close();}
+});
+
+
+test('consumed directed guidance reaches the child transcript and parent report once', {timeout:30_000},async()=>{
+  let ready!:()=>void,release!:()=>void;
+  const began=new Promise<void>(resolve=>{ready=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
+  const h=await harness([
+    ()=>call('subagent',{agent:'worker',title:'Directed child',task:'Respond after the gate.'}),
+    async()=>{ready();await gate;return 'First reply';},
+    context=>{assert.match(JSON.stringify(context),/Added user instruction/);return 'Directed result';},
+    context=>{
+      const result=lastToolText(context,'subagent');
+      assert.match(result,/User instructions received during this run:/);
+      assert.match(result,/Added user instruction/);assert.match(result,/Directed result/);
+      return 'Guidance understood';
+    },
+  ]);
+  try{
+    const turn=h.prompt('Delegate');await began;
+    const child=h.runs[0]!.childSessionId;
+    const params={sessionId:child,prompt:[{type:'text',text:'Added user instruction'}],_meta:{zepiDeliveryId:'directed-guidance'}};
+    await h.connection.agent.request('_session/steering',params);
+    await h.connection.agent.request('_session/steering',params);
+    release();await turn;
+    const input=h.updates.filter(({sessionId,update})=>sessionId===child&&update.sessionUpdate==='user_message_chunk'&&update.content.type==='text'&&update.content.text==='Added user instruction');
+    assert.equal(input.length,1);assert.ok((input[0]!.update as any).messageId);
+    assert.equal(h.requests(),4);
+  }finally{release();await h.dispose();}
+});

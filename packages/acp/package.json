@@ -1,0 +1,22 @@
+{
+  "name": "@zepi/acp",
+  "version": "0.0.1",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-tui": "1.5.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "proper-lockfile": "4.1.2",
+    "typebox": "1.3.27",
+    "undici": "8.10.2"
+  },
+  "overrides": {
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-agent-core": "1.5.0"
+  }
+}
