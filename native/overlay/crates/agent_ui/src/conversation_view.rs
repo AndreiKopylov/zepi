@@ -3036,7 +3036,7 @@ impl ConversationView {
                             this.children(description.map(|desc| {
                                 self.render_markdown(
                                     desc.clone(),
-                                    MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
+                                    crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx),
                                     cx,
                                 )
                             }))
@@ -4510,7 +4510,7 @@ fn plan_label_markdown_style(
     window: &Window,
     cx: &App,
 ) -> MarkdownStyle {
-    let default_md_style = MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
+    let default_md_style = crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx);
 
     MarkdownStyle {
         base_text_style: TextStyle {

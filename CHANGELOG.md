@@ -4,6 +4,32 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.1-beta2] - 2026-11-05
+
+### Added
+
+- Agent panel follows the pi interactive theme: user message cards, thread markdown, code
+  highlighting and tool cards take their colors from the pi theme chosen in /settings -> Theme;
+  editing the theme file reskins the panel within a second.
+- Bundled pi themes `zepi-dark` and `zepi-light` (JetBrains Dark/Light aligned palettes), seeded
+  into the profile themes directory on start and refreshed when the bundled copies change;
+  user-created themes are never touched.
+- `zepi.threadLineHeight` in Zed settings (default 1.5): line spacing of agent thread markdown,
+  hot-reloaded on settings edits.
+- Settings schema now declares the `zepi` section, so Zepi no longer reports Zepi-specific
+  settings keys as unknown.
+
+- System prompt guidance: when a reply mentions a project file, the agent renders it as a
+  markdown link (project-relative path, or a file:/// URL outside the project) so the file
+  opens from the agent panel in one click.
+
+### Fixed
+
+- Composer expand/collapse button works in empty threads; the expanded empty-thread composer
+  gets an 80%-viewport box instead of overflowing into the panel footer rows.
+- Expanded state no longer resets itself immediately in empty threads, so the toggle sticks
+  until collapsed again.
+
 ## [0.0.1-beta1] - 2026-11-04
 
 First public beta. Windows port of the Zed + pi workspace, rebuilt as Zepi.

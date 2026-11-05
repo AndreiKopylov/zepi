@@ -174,6 +174,7 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
         }
     }
     sync_skills(&root, &pi)?;
+    sync_themes(&root, &pi)?;
     // PowerShell replaces bash, which needs Git for Windows, and the native file tools
     // keep search off the shell. An explicit entry from the operator wins.
     let pi_settings = pi.join("settings.json");
@@ -221,7 +222,7 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
     merge(&mut settings, &json!({"telemetry":{"metrics":false,"diagnostics":false},"auto_update":false,
         "disable_ai":false,"auto_install_extensions":{"html":false}}));
     // office viewer knobs, shared by the slides and the future word viewer
-    merge(&mut settings, &json!({"zepi":{"officeViewer":{"reloadDebounceMs":600,
+    merge(&mut settings, &json!({"zepi":{"threadLineHeight":1.5,"officeViewer":{"reloadDebounceMs":600,
         "rasterCacheCap":12,"maxRasterPixels":6000000,"slideGap":14,"zoomStep":10}}}));
     settings["node"] = json!({"path":node,"ignore_system_version":false});
     settings["agent_servers"]["zepi-pi"] = json!({"type":"custom","command":node,
@@ -310,6 +311,28 @@ fn sync_skills(root: &Path, pi: &Path) -> Result<()> {
     }
     copy_dir(&source, &target).context("copying bundled skills")?;
     std::fs::write(target.join(".stamp"), stamp)?;
+    Ok(())
+}
+
+/// Copies bundled pi themes into the user's themes dir; refreshes seeded files when
+/// they change and never touches user-created ones.
+fn sync_themes(root: &Path, pi: &Path) -> Result<()> {
+    let source = root.join("native/pi-defaults/themes");
+    if !source.is_dir() {
+        return Ok(());
+    }
+    let target = pi.join("themes");
+    std::fs::create_dir_all(&target)?;
+    for entry in std::fs::read_dir(&source)? {
+        let from = entry?.path();
+        if !from.extension().is_some_and(|ext| ext == "json") {
+            continue;
+        }
+        let to = target.join(from.file_name().expect("file has a name"));
+        if std::fs::read(&from).ok() != std::fs::read(&to).ok() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
     Ok(())
 }
 

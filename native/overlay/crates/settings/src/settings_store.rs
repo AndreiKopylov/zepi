@@ -1300,6 +1300,56 @@ impl SettingsStore {
         }
     }
 
+    /// Declares the Zepi section for the settings schema; the values are read straight from the file.
+    fn zepi_schema() -> Value {
+        json_schema!({
+            "type": "object",
+            "description": "Zepi-specific settings.",
+            "properties": {
+                "threadLineHeight": {
+                    "type": "number",
+                    "minimum": 0.5,
+                    "maximum": 3.0,
+                    "description": "Line spacing of agent thread markdown. Default: 1.5."
+                },
+                "officeViewer": {
+                    "type": "object",
+                    "description": "Knobs for the document viewers.",
+                    "properties": {
+                        "reloadDebounceMs": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Delay before reloading a changed office file, in milliseconds. Default: 600."
+                        },
+                        "rasterCacheCap": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Rasterised pages kept in memory. Default: 12."
+                        },
+                        "maxRasterPixels": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Upper bound for a rasterised page, in pixels. Default: 6000000."
+                        },
+                        "slideGap": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Gap between slides in the slide strip, in pixels. Default: 14."
+                        },
+                        "zoomStep": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Zoom step percentage in the slide viewer. Default: 10."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        })
+        .to_value()
+    }
+
     pub fn json_schema(params: &SettingsJsonSchemaParams) -> Value {
         let mut generator = schemars::generate::SchemaSettings::draft2019_09()
             .with_transform(DefaultDenyUnknownFields)
@@ -1352,9 +1402,21 @@ impl SettingsStore {
             });
         }
 
-        generator
+        let mut schema = generator
             .root_schema_for::<UserSettingsContent>()
-            .to_value()
+            .to_value();
+        // Zepi reads its own section directly from the file, so the schema has to declare it.
+        // UserSettingsContent flattens SettingsContent, so with schemars 1.x the merged
+        // properties live at the schema root; the $defs path is a fallback for older layouts.
+        let properties_path = if schema.pointer("/properties").is_some() {
+            "/properties"
+        } else {
+            "/$defs/SettingsContent/properties"
+        };
+        if let Some(properties) = schema.pointer_mut(properties_path).and_then(Value::as_object_mut) {
+            properties.insert("zepi".to_string(), Self::zepi_schema());
+        }
+        schema
     }
 
     /// Generate JSON schema for project settings, including only settings valid

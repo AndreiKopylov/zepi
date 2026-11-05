@@ -19,6 +19,7 @@ export function accessPolicy(agentDir: string, session:()=>AgentSession|undefine
         ? "\nZepi access mode: Full Access. The user delegates tool and permission decisions to pi. Carry out the requested task autonomously with enabled tools; do not pause for routine confirmations or ask the user to approve tool calls. Choose the necessary actions yourself, verify the outcome, and report genuine missing information or unavailable capabilities. Explicit user constraints still apply."
         : "\nZepi access mode: Ask Before Actions. The native client handles tool permission requests.";
       event.systemPromptOptions.appendSystemPrompt += browserGuidance(session(),browserConfig);
+      event.systemPromptOptions.appendSystemPrompt += "\nWhen a reply mentions a project file, render it as a markdown link so the user can open it from the agent panel: a path relative to the project root, like [Program.cs](src/Program.cs); for files outside the project use an absolute file:/// URL, like [notes.md](file:///C:/temp/notes.md). Do not wrap linked paths in inline code; keep plain inline code for identifiers and snippets only.";
     }]], ["tool_call", [async (raw:unknown, rawContext:unknown) => {
       const pi=session(), event=raw as ToolCallEvent, context=rawContext as ExtensionContext;
       const policy=(pi as unknown as Record<symbol, {allows(name:string):boolean;registered():void}|undefined>)?.[Symbol.for('zepi.pi.tools')];

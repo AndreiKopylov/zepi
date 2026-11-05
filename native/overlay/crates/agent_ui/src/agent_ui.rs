@@ -13,6 +13,7 @@ mod zepi_queue;
 mod zepi_task_windows;
 pub mod zepi_task;
 mod zepi_session_store;
+pub mod zepi_theme;
 pub mod draft_prompt_store;
 mod entry_view_state;
 mod external_source_prompt;
