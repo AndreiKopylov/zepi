@@ -72,7 +72,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
           const getExtensions = options.resourceLoader.getExtensions.bind(options.resourceLoader);
           options.resourceLoader.getExtensions = () => {
             const loaded = getExtensions();
-            return { ...loaded, extensions: [...loaded.extensions, preview.extension, shell.extension, accessPolicy(agentDir,()=>liveSession,name=>browser.track(name),{
+            return { ...loaded, extensions: [...loaded.extensions, preview.extension, shell.extension, accessPolicy(()=>liveSession,name=>browser.track(name),{
               engine:browserDecision.ZEPI_BROWSER_ENGINE,decisionConfigured:!!browserDecision.TYPESAFE_API_KEY,
               textConfigured:browserDecision.TEXT_MODEL_SOURCE==='pi'||!!browserDecision.TEXT_MODEL_API_KEY,textSource:browserDecision.TEXT_MODEL_SOURCE,
             })] };

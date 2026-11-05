@@ -1018,8 +1018,6 @@ impl ThreadView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        crate::zepi_access::init(cx);
-        subscriptions.push(cx.observe_global::<crate::zepi_access::ZepiAccess>(|_, cx| cx.notify()));
         let session_id = thread.read(cx).session_id().clone();
         let parent_session_id = thread.read(cx).parent_session_id().cloned();
 
@@ -6071,9 +6069,6 @@ impl ThreadView {
                                     .children(self.render_activity_status_label(cx))
                                     .children(discard_draft_button)
                                     .children(self.render_token_usage(cx))
-                                    .when(std::env::var_os("ZEPI_ROOT").is_some(), |this| {
-                                        this.child(crate::zepi_access::render(window, cx))
-                                    })
                                     .children(self.profile_selector.clone())
                                     .map(|this| match self.config_options_view.clone() {
                                         Some(config_view) => this.child(config_view),

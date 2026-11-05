@@ -16,7 +16,6 @@ import { agentMessages, promptUsage, terminalAssistant, usageUpdate, } from "./u
 
 // Context usage walks the session history, so it is published at most twice a second.
 const USAGE_REFRESH_MS = 500;
-import { installPermissionWrapper } from "./permissions.js";
 import { ChildCleanupFailure } from "./child-process-registry.js";
 import { LOADED_TURN_ENDED_METHOD, } from "./loaded-turn.js";
 export class PiSession {
@@ -68,12 +67,6 @@ export class PiSession {
         this.childRegistry = options.childRegistry;
         this.lifecycleController = options.lifecycleController;
         this.onWedged = options.onWedged;
-        installPermissionWrapper(this.pi, {
-            sessionId: this.sessionId,
-            client: this.client,
-            drain: () => this.drain(),
-            turnSignal: () => this.activeTurn?.controller.signal,
-        });
         const innerAfterToolCall = this.pi.agent.afterToolCall;
         this.pi.agent.afterToolCall = async (context, signal) => {
             const innerResult = innerAfterToolCall ? await innerAfterToolCall(context, signal) : undefined;

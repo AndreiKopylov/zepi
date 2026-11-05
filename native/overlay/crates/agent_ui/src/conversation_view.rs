@@ -1943,9 +1943,6 @@ impl ConversationView {
             "settings" => window.dispatch_action(Box::new(zed_actions::OpenSettingsPage {page: "AI".into(), target: None}), cx),
             "hotkeys" => window.dispatch_action(Box::new(zed_actions::OpenKeymap), cx),
             "quit" => window.defer(cx, |window, cx| window.dispatch_action(Box::new(zed_actions::Quit), cx)),
-            "access_changed" => {
-                crate::zepi_access::refresh(cx);
-            }
             "focus_session" => {
                 let workspace = self.workspace.upgrade().ok_or("Workspace is unavailable")?;
                 let panel = workspace.read(cx).panel::<AgentPanel>(cx).ok_or("Task panel is unavailable")?;

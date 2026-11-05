@@ -30,6 +30,12 @@ All notable changes to Zepi are documented here. The format follows
 - Expanded state no longer resets itself immediately in empty threads, so the toggle sticks
   until collapsed again.
 
+### Removed
+
+- Tool access guards and the Agent Access toggle: Zepi always runs pi in full access now.
+  Permission prompts, the footer access selector and the /trust command are gone; policy
+  extensions such as pi-guardrails can be layered on top instead.
+
 ## [0.0.1-beta1] - 2026-11-04
 
 First public beta. Windows port of the Zed + pi workspace, rebuilt as Zepi.

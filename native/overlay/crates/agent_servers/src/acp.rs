@@ -12,7 +12,7 @@ use session_updates::{InboundSessionNotification, InboundSessionUpdate, PendingS
 pub use terminal_updates::{DecodedTerminalNotification, DecodedTerminalUpdate};
 #[cfg(any(test, feature = "test-support"))]
 pub use v1::test_support;
-pub use v1::{AcpConnection, AcpSessionList, ZepiAccess, GEMINI_TERMINAL_AUTH_METHOD_ID};
+pub use v1::{AcpConnection, AcpSessionList, GEMINI_TERMINAL_AUTH_METHOD_ID};
 pub use v2::AcpV2Connection;
 
 use acp_thread::{AcpThread, AuthRequired, ElicitationStore, LoadError};

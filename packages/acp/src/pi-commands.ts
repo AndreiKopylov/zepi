@@ -33,7 +33,6 @@ export const piCommands: AvailableCommand[] = [
   { name: "bug", description: "Prepare a report for pi developers", input:{hint:"[description]"} },
   { name: "logout", description: "Remove a provider's global pi credentials", input: {hint: "[provider]"} },
   { name: "login", description: "Sign in using pi provider authentication", input: {hint: "[provider] [api_key | oauth]"} },
-  { name: "trust", description: "Choose global Agent Access for all tasks", input: {hint: "[ask | full]"} },
 ];
 const nativeCommands: AvailableCommand[] = [
   {name:"quit", description:"Quit Zepi through its normal save and shutdown flow"},
@@ -199,21 +198,6 @@ export function installPiCommands(pi: AgentSession, client: AgentContext, suppor
               const shortcuts = (pi as AgentSession & {[PI_SHORTCUTS]?:ReturnType<typeof createPiShortcuts>})[PI_SHORTCUTS]?.list() ?? [];
               if(shortcuts.length)output += "\n\npi extension shortcuts (focus the conversation input):\n" + shortcuts.map(item=>`- ${item.key}: ${item.description}`).join("\n");
             }
-            break;
-          }
-          case "trust": {
-            const selected = argument || await ui?.select("Agent Access · Global", ["Ask Before Actions", "Full Access"],
-              {defaultValue: (await createPiSettings(agentDir).status()).fullAccess ? "Full Access" : "Ask Before Actions"});
-            if (!selected) {output = "Agent Access unchanged. Use /trust ask or /trust full."; break;}
-            if (!["ask", "full", "Ask Before Actions", "Full Access"].includes(selected)) throw new Error("Usage: /trust ask or /trust full. Zepi supports global access only.");
-            const fullAccess = selected === "full" || selected === "Full Access";
-            if (fullAccess && !await ui?.confirm("Enable Full Access for all tasks?", "pi will decide tool permissions without asking. This changes the global Agent Access control beside the composer.")) {
-              output = "Agent Access unchanged."; break;
-            }
-            signal?.throwIfAborted();
-            await createPiSettings(agentDir).execute({operation: "access", fullAccess});
-            if (nativeUi) await nativeUiAction(client, pi.sessionId, "access_changed", {}, signal);
-            output = `Global Agent Access: ${fullAccess ? "Full Access" : "Ask Before Actions"}.`;
             break;
           }
           case "logout": {

@@ -5,7 +5,6 @@ mod completion_provider;
 mod config_options;
 pub(crate) mod conversation_view;
 mod diagnostics;
-mod zepi_access;
 mod zepi_reference;
 mod zepi_pi_ui;
 mod zepi_verification;
@@ -676,7 +675,6 @@ pub fn init(
     cx: &mut App,
 ) {
     zepi_session_store::init(cx);
-    zepi_access::init(cx);
     agent::ThreadStore::init_global(cx);
     prompt_store::init(cx);
     agent_panel::init(cx);

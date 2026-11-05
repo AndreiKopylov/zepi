@@ -92,7 +92,6 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       defaultTools: (await readJson(join(directory, "settings.json"))).defaultTools ?? null,
       runtime: runtimeSettings(manager),
       httpProxy: httpProxyStatus(manager.getGlobalSettings()),
-      fullAccess: (await readJson(join(directory, "settings.json"))).zepi?.fullAccess === true,
       browserDecision: await browserDecisionSettings(directory),
       browserText: await browserTextSettings(directory,modelRuntime),
       providers, update: await readJson(join(directory, "pi-update.json"), null) };
@@ -101,7 +100,7 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
   async function execute(request) {
     const operation = request?.operation ?? "status";
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    if (!["status", "check-update", "import", "access"].includes(operation)) await status();
+    if (!["status", "check-update", "import"].includes(operation)) await status();
     if (operation === 'http-proxy') {
       new FileSettingsStorage(directory, directory).withLock('global', current => {
         try { return JSON.stringify(mergeHttpProxy(current ? JSON.parse(current) : {}, request.proxy, request.expected), null, 2) + '\n'; }
@@ -187,15 +186,6 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       });
       await chmod(join(directory, "settings.json"), 0o600);
       if (key || request.removeKey) await chmod(authPath, 0o600);
-    } else if (operation === "access") {
-      if (typeof request.fullAccess !== "boolean") throw new PiConfigError("Full Access must be enabled or disabled.");
-      new FileSettingsStorage(directory, directory).withLock("global", current => {
-        const value = current ? JSON.parse(current) : {};
-        value.zepi = { ...value.zepi, fullAccess: request.fullAccess };
-        return JSON.stringify(value, null, 2) + "\n";
-      });
-      await chmod(join(directory, "settings.json"), 0o600);
-      return { fullAccess: request.fullAccess };
     } else if (operation === "defaults") {
       const provider = providerId(request.provider);
       const modelRuntime = await runtime();
