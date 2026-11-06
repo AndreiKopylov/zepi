@@ -56,3 +56,4 @@ __pycache__/
 *.zip
 /.local/downloads/
 scripts/deploy-bundle.ps1
+packages/acp/src/cli.js

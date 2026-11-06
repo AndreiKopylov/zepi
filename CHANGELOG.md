@@ -23,12 +23,26 @@ All notable changes to Zepi are documented here. The format follows
   markdown link (project-relative path, or a file:/// URL outside the project) so the file
   opens from the agent panel in one click.
 
+### Changed
+
+- Agent startup is about twice as fast: MCP servers whose tools are codemode-only now connect
+  in the background, in parallel, after the session opens, instead of blocking it. Servers with
+  direct tools still connect before the session is published, and the first prompt waits for the
+  background connections at the turn boundary, so a tool catalog is never half-built. In ACP
+  probes, opening a 250 KB thread with five MCP servers went from 7.5 s to 3.3 s.
+- The ACP entry is compiled to plain JS (`npm run build:acp`, esbuild): the runtime loads
+  `packages/acp/src/cli.js` instead of paying the tsx loader cost on every start. Dev launch
+  (`win-run.py`) and bundle deploy build it automatically.
+
 ### Fixed
 
 - Composer expand/collapse button works in empty threads; the expanded empty-thread composer
   gets an 80%-viewport box instead of overflowing into the panel footer rows.
 - Expanded state no longer resets itself immediately in empty threads, so the toggle sticks
   until collapsed again.
+- The pi interactive `custom` component no longer errors on clients that cannot host it
+  or when the view dies mid-turn: data-shaped extension fallbacks (guardrail prompts, wizards)
+  degrade to plain select/confirm forms.
 
 ### Removed
 

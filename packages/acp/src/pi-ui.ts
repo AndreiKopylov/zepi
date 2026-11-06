@@ -1,9 +1,9 @@
 import {appendZepiEntry} from './session-persistence.ts';
 import {createPiShortcuts, PI_SHORTCUTS} from './pi-shortcuts.ts';
 import { methods, type AgentContext, type AvailableCommand, type ElicitationPropertySchema, type SessionUpdate } from "@agentclientprotocol/sdk";
+import {showPiComponent} from './pi-component-terminal.ts';
 import type { AgentSession, ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import {createPiUIState, PI_UI_STATE} from './pi-ui-state.ts';
-import {showPiComponent} from './pi-component-terminal.ts';
 import {getThemeByName, getAvailableThemesWithPaths} from '../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js';
 import {createPiDecorations} from './pi-decorations.ts';
 import {createPiAutocomplete, PI_AUTOCOMPLETE} from './pi-autocomplete.ts';
@@ -108,13 +108,17 @@ export function createPiUI(pi: AgentSession, client: AgentContext, turnSignal: (
       editor?.refreshTheme();
       return {success:true};
     },
-    async custom(factory, options) {
-      if (!native) throw new Error('This client does not support interactive pi components.');
+    async custom<T>(factory: Parameters<ExtensionUIContext["custom"]>[0], options: Parameters<ExtensionUIContext["custom"]>[1]): Promise<T> {
+      if (!native) return undefined as unknown as T;
       if (activeComponent) throw new Error('An extension interface is already open in this task.');
       activeComponent = true;
       try {
         return await showPiComponent(pi, client, theme, agentDir, factory, options, emit,
           AbortSignal.any([lifetime.signal, turnSignal()].filter((signal):signal is AbortSignal => !!signal)),{input:editor?.input});
+      } catch {
+        // Component host could not keep the view alive; data-shaped fallbacks
+        // (guardrails prompts, wizards) switch to select/confirm forms instead.
+        return undefined as unknown as T;
       } finally {activeComponent=false;}
     },
     ...(decorations ? {setWidget:decorations.setWidget,setHeader:decorations.setHeader,
