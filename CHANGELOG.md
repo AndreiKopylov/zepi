@@ -18,6 +18,9 @@ All notable changes to Zepi are documented here. The format follows
   hot-reloaded on settings edits.
 - Settings schema now declares the `zepi` section, so Zepi no longer reports Zepi-specific
   settings keys as unknown.
+- `/trust` sets pi's project trust for the current folder: Trust, Trust parent folder or Do not
+  trust, saved to `trust.json` in the pi config directory and applied by reloading the task, so
+  a project's own `.pi` settings, extensions and packages can load.
 
 - System prompt guidance: when a reply mentions a project file, the agent renders it as a
   markdown link (project-relative path, or a file:/// URL outside the project) so the file
@@ -62,8 +65,8 @@ All notable changes to Zepi are documented here. The format follows
 ### Removed
 
 - Tool access guards and the Agent Access toggle: Zepi always runs pi in full access now.
-  Permission prompts, the footer access selector and the /trust command are gone; policy
-  extensions such as pi-guardrails can be layered on top instead.
+  Permission prompts, the footer access selector and the old Agent Access /trust command are
+  gone; policy extensions such as pi-guardrails can be layered on top instead.
 
 ## [0.0.1-beta1] - 2026-11-04
 
