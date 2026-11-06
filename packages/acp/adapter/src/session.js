@@ -12,7 +12,7 @@ import { convertPromptContent } from "./prompt-content.js";
 import { replayEntry } from "./replay.js";
 import { stopReasonFor } from "./stop-reason.js";
 import { translateEvent, toolDurationMeta } from "./translate.js";
-import { createFileLinker, linkifyText } from "../../../runtime/src/pi/file-links.mjs";
+import { createFileIndex, createFileLinker, linkifyText } from "../../../runtime/src/pi/file-links.mjs";
 import { agentMessages, promptUsage, terminalAssistant, usageUpdate, } from "./usage.js";
 
 // Context usage walks the session history, so it is published at most twice a second.
@@ -57,7 +57,8 @@ export class PiSession {
     constructor(options) {
         this.sessionId = options.sessionId;
         this.cwd = options.cwd;
-        this.fileLinks = createFileLinker(options.cwd);
+        this.getFileIndex = createFileIndex(options.cwd);
+        this.fileLinks = createFileLinker(options.cwd, this.getFileIndex);
         this.pi = options.session;
         this.manager = options.manager;
         this.client = options.client;
@@ -224,7 +225,7 @@ export class PiSession {
             const prompt = entry.type === 'message' && entry.message.role === 'user' ? snapshots.get(entry.id) : undefined;
             return prompt ? prompt.map(content => ({sessionUpdate:'user_message_chunk',messageId:entry.id,content:structuredClone(content)})) : replayEntry(entry).map(update => {
                 if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text')
-                    return { ...update, content: { ...update.content, text: linkifyText(update.content.text, this.cwd) } };
+                    return { ...update, content: { ...update.content, text: linkifyText(update.content.text, this.cwd, this.getFileIndex) } };
                 if (update.sessionUpdate !== 'tool_call_update' || !durations.has(update.toolCallId)) return update;
                 return {...update, _meta:{...update._meta,...toolDurationMeta(durations.get(update.toolCallId))}};
             });

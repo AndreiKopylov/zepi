@@ -52,3 +52,12 @@ test('missing files and urls stay code', async () => {
   assert.match(out, /`src\/ghost\.ts`/);
   assert.match(out, /`https:\/\/example\.com\/a\.ts`/);
 });
+
+test('subfolder-relative spans link through a unique project index suffix', () => {
+  const dir = tmpdir();
+  const index = () => ['integration-sign/src/Application/Signing/Client/ClientSigningResultFactory.cs'];
+  const out = linkifyText('See `Application/Signing/Client/ClientSigningResultFactory.cs` now.', dir, index);
+  assert.match(out, /\[Application\/Signing\/Client\/ClientSigningResultFactory\.cs\]\(integration-sign\/src\/Application\/Signing\/Client\/ClientSigningResultFactory\.cs\)/);
+  const amb = linkifyText('`Application/Dup.cs`', dir, () => ['a/Application/Dup.cs', 'b/Application/Dup.cs']);
+  assert.match(amb, /`Application\/Dup\.cs`/);
+});

@@ -1,19 +1,45 @@
 import { statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { execSync } from "node:child_process";
 
 const PATHISH = /[/\\]|\.[A-Za-z0-9]{1,8}$/;
 
+// Tracked and untracked files of the project, for suffix resolution of subfolder-relative spans.
+export function createFileIndex(cwd) {
+    let cache;
+    return () => {
+        if (!cache) {
+            try {
+                cache = execSync("git ls-files -z --cached --others --exclude-standard",
+                    { cwd, maxBuffer: 64 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }).toString("utf8").split("\0").filter(Boolean);
+            }
+            catch { cache = []; }
+        }
+        return cache;
+    };
+}
+
 // Href for a code span that names a real file; undefined for everything else.
-function hrefFor(span, cwd) {
+function hrefFor(span, cwd, getIndex) {
     if (span.length === 0 || span.length > 260 || /[\s`]/.test(span)) return undefined;
     if (!PATHISH.test(span) || /^[a-z]+:\/\//i.test(span)) return undefined;
     const absolute = isAbsolute(span) || /^[A-Za-z]:[\\/]/.test(span);
-    try {
-        if (!statSync(absolute ? span : join(cwd, span)).isFile()) return undefined;
+    if (absolute) {
+        try {
+            if (!statSync(span).isFile()) return undefined;
+        }
+        catch { return undefined; }
+        return "file:///" + encodeURI(span.split("\\").join("/").replace(/^\/+/, ""));
     }
-    catch { return undefined; }
     const slashed = span.split("\\").join("/");
-    return absolute ? "file:///" + encodeURI(slashed.replace(/^\/+/, "")) : encodeURI(slashed);
+    try {
+        if (statSync(join(cwd, slashed)).isFile()) return encodeURI(slashed);
+    }
+    catch { /* fall through to the project index */ }
+    if (!getIndex || !slashed.includes("/")) return undefined;
+    // Models often write paths relative to a subfolder; accept only a unique suffix match.
+    const matches = getIndex().filter(file => file === slashed || file.endsWith("/" + slashed));
+    return matches.length === 1 ? encodeURI(matches[0]) : undefined;
 }
 
 const fenceLine = line => line.trimStart().startsWith("```");
@@ -37,7 +63,7 @@ function scan(text, fenced0) {
     return { end: text.length, fenced };
 }
 
-function transform(text, end, cwd, fenced0) {
+function transform(text, end, cwd, fenced0, getIndex) {
     let out = "", fenced = fenced0, inSpan = false, spanBuf = "", lineStart = 0;
     for (let i = 0; i < end; i++) {
         const ch = text[i];
@@ -51,7 +77,7 @@ function transform(text, end, cwd, fenced0) {
             if (inSpan) {
                 const span = spanBuf;
                 const free = text[i - span.length - 1] !== "[" && !(text[i + 1] === "]" && text[i + 2] === "(");
-                const href = free ? hrefFor(span, cwd) : undefined;
+                const href = free ? hrefFor(span, cwd, getIndex) : undefined;
                 out += href ? "[" + span + "](" + href + ")" : "`" + span + "`";
                 inSpan = false;
             }
@@ -64,12 +90,12 @@ function transform(text, end, cwd, fenced0) {
     return out;
 }
 
-export function linkifyText(text, cwd) {
-    return transform(text, text.length, cwd, false);
+export function linkifyText(text, cwd, getIndex) {
+    return transform(text, text.length, cwd, false, getIndex);
 }
 
 // Streaming variant: holds the tail where a code span or fence line may still grow.
-export function createFileLinker(cwd) {
+export function createFileLinker(cwd, getIndex) {
     let tail = "", fenced = false;
     return {
         push(chunk) {
@@ -78,7 +104,7 @@ export function createFileLinker(cwd) {
             const cut = scan(buf, start);
             fenced = cut.fenced;
             tail = buf.slice(cut.end);
-            return transform(buf, cut.end, cwd, start);
+            return transform(buf, cut.end, cwd, start, getIndex);
         },
         flush() {
             const held = tail;

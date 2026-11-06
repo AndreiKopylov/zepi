@@ -51,6 +51,13 @@ All notable changes to Zepi are documented here. The format follows
   computed with the same line height the editor paints with.
 - Composer line spacing follows `zepi.threadLineHeight` (the thread markdown knob, default 1.5)
   and hot-reloads, including an already dragged composer height.
+- Reading a file outside the project no longer fails with `File is outside this workspace`:
+  reads follow the product full-access rule, so screenshots and documents handed by path open
+  directly instead of being copied into the project. Writes and private workspace storage
+  (`.git`, `.pi`, review temps) stay restricted.
+- File links also resolve code spans written relative to a subfolder or nested repo: a unique
+  suffix match against the project file index becomes a clickable link; ambiguous matches stay
+  plain code.
 
 ### Removed
 
