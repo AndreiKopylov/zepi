@@ -692,12 +692,11 @@ fn save_zepi_composer_px(height: Option<Pixels>) {
     let _ = std::fs::write(zepi_composer_height_path(), content);
 }
 
-// buffer font line box; comfortable spacing
+// The composer is drawn with the agent UI font and the thread line-height knob,
+// so the drag box and the line cap match what the editor element paints.
 fn zepi_line_height(cx: &App) -> f32 {
-    f32::from(theme::theme_settings(cx).buffer_font_size(cx))
-        * theme_settings::ThemeSettings::get_global(cx)
-            .buffer_line_height
-            .value()
+    f32::from(theme_settings::ThemeSettings::get_global(cx).agent_ui_font_size(cx))
+        * crate::zepi_theme::thread_line_height()
 }
 
 pub struct ThreadView {
@@ -3508,8 +3507,12 @@ impl ThreadView {
     // editor methods
 
     fn composer_mode_key(&self) -> isize {
+        let lh = (crate::zepi_theme::thread_line_height() * 100.0).round() as isize;
         match self.zepi_composer_px {
-            Some(h) => (f32::from(h).round() as isize) * 2 + if self.zepi_composer_floor { 1 } else { 0 },
+            Some(h) => {
+                (f32::from(h).round() as isize + lh * 1000) * 2
+                    + if self.zepi_composer_floor { 1 } else { 0 }
+            }
             None => -2,
         }
     }
@@ -5952,6 +5955,7 @@ impl ThreadView {
             .map(|this| {
                 if has_messages {
                     this.on_action(cx.listener(Self::expand_message_editor))
+                        .flex_none()
                         .border_t_1()
                         .border_color(cx.theme().colors().border)
                         .when(editor_expanded, |this| this.h(vh(0.8, window)))

@@ -22,6 +22,9 @@ All notable changes to Zepi are documented here. The format follows
 - System prompt guidance: when a reply mentions a project file, the agent renders it as a
   markdown link (project-relative path, or a file:/// URL outside the project) so the file
   opens from the agent panel in one click.
+- Deterministic file links: a code span outside fenced blocks that resolves to an existing file
+  (relative to the task folder, or absolute) renders as a markdown link even when the model
+  leaves it as plain code; identifiers, missing paths, URLs and fenced code stay untouched.
 
 ### Changed
 
@@ -43,6 +46,11 @@ All notable changes to Zepi are documented here. The format follows
 - The pi interactive `custom` component no longer errors on clients that cannot host it
   or when the view dies mid-turn: data-shaped extension fallbacks (guardrail prompts, wizards)
   degrade to plain select/confirm forms.
+- Composer no longer clips the last line of a long paste in threads with messages: the composer
+  container keeps its natural height when panel space is tight, and the drag-box line cap is
+  computed with the same line height the editor paints with.
+- Composer line spacing follows `zepi.threadLineHeight` (the thread markdown knob, default 1.5)
+  and hot-reloads, including an already dragged composer height.
 
 ### Removed
 

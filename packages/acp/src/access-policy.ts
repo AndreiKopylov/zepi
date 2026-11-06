@@ -8,7 +8,7 @@ export function accessPolicy(session:()=>AgentSession|undefined, track:(name:str
     handlers: new Map([["before_agent_start", [async (raw: unknown) => {
       const event = raw as BeforeAgentStartEvent;
       event.systemPromptOptions.appendSystemPrompt += browserGuidance(session(),browserConfig);
-      event.systemPromptOptions.appendSystemPrompt += "\nWhen a reply mentions a project file, render it as a markdown link so the user can open it from the agent panel: a path relative to the project root, like [Program.cs](src/Program.cs); for files outside the project use an absolute file:/// URL, like [notes.md](file:///C:/temp/notes.md). Do not wrap linked paths in inline code; keep plain inline code for identifiers and snippets only.";
+      event.systemPromptOptions.appendSystemPrompt += "\nFile references in your reply are clickable markdown links, never inline code and never bare paths. When you name a file the user could open (one you read, edited or point at), link it: a path relative to the project root for project files, an absolute file:/// URL otherwise. Inline code stays reserved for identifiers, symbols and values (PollingInterval, TooEarly, 425).\nWrong: `src/Web/appsettings.json` updated, see SmevSigningWorkflow.cs.\nRight: [appsettings.json](src/Web/appsettings.json) updated, see [SmevSigningWorkflow.cs](src/Workflow/SmevSigningWorkflow.cs).";
     }]], ["tool_call", [async (raw:unknown) => {
       // browser lifecycle needs to see browser tool usage to release the task browser
       track((raw as ToolCallEvent).toolName);
