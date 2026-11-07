@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
-import {readFile, writeFile, rename, rm} from 'node:fs/promises';
+import {readFile, writeFile, rm} from 'node:fs/promises';
+import {renameWithRetry} from '../fs/rename.mjs';
 import {basename, join} from 'node:path';
 
 export const MCP_STATUS = Symbol.for('zepi.pi.mcp.status');
@@ -23,14 +24,7 @@ export function createMcpStatus(directory) {
       const temporary = `${path}.${crypto.randomUUID()}.tmp`;
       try {
         await writeFile(temporary, JSON.stringify({version:1, runtimeId:original.id, sessions:rows}), {mode:0o600});
-        // Windows refuses to rename over a snapshot a reader still holds open, so retry briefly.
-        for (let attempt = 1; ; attempt++) {
-          try {await rename(temporary, path); break;}
-          catch (error) {
-            if (attempt === 5 || !['EPERM','EACCES','EBUSY'].includes(error?.code)) throw error;
-            await new Promise(resolve => setTimeout(resolve, 5 * attempt));
-          }
-        }
+        await renameWithRetry(temporary, path);
       } finally {await rm(temporary, {force:true});}
     }).catch(() => {if (!warned) {warned = true; console.error('MCP status could not be saved. Connections are unaffected.');}});
     return queue;

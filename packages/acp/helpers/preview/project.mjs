@@ -1,7 +1,8 @@
 // Supervises checks and a development server in a captured project directory.
 // These are ordinary local processes, not an OS security sandbox.
 import { spawn, execFile, spawnSync } from "node:child_process";
-import { readFile, writeFile, rename, realpath } from "node:fs/promises";
+import { readFile, writeFile, realpath } from "node:fs/promises";
+import { renameWithRetry } from "../../../runtime/src/fs/rename.mjs";
 import { createServer } from "node:net";
 import { delimiter, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -22,7 +23,7 @@ const state = { runId: manifest.runId, stage: "starting", checks: [] };
 async function record() {
   const path = join(directory, "project-result.json");
   await writeFile(`${path}.tmp`, JSON.stringify(state), { mode: 0o600 });
-  await rename(`${path}.tmp`, path);
+  await renameWithRetry(`${path}.tmp`, path);
 }
 function signalGroup(pid, signal) {
   if (process.platform === "win32") {
@@ -36,7 +37,6 @@ function signalGroup(pid, signal) {
 async function stop(code = 0) {
   if (closing) return;
   closing = true;
-  clearInterval(watchdog); clearTimeout(expiry);
   for (const pid of groups) signalGroup(pid, "SIGTERM");
   await delay(300);
   for (const pid of groups) signalGroup(pid, "SIGKILL");
@@ -46,8 +46,15 @@ async function stop(code = 0) {
       try { spawnSync("taskkill", ["/F", "/PID", pid], { stdio: "ignore", windowsHide: true }); } catch { /* best effort */ }
     }
   }
-  await writeFile(join(directory, "closed.json.tmp"), JSON.stringify({runId: manifest.runId, closedAt: new Date().toISOString()}), {mode: 0o600});
-  await rename(join(directory, "closed.json.tmp"), join(directory, "closed.json"));
+  try {
+    await writeFile(join(directory, "closed.json.tmp"), JSON.stringify({runId: manifest.runId, closedAt: new Date().toISOString()}), {mode: 0o600});
+    await renameWithRetry(join(directory, "closed.json.tmp"), join(directory, "closed.json"));
+  }
+  catch (error) {
+    // The owner falls back to the terminal exit status; staying alive would leak this process.
+    console.error(`Zepi cleanup acknowledgement failed: ${error?.message ?? error}`);
+  }
+  clearInterval(watchdog); clearTimeout(expiry);
   process.exit(code);
 }
 const watchdog = setInterval(async () => {

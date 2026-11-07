@@ -29,8 +29,10 @@ All notable changes to Zepi are documented here. The format follows
 - Project commands on Windows run in the private copy as intended: the supervisor resolves the
   captured-inputs link, so the project's own `node_modules` can no longer satisfy a dependency
   that was never captured.
-- The MCP status snapshot survives a concurrent reader on Windows: the atomic rename retries
-  instead of dropping the publish, so Extensions > MCP no longer shows a stale connection state.
+- Replacing a file that a reader or a virus scanner still holds open no longer fails the whole
+  operation on Windows: atomic writes back off and retry. Before this, the MCP status in
+  Extensions could stay stale, a healthy project verification could fail with a rename error,
+  and the preview supervisor could survive its run without a cleanup acknowledgement.
 
 ## [0.0.1-beta2] - 2026-11-05
 

@@ -2,7 +2,8 @@ import {piDirectory, runtimeRoot as root, bundledPiEntry} from '../paths.mjs';
 import {validateMcp, credentials, usesOAuth} from '../mcp/config.mjs';
 import {readMcpStatus, mcpRevision} from '../mcp/status.mjs';
 export {validateMcp, configuredMcp} from '../mcp/config.mjs';
-import { mkdir, readFile, writeFile, rename, rm, readdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
+import { renameWithRetry } from "../fs/rename.mjs";
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -20,7 +21,7 @@ const readJson = async (path, fallback) => {
 const atomic = async (path, data) => {
   await mkdir(dirname(path), {recursive: true, mode: 0o700});
   const temp = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  try { await writeFile(temp, JSON.stringify(data, null, 2) + "\n", {mode: 0o600}); await rename(temp, path); }
+  try { await writeFile(temp, JSON.stringify(data, null, 2) + "\n", {mode: 0o600}); await renameWithRetry(temp, path); }
   finally { await rm(temp, {force: true}); }
 };
 const npmName = source => {
