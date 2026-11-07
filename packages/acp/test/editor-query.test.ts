@@ -21,27 +21,33 @@ test("read roles use native queries and never reactivate pi builtin tools as plu
   assert.throws(() => resolveAgentTools(["tool:hidden"], tools), /unavailable/);
 });
 
-test("query adapter rejects private and escaping paths and forwards cancellation without disk fallback", async () => {
+test("query adapter rejects private paths and falls back to disk search outside the workspace", async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "zepi-query-path-")));
+  const outside = await realpath(await mkdtemp(join(tmpdir(), "zepi-query-outside-")));
   let requests = 0;
   try {
     await mkdir(join(dir,".local"));
-    await symlink(tmpdir(), join(dir,"outside"));
+    await writeFile(join(outside,"current-notes.md"), "current marker line\n");
+    await symlink(outside, join(dir,"outside"));
     const controller = new AbortController();
     const endpoint = {request: async (method: string, _args: unknown, options: {cancellationSignal: AbortSignal}) => {
       requests++; assert.equal(method, EDITOR_QUERY); assert.equal(options.cancellationSignal, controller.signal);
       controller.abort(); options.cancellationSignal.throwIfAborted();
     }} as unknown as Pick<AgentContext,"request">;
-    const tool = editorQueryTools(dir,"s",endpoint).find(tool => tool.name === "grep")!;
-    const execute = (path: string, signal?: AbortSignal) => tool.execute("q", {pattern:"current",path},signal,undefined,{} as ExtensionToolContext);
+    const tools = editorQueryTools(dir,"s",endpoint);
+    const grep = tools.find(tool => tool.name === "grep")!;
+    const find = tools.find(tool => tool.name === "find")!;
+    const textOf = (result: {content: Array<unknown>}) => result.content.map(part => typeof part === "object" && part !== null && "text" in part ? String((part as {text?: unknown}).text ?? "") : "").join("\n");
+    const execute = (path: string, signal?: AbortSignal) => grep.execute("q", {pattern:"current",path},signal,undefined,{} as ExtensionToolContext);
     await assert.rejects(execute(join(dir,".local")), /Private/);
-    await assert.rejects(execute(join(dir,"outside")), /outside/);
+    assert.match(textOf(await execute(join(dir,"outside"))), /current marker line/);
+    assert.match(textOf(await find.execute("q", {pattern:"*current*",path:join(dir,"outside")},undefined,undefined,{} as ExtensionToolContext)), /current-notes\.md/);
     assert.equal(requests,0);
     await assert.rejects(execute(dir,controller.signal), /abort/i);
     assert.equal(requests,1);
     await assert.rejects(execute(dir,controller.signal), /abort/i);
     assert.equal(requests,1);
-  } finally {await rm(dir,{recursive:true,force:true});}
+  } finally {await rm(dir,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
 });
 
 test("actual pi tools query ACP, preserve schemas and require native tool permission", {timeout:30_000}, async () => {

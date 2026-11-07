@@ -9,9 +9,14 @@ All notable changes to Zepi are documented here. The format follows
 ### Fixed
 
 - Browser cleanup on session dispose no longer raises an unhandled rejection:
-  rowser.close errors during forced dispose are caught and logged
+  browser.close errors during forced dispose are caught and logged
   (Zepi browser cleanup failed) instead of surfacing as an unhandled promise
   rejection.
+- Search outside the project falls back to stock pi disk search: find/grep with a path
+  outside the workspace no longer fail; read/ls behavior and the native editor index
+  inside the project are unchanged.
+- browser_open and browser_agent_command accept the page address as url or uri
+  (a missing address now reports a clear error instead of an MCP validation failure).
 
 ## [0.0.1-beta2] - 2026-11-05
 

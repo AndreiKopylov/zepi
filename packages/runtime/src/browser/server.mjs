@@ -89,12 +89,12 @@ export async function serveBrowser() {
       const scenario=body.scenario??'flights',goal=(body.goal??'').trim();
       if(!['travel','research','flights'].includes(scenario)) throw new Error('Unknown demo scenario');
       if(!goal||[...goal].length>2000) throw new Error('Enter 1–2,000 characters');
-      if(!body.url&&scenario!=='flights'&&!origin) throw new Error('Open browser_inspect first to use the local scenarios.');
+      if(!body.url&&!body.uri&&scenario!=='flights'&&!origin) throw new Error('Open browser_inspect first to use the local scenarios.');
       await close();const b=await browser();
       const signal=AbortSignal.any([lifetime.signal,inputLifetime.signal,...(requestSignal?[requestSignal]:[])]);
       try {
         activeFast=await FastBrowser.attach(b.page,signal);
-        await activeFast.navigate(body.url??(scenario==='flights'?FLIGHTS_URL:`${origin}/fixture.html?scenario=${scenario}`));
+        await activeFast.navigate(body.url??body.uri??(scenario==='flights'?FLIGHTS_URL:`${origin}/fixture.html?scenario=${scenario}`));
         activeAgent=new FastAgent(activeFast,goal,agentOptions(signal,{screenshots:body.screenshots??true,recordDir:body.record?await recordingDirectory():undefined}));
         activeAgent.scenario=scenario;await activeAgent.initialize();
       } catch(error) {await close();throw error;}
@@ -139,7 +139,9 @@ export async function serveBrowser() {
       return pending;
     });
   }
-  register('browser_open','Open a URL in the task browser. Returns the observed page and any user verification barrier.',{url:z.string().url()},async ({url})=>{
+  register('browser_open','Open a URL in the task browser. Returns the observed page and any user verification barrier. Pass the address as url (uri also works).',{url:z.string().url().optional(),uri:z.string().url().optional()},async args=>{
+    const url=args.url??args.uri;
+    if(!url) throw new Error("Pass the page address as url (uri works too).");
     const b=await browser();activeAgent=null;await activeFast?.detach();activeFast=null;
     if(engine==='legacy') await b.open(url);
     else {
@@ -217,7 +219,7 @@ export async function serveBrowser() {
   });
   register('browser_agent_state','Inspect the full Ultrafast run state: page, indexed elements, pending decision, plan, operation/target probabilities, history, text calls and timestamps.',{},async()=>text(inspectorState(activeAgent,process.env.TEXT_MODEL??'deepseek-chat')));
   register('browser_agent_command','Use the complete Ultrafast command interface. reset starts a run; predict chooses without acting; act consumes the pending decision once and requires its observed fingerprint; tick chooses and acts. Screenshot/record options are independent of model input.',{
-    command:z.enum(['reset','predict','act','tick']),goal:z.string().optional(),url:z.string().url().optional(),scenario:z.enum(['flights','travel','research']).optional(),
+    command:z.enum(['reset','predict','act','tick']),goal:z.string().optional(),url:z.string().url().optional(),uri:z.string().url().optional(),scenario:z.enum(['flights','travel','research']).optional(),
     fingerprint:z.string().optional(),screenshots:z.boolean().optional(),record:z.boolean().optional(),
   },async({command,...body},extra)=>text(await agentCommand(command,body,inspector?.url,extra.signal)));
   register('browser_inspect','Open the loopback Ultrafast inspector for this task browser. Includes live screenshots, indexed target overlays, operation/target rankings, separate Choose/Execute, auto-run/pause, travel/research scenarios and trace export. Uses global model settings and the existing browser ownership controls.',{port:z.number().int().min(0).max(65535).optional()},async({port})=>{
