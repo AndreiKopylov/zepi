@@ -37,6 +37,9 @@ All notable changes to Zepi are documented here. The format follows
 - An editor left open for more than six hours no longer loses the agent's Extensions state: the
   runtime lease renews itself, so the MCP panel keeps seeing a live runtime instead of expiring
   it and going blank until restart.
+- A finished turn no longer leaves the last lines of a reply unreachable behind the
+  status row: the message list remeasures its tail and returns to the bottom when the
+  turn ends, instead of keeping stale row heights until the thread is reopened.
 
 ## [0.0.1-beta2] - 2026-11-05
 

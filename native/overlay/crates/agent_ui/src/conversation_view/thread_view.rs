@@ -775,6 +775,7 @@ pub struct ThreadView {
     zepi_composer_max_px: f32,
     zepi_composer_mode_key: isize,
     zepi_composer_floor: bool,
+    zepi_was_generating: bool,
     zepi_last_ui_columns: usize,
     zepi_last_ui_light: Option<bool>,
     pub add_context_menu_handle: PopoverMenuHandle<ContextMenu>,
@@ -1025,7 +1026,20 @@ impl ThreadView {
             session_capabilities.write().zepi_thread = Some(thread.downgrade());
         }
 
-        subscriptions.push(cx.observe(&thread, |_, _, cx| cx.notify()));
+        subscriptions.push(cx.observe(&thread, |this, _, cx| {
+            // Streamed tails and the generating indicator change row heights after the list
+            // cached them; reopening the thread heals it, so heal it at turn end instead.
+            let generating = this.zepi_is_generating(cx);
+            if this.zepi_was_generating && !generating {
+                let count = this.list_state.item_count();
+                this.list_state.remeasure_items(count.saturating_sub(2)..count);
+                if this.list_state.is_scrolled_to_end().unwrap_or(true) {
+                    this.list_state.scroll_to_end();
+                }
+            }
+            this.zepi_was_generating = generating;
+            cx.notify();
+        }));
         subscriptions.push(cx.observe(&conversation, |_, _, cx| cx.notify()));
         subscriptions.push(cx.subscribe(&thread, |this, _, event, cx| {
             if matches!(
@@ -1332,6 +1346,7 @@ impl ThreadView {
             zepi_composer_max_px: 800.0,
             zepi_composer_mode_key: -1,
             zepi_composer_floor: false,
+            zepi_was_generating: false,
             zepi_last_ui_columns: 0,
             zepi_last_ui_light: None,
             add_context_menu_handle: PopoverMenuHandle::default(),
