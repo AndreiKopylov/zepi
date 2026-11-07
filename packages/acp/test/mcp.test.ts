@@ -11,33 +11,21 @@ import {createExtensionCenter} from '../../runtime/src/pi/extensions.mjs';
 import {mcpHarness, policyRemote} from './fixture-mcp-policy.ts';
 import {readMcpStatus} from '../../runtime/src/mcp/status.mjs';
 
-test('Full Access runs direct and nested MCP calls, and revocation applies inside a running script', {timeout:20_000}, async () => {
+test('Full Access runs direct and nested MCP calls without permission prompts', {timeout:20_000}, async () => {
   const remote = await policyRemote();
   const h = await mcpHarness({mcpServers:{remote:{url:remote.url,exposure:'codemode'}}}, [
     () => call('codemode',{code:'text(await describeNamespace("remote")); text(await tools.mcp__remote__ping({}));'}),
     context => {assert.match(lastToolText(context,'codemode'),/mcp__remote__ping/); assert.match(lastToolText(context,'codemode'),/ping fixture reached/); return 'Verified.';},
-    () => call('codemode',{code:'text(await tools.revoke_access({})); try { text(await tools.mcp__remote__ping({})); } catch(error) { text(error.message); }'}),
-    context => {assert.match(lastToolText(context,'codemode'),/denied by user/); return 'Revocation verified.';},
     () => call('codemode',{code:'text(await tools.mcp__remote__ping({}));'}),
     context => {assert.match(lastToolText(context,'codemode'),/ping fixture reached/); return 'Other task verified.';},
-  ], `import {readFileSync,writeFileSync} from 'node:fs'; import {resolve} from 'node:path';
-export default pi => pi.registerTool({name:'revoke_access',label:'Revoke',description:'Fixture global revocation',parameters:{type:'object',properties:{}},execute:async(_id,_args,_signal,_update,ctx)=>{
- const path=resolve(ctx.cwd,'../settings.json');const settings=JSON.parse(readFileSync(path,'utf8'));settings.zepi.fullAccess=false;writeFileSync(path,JSON.stringify(settings));return {content:[{type:'text',text:'Access revoked'}]};
-}});`);
-  const path=join(h.dir,'settings.json');
-  const enable=async()=>writeFile(path,JSON.stringify({...JSON.parse(await readFile(path,'utf8')),zepi:{fullAccess:true}}));
+  ]);
   try {
-    await enable();
     const a=await h.newTask(),b=await h.newTask();
     await h.prompt(a.sessionId);
     assert.deepEqual(h.permissions,[]);assert.deepEqual(remote.calls,['ping']);
-    h.reject('mcp__remote__ping');
-    await h.prompt(a.sessionId);
-    assert.deepEqual(h.permissions,['mcp__remote__ping']);assert.deepEqual(remote.calls,['ping']);
-    await enable();
     await h.prompt(b.sessionId);
-    assert.deepEqual(h.permissions,['mcp__remote__ping']);assert.deepEqual(remote.calls,['ping','ping']);
-    assert.equal(h.model.requests(),6);
+    assert.deepEqual(h.permissions,[]);assert.deepEqual(remote.calls,['ping','ping']);
+    assert.equal(h.model.requests(),4);
   } finally {await h.close();await remote.close();}
 });
 
@@ -84,7 +72,7 @@ async function remoteFixture(type: 'http'|'sse') {
     close:async()=>{for(const stream of streams)stream.end();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}};
 }
 
-for(const type of ['http','sse'] as const) test(`configured ${type} MCP uses the existing permission bridge and releases its connection`,{timeout:20_000},async()=>{
+for(const type of ['http','sse'] as const) test(`configured ${type} MCP connects without permission prompts and releases its connection`,{timeout:20_000},async()=>{
   const remote=await remoteFixture(type),dir=await realpath(await mkdtemp(join(tmpdir(),'zepi-mcp-http-')));
   let active:Awaited<ReturnType<typeof startZepiAgent>>|undefined;
   let connection:ReturnType<ReturnType<typeof client>['connect']>|undefined;
@@ -104,7 +92,7 @@ for(const type of ['http','sse'] as const) test(`configured ${type} MCP uses the
     await connection.agent.request(methods.agent.initialize,{protocolVersion:1,clientCapabilities:{}});
     const task=await connection.agent.request(methods.agent.session.new,{cwd:join(dir,'work'),mcpServers:[]});
     assert.equal((await connection.agent.request(methods.agent.session.prompt,{sessionId:task.sessionId,prompt:[{type:'text',text:'Call the remote fixture.'}]})).stopReason,'end_turn');
-    assert.equal(remote.calls(),1);assert.equal(remote.denied(),0);assert.deepEqual(permissions,[task.sessionId]);
+    assert.equal(remote.calls(),1);assert.equal(remote.denied(),0);assert.deepEqual(permissions,[]);
     assert.doesNotMatch(JSON.stringify(updates),/fixture-mcp-secret/);
     await connection.agent.request(methods.agent.session.close,{sessionId:task.sessionId});
     // Let the peer observe EOF before checking its retained SSE responses.
@@ -288,7 +276,7 @@ test('cancelling a progressing MCP request releases the stream and allows the ne
   } finally {await h.close(); await remote.close();}
 });
 
-test('pi discovers deferred MCP tools, keeps hidden tools unreachable, and checks nested call permission', {timeout:20_000}, async () => {
+test('pi discovers deferred MCP tools, keeps hidden tools unreachable, and runs nested calls without permission prompts', {timeout:20_000}, async () => {
   const remote = await policyRemote(); remote.tools(['ping','secret','search_a','search_exact']);
   const h = await mcpHarness({mcpServers:{remote:{url:remote.url,description:'Local policy namespace',toolExposure:{secret:'hidden','search_*':'deferred',search_exact:'direct'}}}}, [
     context => {
@@ -304,8 +292,8 @@ test('pi discovers deferred MCP tools, keeps hidden tools unreachable, and check
     }, context => {
       assert.match(lastToolText(context,'codemode'), /false/);
       assert.match(lastToolText(context,'codemode'), /ping fixture reached/); return 'Discovery completed.';
-    }, () => call('codemode',{code:'try { await tools.mcp__remote__ping({}); } catch(error) { text(error.message); }'}),
-    context => {assert.match(lastToolText(context,'codemode'), /denied by user/); return 'Nested denial respected.';},
+    }, () => call('codemode',{code:'const result = await tools.mcp__remote__ping({}); text(result.content[0].text);'}),
+    context => {assert.match(lastToolText(context,'codemode'), /ping fixture reached/); return 'Nested call verified.';},
   ], `import {appendFileSync} from 'node:fs'; import {join} from 'node:path';
 export default pi => {pi.on('tool_call', (event,ctx) => {appendFileSync(join(ctx.cwd,'calls.jsonl'),JSON.stringify(event)+'\\n');});};`);
   try {
@@ -315,10 +303,9 @@ export default pi => {pi.on('tool_call', (event,ctx) => {appendFileSync(join(ctx
     const events = (await readFile(join(h.dir,'work/calls.jsonl'),'utf8')).trim().split('\n').map(line => JSON.parse(line));
     const nested = events.filter(event => event.toolName === 'mcp__remote__ping');
     assert.equal(nested.length,1); assert.ok(nested[0].parentToolCallId);
-    assert.deepEqual(h.permissions,['tool_search','codemode','mcp__remote__ping']);
-    h.reject('mcp__remote__ping');
+    assert.deepEqual(h.permissions,[]);
     assert.equal((await h.prompt(task.sessionId)).stopReason,'end_turn');
-    assert.deepEqual(remote.calls,['ping']);
+    assert.deepEqual(remote.calls,['ping','ping']);
     assert.equal(h.model.requests(),5);
   } finally {await h.close(); await remote.close();}
 });

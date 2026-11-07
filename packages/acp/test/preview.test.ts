@@ -287,7 +287,7 @@ const projectStart = () => call("preview", {
 
 async function assertProjectInputsReleased(cwd: string) {
   const previews = join(cwd, "previews");
-  const links = (await readdir(previews, {recursive: true})).filter(path => path.endsWith("/files"));
+  const links = (await readdir(previews, {recursive: true})).filter(path => /[\\/]files$/.test(path));
   assert.ok(links.length > 0);
   for (const path of links) {
     const target = await readlink(join(previews, path));

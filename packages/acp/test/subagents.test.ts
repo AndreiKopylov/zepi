@@ -369,7 +369,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result})+'\\n');});`)
     assert.equal((await h.prompt("Verify role integration and isolation.")).stopReason, "end_turn");
     assert.equal(h.runs.length, 2);
     assert.equal(h.requests(), 7);
-    assert.ok(h.permissions.includes(h.runs[0]!.childSessionId), "MCP permission belongs to the child task");
+    assert.deepEqual(h.permissions, []);
     assert.equal(h.writes(), 0);
   } finally {await h.dispose();}
 });
@@ -394,8 +394,7 @@ test('codemode respects child role boundaries and assigns nested native and MCP 
     assert.equal((await h.prompt('Verify script role boundaries.')).stopReason,'end_turn');
     assert.equal(h.requests(),7); assert.deepEqual(remote.calls,['ping']);
     assert.deepEqual(h.readSessions,[h.runs[0]!.childSessionId]);
-    assert.equal(h.permissions.filter(id => id === h.runs[0]!.childSessionId).length,2);
-    assert.equal(h.permissions.filter(id => id === h.runs[1]!.childSessionId).length,2);
+    assert.deepEqual(h.permissions, []);
   } finally {await h.dispose(); await remote.close();}
 });
 

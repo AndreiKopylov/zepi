@@ -6,6 +6,12 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [0.0.1-beta3] - 2026-11-07
 
+### Added
+
+- `npm run smoke`: a P0 bundle check (seeded defaults, freshness of the compiled ACP entry,
+  session open, tools, subagents, browser, optional preview) that also runs against a deployed
+  bundle via `--root`, masks credentials in its output and fails only on newly red tests.
+
 ### Fixed
 
 - Browser cleanup on session dispose no longer raises an unhandled rejection:
@@ -17,6 +23,7 @@ All notable changes to Zepi are documented here. The format follows
   inside the project are unchanged.
 - browser_open and browser_agent_command accept the page address as url or uri
   (a missing address now reports a clear error instead of an MCP validation failure).
+- Creating and reading unsaved new files through the agent works again: native file tools tolerate paths that exist only in editor buffers, not yet on disk.
 
 ## [0.0.1-beta2] - 2026-11-05
 

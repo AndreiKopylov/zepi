@@ -50,7 +50,7 @@ test("query adapter rejects private paths and falls back to disk search outside 
   } finally {await rm(dir,{recursive:true,force:true});await rm(outside,{recursive:true,force:true});}
 });
 
-test("actual pi tools query ACP, preserve schemas and require native tool permission", {timeout:30_000}, async () => {
+test("actual pi tools query ACP, preserve schemas and run without permission prompts", {timeout:30_000}, async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "zepi-query-acp-")));
   await writeFile(join(dir,"settings.json"), JSON.stringify({defaultProvider:"zepi-fixture",defaultModel:"scripted",compaction:{enabled:false}}));
   const fixture = await fixtureModel(dir, [
@@ -58,7 +58,7 @@ test("actual pi tools query ACP, preserve schemas and require native tool permis
     context => {assert.match(lastToolText(context,"find"),/sample.ts/);return call("grep",{pattern:"unsaved",context:1,ignoreCase:true});},
     context => {assert.match(lastToolText(context,"grep"),/sample.ts:2: unsaved/);return call("ls",{limit:5});},
     context => {assert.match(lastToolText(context,"ls"),/sample.ts/);return call("grep",{pattern:"denied"});},
-    context => {assert.throws(() => lastToolText(context,"grep"), /denied by user/i);return "Queries verified.";},
+    context => {assert.match(lastToolText(context,"grep"),/unsaved/);return "Queries verified.";},
   ]);
   const toAgent = new TransformStream(), toClient = new TransformStream();
   const server = await startZepiAgent(dir,join(dir,"sessions"),{readable:toAgent.readable,writable:toClient.writable},fixture.runtime);
@@ -68,7 +68,7 @@ test("actual pi tools query ACP, preserve schemas and require native tool permis
     .onNotification(methods.client.session.update,()=>{})
     .onRequest(methods.client.session.requestPermission, () => {
       permissions++;
-      return {outcome:{outcome:"selected" as const,optionId: permissions === 4 ? "reject_once" : "allow_once"}};
+      return {outcome:{outcome:"selected" as const,optionId: "allow_once"}};
     })
     .onRequest(EDITOR_QUERY, {parse: raw => raw as Record<string,unknown>}, ({params}) => {
       queries.push(params);
@@ -81,9 +81,9 @@ test("actual pi tools query ACP, preserve schemas and require native tool permis
     const session = await connection.agent.request(methods.agent.session.new,{cwd:dir,mcpServers:[]});
     await connection.agent.request(methods.agent.session.prompt,{sessionId:session.sessionId,prompt:[{type:"text",text:"Check native queries"}]});
     assert.equal(fixture.requests(),5);
-    assert.deepEqual(queries.map(query=>query.operation),["find","grep","ls"]);
+    assert.deepEqual(queries.map(query=>query.operation),["find","grep","ls","grep"]);
     assert.ok(queries.every(query=>query.sessionId === session.sessionId));
     assert.equal(queries[1]?.context,1);assert.equal(queries[1]?.ignoreCase,true);
-    assert.equal(permissions,4);
+    assert.equal(permissions,0);
   } finally {await server.agent.dispose(); connection.close();server.connection.close();await rm(dir,{recursive:true,force:true});}
 });
