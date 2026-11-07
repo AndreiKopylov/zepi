@@ -9,13 +9,14 @@ const read = path => readFile(path, 'utf8').then(JSON.parse).catch(() => undefin
 
 // A transient view of the existing bridge, owned by the existing runtime lease.
 // No credentials, URLs, process arguments, tool output or conversation text.
-export function createMcpStatus(directory) {
+export function createMcpStatus(directory, heartbeatMs = 30_000) {
   const leasePath = join(directory, 'runtimes', `${process.pid}.json`);
   const path = join(directory, 'runtimes', `${process.pid}.mcp.json`);
   const lease = read(leasePath);
   const sessions = new Map();
   let queue = Promise.resolve();
   let warned = false;
+  let heartbeat;
   const save = () => {
     const rows = [...sessions].map(([sessionId, owner]) => ({sessionId, servers:owner.rows}));
     queue = queue.then(async () => {
@@ -29,16 +30,27 @@ export function createMcpStatus(directory) {
     }).catch(() => {if (!warned) {warned = true; console.error('MCP status could not be saved. Connections are unaffected.');}});
     return queue;
   };
+  // A publish can be lost while a reader or a scanner holds the snapshot open, and nothing
+  // rewrites it until the state changes again, so republish everything while a session is live.
+  const startHeartbeat = () => {
+    heartbeat ??= setInterval(() => {if (sessions.size) void save();}, heartbeatMs).unref();
+  };
+  const stopHeartbeat = () => {
+    if (sessions.size || !heartbeat) return;
+    clearInterval(heartbeat);
+    heartbeat = undefined;
+  };
   return binding => {
     if (!binding) return;
     const owner = {rows:[]};
     sessions.set(binding.sessionId, owner);
+    startHeartbeat();
     let closed = false;
     const close = () => {
       if (closed) return queue;
       closed = true;
       binding.sessionSignal.removeEventListener('abort', close);
-      if (sessions.get(binding.sessionId) === owner) {sessions.delete(binding.sessionId); return save();}
+      if (sessions.get(binding.sessionId) === owner) {sessions.delete(binding.sessionId); stopHeartbeat(); return save();}
       return queue;
     };
     binding.sessionSignal.addEventListener('abort', close, {once:true});

@@ -9,7 +9,7 @@ import {startZepiAgent} from '../src/server.ts';
 import {call, declaredTools, fixtureModel, lastToolText} from './fixture-model.ts';
 import {createExtensionCenter} from '../../runtime/src/pi/extensions.mjs';
 import {mcpHarness, policyRemote} from './fixture-mcp-policy.ts';
-import {readMcpStatus} from '../../runtime/src/mcp/status.mjs';
+import {createMcpStatus, readMcpStatus} from '../../runtime/src/mcp/status.mjs';
 
 test('Full Access runs direct and nested MCP calls without permission prompts', {timeout:20_000}, async () => {
   const remote = await policyRemote();
@@ -499,4 +499,26 @@ test('MCP sign-in cancels stalled discovery, registration and token exchange wit
       assert.equal(credentials(dir).tokens('remote',remote.url),undefined);
     } finally {await remote.close();await rm(dir,{recursive:true,force:true});}
   }
+});
+
+test('a lost MCP status publish heals on the heartbeat', {timeout:10_000}, async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(),'zepi-mcp-heartbeat-')));
+  const snapshot = join(dir,'runtimes',`${process.pid}.mcp.json`);
+  await mkdir(join(dir,'runtimes'),{recursive:true});
+  await writeFile(join(dir,'runtimes',`${process.pid}.json`),JSON.stringify({id:'runtime-under-test',startedAt:new Date().toISOString()}));
+  const status = createMcpStatus(dir,40), session = new AbortController();
+  const rows = () => readMcpStatus(dir,[process.pid]);
+  const wait = async (predicate:() => Promise<boolean>) => {
+    for (let i=0;i<300 && !(await predicate());i++) await new Promise(resolve=>setTimeout(resolve,10));
+    return predicate();
+  };
+  try {
+    const binding = status({sessionId:'task',sessionSignal:session.signal})!;
+    await binding.publish([{server:{name:'remote'} as never,state:'connected',toolCount:1}]);
+    assert.equal((await rows()).length,1);
+    await rm(snapshot);
+    assert.ok(await wait(async () => (await rows()).length === 1),'the heartbeat republishes a lost snapshot');
+    session.abort();
+    assert.ok(await wait(async () => (await rows()).length === 0),'a closed session leaves an empty snapshot');
+  } finally {session.abort(); await rm(dir,{recursive:true,force:true});}
 });

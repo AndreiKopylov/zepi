@@ -32,7 +32,11 @@ All notable changes to Zepi are documented here. The format follows
 - Replacing a file that a reader or a virus scanner still holds open no longer fails the whole
   operation on Windows: atomic writes back off and retry. Before this, the MCP status in
   Extensions could stay stale, a healthy project verification could fail with a rename error,
-  and the preview supervisor could survive its run without a cleanup acknowledgement.
+  and the preview supervisor could survive its run without a cleanup acknowledgement. The MCP
+  status now also republishes itself while a task is open, so a lost write heals on its own.
+- An editor left open for more than six hours no longer loses the agent's Extensions state: the
+  runtime lease renews itself, so the MCP panel keeps seeing a live runtime instead of expiring
+  it and going blank until restart.
 
 ## [0.0.1-beta2] - 2026-11-05
 

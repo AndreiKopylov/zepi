@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createExtensionCenter, configuredMcp } from "../../src/pi/extensions.mjs";
+import { createExtensionCenter, configuredMcp, renewLease } from "../../src/pi/extensions.mjs";
 
 test("pi package lifecycle preserves filters, queues changes while loaded, and manages individual skills", async () => {
   const dir = await mkdtemp(join(tmpdir(), "zepi-extension-center-"));
@@ -64,6 +64,24 @@ test("abandoned runtime leases no longer block package changes", async () => {
     const state = await center.execute({operation: "status"});
     assert.equal(state.activeRuntimes, 0);
     assert.deepEqual(await readdir(leases), []);
+  } finally {await rm(dir, {recursive: true, force: true});}
+});
+
+test("a live runtime lease is renewed instead of expiring after its TTL", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zepi-extension-renewal-"));
+  const leases = join(dir, "runtimes");
+  await mkdir(leases);
+  await writeFile(join(dir, "settings.json"), "{}");
+  const path = join(leases, `${process.pid}.json`);
+  await writeFile(path, JSON.stringify({id: "live-runtime", startedAt: "2020-01-01T00:00:00.000Z"}));
+  const center = createExtensionCenter(dir);
+  try {
+    assert.equal((await center.execute({operation: "status"})).activeRuntimes, 0, "an unrenewed lease expires");
+    await renewLease(path, "live-runtime");
+    const lease = JSON.parse(await readFile(path, "utf8"));
+    assert.equal(lease.id, "live-runtime", "renewal keeps the id the MCP status snapshot is bound to");
+    assert.ok(Date.now() - Date.parse(lease.startedAt) < 60_000, "renewal resets the lease age");
+    assert.equal((await center.execute({operation: "status"})).activeRuntimes, 1);
   } finally {await rm(dir, {recursive: true, force: true});}
 });
 
