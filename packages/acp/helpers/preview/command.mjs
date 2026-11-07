@@ -5,7 +5,10 @@ import {spawn, spawnSync} from "node:child_process";
 function killGroup() {
   if (process.platform === "win32") {
     // No process groups on Windows: kill our own tree so the supervised command dies with us.
-    // shortcut: taskkill /T misses breakaway descendants; upgrade to Job Objects if orphans appear.
+    // shortcut: taskkill /T misses descendants whose parent already exited; the bash wrapper reaps
+    // its own jobs and the editor KILL_ON_JOB_CLOSE job (zed/src/zepi_runtime.rs,
+    // reap_descendants_on_exit) kills the rest when it exits. Upgrade to a per-command job through
+    // a native spawn helper copying that function, if orphans ever outlive a turn in the wild.
     try { spawnSync("taskkill", ["/T", "/F", "/PID", String(process.pid)], { stdio: "ignore", windowsHide: true }); }
     catch { /* best effort */ }
     process.exit(1);
