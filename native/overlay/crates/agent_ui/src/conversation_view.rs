@@ -1943,9 +1943,6 @@ impl ConversationView {
             "settings" => window.dispatch_action(Box::new(zed_actions::OpenSettingsPage {page: "AI".into(), target: None}), cx),
             "hotkeys" => window.dispatch_action(Box::new(zed_actions::OpenKeymap), cx),
             "quit" => window.defer(cx, |window, cx| window.dispatch_action(Box::new(zed_actions::Quit), cx)),
-            "access_changed" => {
-                crate::zepi_access::refresh(cx);
-            }
             "focus_session" => {
                 let workspace = self.workspace.upgrade().ok_or("Workspace is unavailable")?;
                 let panel = workspace.read(cx).panel::<AgentPanel>(cx).ok_or("Task panel is unavailable")?;
@@ -3036,7 +3033,7 @@ impl ConversationView {
                             this.children(description.map(|desc| {
                                 self.render_markdown(
                                     desc.clone(),
-                                    MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
+                                    crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx),
                                     cx,
                                 )
                             }))
@@ -4510,7 +4507,7 @@ fn plan_label_markdown_style(
     window: &Window,
     cx: &App,
 ) -> MarkdownStyle {
-    let default_md_style = MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
+    let default_md_style = crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx);
 
     MarkdownStyle {
         base_text_style: TextStyle {

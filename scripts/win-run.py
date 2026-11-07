@@ -11,6 +11,7 @@ if not exe.exists():
     exe = BUILD_DIR / "debug" / "zepi.exe"
 env = dict(os.environ)
 env["ZEPI_NATIVE_SOURCE_ROOT"] = str(ROOT / ".local" / "upstream" / "zed")
+subprocess.run("npm run build:acp", cwd=ROOT, shell=True, check=True)
 log = open(ROOT / ".local" / "run.log", "ab", buffering=0)
 subprocess.Popen([str(exe)], env=env, cwd=str(ROOT / ".local" / "upstream" / "zed"), stdout=log, stderr=log)
 print("launched", exe)

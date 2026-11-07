@@ -438,14 +438,12 @@ test('reload personalizes OpenRouter models across tasks with offline, failure a
   } finally {await h.dispose();remote.closeAllConnections();await new Promise<void>(resolve=>remote.close(()=>resolve()));}
 });
 
-test('extension-triggered runs receive pi 1.3 setup, global access and queued context', {timeout:30_000}, async () => {
+test('extension-triggered runs receive pi 1.3 setup and queued context', {timeout:30_000}, async () => {
   const h=await harness([context=>{
     const text=JSON.stringify(context);
-    assert.match(text,/Zepi access mode: Full Access/);
     assert.match(text,/custom-start-marker/);assert.match(text,/queued-next-turn-marker/);
     return 'Custom run verified.';
   }],{setup:async cwd=>{
-    const path=join(cwd,'settings.json');await writeFile(path,JSON.stringify({...JSON.parse(await readFile(path,'utf8')),zepi:{fullAccess:true}}));
     await mkdir(join(cwd,'extensions'));
     await writeFile(join(cwd,'extensions/custom.js'),`export default pi => {
       pi.on('before_agent_start',(event,ctx)=>{if(event.messageType==='custom'){
@@ -617,7 +615,7 @@ test("native pi commands route to their owning task and never repeat UI actions 
   } finally {await h.dispose();}
 });
 
-test("global access and sign-out honor cancellation and preserve unrelated configuration", async () => {
+test("sign-out honors cancellation and preserves unrelated configuration", async () => {
   let accept = false;
   const h = await harness([], {
     setup: cwd => writeFile(join(cwd, 'fixture-auth.json'), JSON.stringify({deepseek:{type:'api_key',key:'disposable-provider-key'},openai:{type:'api_key',key:'other-key'}})),
@@ -625,24 +623,40 @@ test("global access and sign-out honor cancellation and preserve unrelated confi
   });
   try {
     const task = await h.newTask();
-    const before = await readFile(join(h.cwd,'settings.json'),'utf8');
-    await h.prompt(task.sessionId, '/trust full');
-    assert.equal(await readFile(join(h.cwd,'settings.json'),'utf8'), before);
     await h.prompt(task.sessionId, '/logout deepseek');
     assert.ok(JSON.parse(await readFile(join(h.cwd,'fixture-auth.json'),'utf8')).deepseek);
     accept = true;
-    await h.prompt(task.sessionId, '/trust full');
-    assert.equal(JSON.parse(await readFile(join(h.cwd,'settings.json'),'utf8')).zepi.fullAccess,true);
-    await h.prompt(task.sessionId, '/trust ask');
-    const settings = JSON.parse(await readFile(join(h.cwd,'settings.json'),'utf8'));
-    assert.equal(settings.zepi.fullAccess,false);
-    assert.equal(settings.defaultProvider,'zepi-fixture');
     await h.prompt(task.sessionId, '/logout deepseek');
     const auth = JSON.parse(await readFile(join(h.cwd,'fixture-auth.json'),'utf8'));
     assert.equal(auth.deepseek, undefined);
     assert.equal(auth.openai.key, 'other-key');
     assert.doesNotMatch(h.text(task.sessionId), /disposable-provider-key|other-key/);
     assert.equal(h.requests(),0);
+  } finally {await h.dispose();}
+});
+
+test("trust saves a pi project decision and reloads project resources", async () => {
+  const h = await harness([], {setup: async cwd => {
+    await mkdir(join(cwd, '.pi', 'extensions'), {recursive: true});
+    await writeFile(join(cwd, '.pi', 'extensions', 'project.js'), "export default pi => {pi.registerCommand('project-check', {handler: async () => {}});};");
+  }});
+  try {
+    const task = await h.newTask();
+    const catalogue = () => {
+      const last = h.updates.filter(({update}) => update.sessionUpdate === 'available_commands_update').at(-1)?.update;
+      return last?.sessionUpdate === 'available_commands_update' ? last.availableCommands.map(command => command.name) : [];
+    };
+    assert.ok(!catalogue().includes('project-check'), 'project extensions stay out while the project is untrusted');
+    await h.prompt(task.sessionId, '/trust');
+    assert.match(h.text(task.sessionId), /Saved decision: none\nCurrent session: not trusted/);
+    await h.prompt(task.sessionId, '/trust trust');
+    assert.ok(catalogue().includes('project-check'), 'trust loads project extensions');
+    assert.equal(Object.values(JSON.parse(await readFile(join(h.cwd, 'trust.json'), 'utf8')))[0], true);
+    await h.prompt(task.sessionId, '/trust no');
+    assert.ok(!catalogue().includes('project-check'), 'withdrawing trust drops project extensions');
+    assert.equal(Object.values(JSON.parse(await readFile(join(h.cwd, 'trust.json'), 'utf8')))[0], false);
+    assert.match(h.text(task.sessionId), /not trusted/);
+    assert.equal(h.requests(), 0);
   } finally {await h.dispose();}
 });
 

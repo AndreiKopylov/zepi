@@ -9601,12 +9601,8 @@ fn handle_request_permission(
 
     let cancellation = responder.cancellation();
     cx.spawn(async move |cx| {
-        // zepi: full access answers AllowOnce without prompting.
-        let full_access = cancellation
-            .run_until_cancelled(async { Ok(cx.background_spawn(async { global_full_access() }).await) })
-            .await;
-        if let Ok(true) = full_access
-            && let Some(option) = args
+        // zepi: tool permissions are auto-approved; policy lives in pi extensions.
+        if let Some(option) = args
                 .options
                 .iter()
                 .find(|option| option.kind == acp::PermissionOptionKind::AllowOnce)
@@ -10171,37 +10167,6 @@ fn handle_wait_for_terminal_exit(
 }
 
 // --- zepi additions ---
-#[derive(Default)]
-pub struct ZepiAccess {
-    pub full_access: bool,
-    pub busy: bool,
-    pub error: Option<String>,
-}
-
-impl gpui::Global for ZepiAccess {}
-
-fn full_access_enabled(content: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(content)
-        .ok()
-        .is_some_and(|settings| settings["zepi"]["fullAccess"] == true)
-}
-
-fn global_full_access() -> bool {
-    let Some(root) = std::env::var_os("ZEPI_ROOT") else { return false; };
-    // Global pi configuration only. Re-read each request so disabling the mode
-    // affects existing sessions without persisting per-tool Allow Always grants.
-    std::fs::read_to_string(std::env::var_os("ZEPI_PI_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(root).join(".local/zepi")).join("settings.json"))
-        .ok()
-        .is_some_and(|content| full_access_enabled(&content))
-}
-
-#[test]
-fn test_zepi_full_access_requires_explicit_global_boolean() {
-    assert!(full_access_enabled(r#"{"zepi":{"fullAccess":true}}"#));
-    for value in ["{}", "invalid", r#"{"fullAccess":true}"#, r#"{"zepi":{"fullAccess":"true"}}"#, r#"{"zepi":{"fullAccess":false}}"#] {
-        assert!(!full_access_enabled(value));
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
 #[request(method = "_zepi/fs/snapshot", response = ZepiFileSnapshotResponse)]

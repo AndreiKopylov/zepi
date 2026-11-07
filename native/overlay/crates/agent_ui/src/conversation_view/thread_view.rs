@@ -692,12 +692,11 @@ fn save_zepi_composer_px(height: Option<Pixels>) {
     let _ = std::fs::write(zepi_composer_height_path(), content);
 }
 
-// buffer font line box; comfortable spacing
+// The composer is drawn with the agent UI font and the thread line-height knob,
+// so the drag box and the line cap match what the editor element paints.
 fn zepi_line_height(cx: &App) -> f32 {
-    f32::from(theme::theme_settings(cx).buffer_font_size(cx))
-        * theme_settings::ThemeSettings::get_global(cx)
-            .buffer_line_height
-            .value()
+    f32::from(theme_settings::ThemeSettings::get_global(cx).agent_ui_font_size(cx))
+        * crate::zepi_theme::thread_line_height()
 }
 
 pub struct ThreadView {
@@ -1018,8 +1017,6 @@ impl ThreadView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        crate::zepi_access::init(cx);
-        subscriptions.push(cx.observe_global::<crate::zepi_access::ZepiAccess>(|_, cx| cx.notify()));
         let session_id = thread.read(cx).session_id().clone();
         let parent_session_id = thread.read(cx).parent_session_id().cloned();
 
@@ -3510,8 +3507,12 @@ impl ThreadView {
     // editor methods
 
     fn composer_mode_key(&self) -> isize {
+        let lh = (crate::zepi_theme::thread_line_height() * 100.0).round() as isize;
         match self.zepi_composer_px {
-            Some(h) => (f32::from(h).round() as isize) * 2 + if self.zepi_composer_floor { 1 } else { 0 },
+            Some(h) => {
+                (f32::from(h).round() as isize + lh * 1000) * 2
+                    + if self.zepi_composer_floor { 1 } else { 0 }
+            }
             None => -2,
         }
     }
@@ -3555,7 +3556,7 @@ impl ThreadView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.has_visible_conversation(cx) {
+        if !self.has_visible_conversation(cx) && std::env::var_os("ZEPI_ROOT").is_none() {
             return;
         }
         if std::env::var_os("ZEPI_ROOT").is_some() {
@@ -5452,7 +5453,7 @@ impl ThreadView {
                             })
                             .when_some(error, |this, error| {
                                 let mut style =
-                                    MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
+                                    crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx);
                                 style.base_text_style.color = Color::Error.color(cx);
                                 this.child(
                                     div()
@@ -5954,6 +5955,7 @@ impl ThreadView {
             .map(|this| {
                 if has_messages {
                     this.on_action(cx.listener(Self::expand_message_editor))
+                        .flex_none()
                         .border_t_1()
                         .border_color(cx.theme().colors().border)
                         .when(editor_expanded, |this| this.h(vh(0.8, window)))
@@ -5962,6 +5964,7 @@ impl ThreadView {
                         .w_full()
                         .border_t_1()
                         .border_color(cx.theme().colors().border)
+                        .when(editor_expanded, |this| this.h(vh(0.8, window)))
                 } else {
                     this.flex_1().size_full()
                 }
@@ -6009,7 +6012,7 @@ impl ThreadView {
                                 })
                             })
                             .child(self.message_editor.clone())
-                            .when(has_messages, |this| {
+                            .when(has_messages || zepi, |this| {
                                 this.child(
                                     h_flex()
                                         .absolute()
@@ -6070,9 +6073,6 @@ impl ThreadView {
                                     .children(self.render_activity_status_label(cx))
                                     .children(discard_draft_button)
                                     .children(self.render_token_usage(cx))
-                                    .when(std::env::var_os("ZEPI_ROOT").is_some(), |this| {
-                                        this.child(crate::zepi_access::render(window, cx))
-                                    })
                                     .children(self.profile_selector.clone())
                                     .map(|this| match self.config_options_view.clone() {
                                         Some(config_view) => this.child(config_view),
@@ -7971,14 +7971,14 @@ impl ThreadView {
                                     .py_3()
                                     .px_2()
                                     .rounded_md()
-                                    .bg(cx.theme().colors().editor_background)
+                                    .bg(crate::zepi_theme::palette(cx).and_then(|p| p.user_bg).unwrap_or_else(|| cx.theme().colors().editor_background))
                                     .border_1()
                                     .when(is_indented, |this| {
                                         this.py_2().px_2().when(opaque_window, |this| {
                                             this.shadow_sm()
                                         })
                                     })
-                                    .border_color(cx.theme().colors().border)
+                                    .border_color(crate::zepi_theme::palette(cx).and_then(|p| p.border).unwrap_or_else(|| cx.theme().colors().border))
                                     .map(|this| {
                                         if !is_editable {
                                             if is_subagent {
@@ -8014,7 +8014,7 @@ impl ThreadView {
                                     .rounded_sm()
                                     .border_1()
                                     .border_color(cx.theme().colors().border)
-                                    .bg(cx.theme().colors().editor_background)
+                                    .bg(crate::zepi_theme::palette(cx).and_then(|p| p.user_bg).unwrap_or_else(|| cx.theme().colors().editor_background))
                                     .overflow_hidden();
 
                                 let is_loading_contents = self.is_loading_contents;
@@ -9110,7 +9110,7 @@ impl ThreadView {
         let has_messages = self.has_visible_conversation(cx);
         let v2_empty_state = !has_messages;
 
-        if !has_messages {
+        if !has_messages && std::env::var_os("ZEPI_ROOT").is_none() {
             self.editor_expanded = false;
         }
 
@@ -9695,7 +9695,7 @@ impl ThreadView {
             .to_string();
 
         let mut style =
-            MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_agent_buffer_font(cx);
+            crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx).with_agent_buffer_font(cx);
         style.container_style.text.font_size = Some(rems_from_px(12_f32).into());
         style.container_style.text.line_height = Some(rems_from_px(17_f32).into());
         style.height_is_multiple_of_line_height = true;
@@ -10319,7 +10319,7 @@ impl ThreadView {
                                     div().id(("tool-call-raw-input-markdown", entry_ix)).child(
                                         self.render_markdown(
                                             input,
-                                            MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
+                                            crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx),
                                             cx,
                                         ),
                                     )
@@ -12101,7 +12101,7 @@ impl ThreadView {
                             tool_call.label.clone(),
                             MarkdownStyle {
                                 prevent_mouse_interaction: true,
-                                ..MarkdownStyle::themed(MarkdownFont::Agent, window, cx)
+                                ..crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx)
                                     .with_muted_text(cx)
                             },
                             cx,
@@ -12118,7 +12118,7 @@ impl ThreadView {
                     .w_full()
                     .child(self.render_markdown(
                         tool_call.label.clone(),
-                        MarkdownStyle { prevent_mouse_interaction: is_zepi, ..MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx) },
+                        MarkdownStyle { prevent_mouse_interaction: is_zepi, ..crate::zepi_theme::style_markdown_muted(MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx), cx) },
                         cx,
                     ))
                     .into_any()
@@ -12334,7 +12334,7 @@ impl ThreadView {
             } else {
                 self.render_markdown(
                     markdown.clone(),
-                    MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
+                    crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx),
                     cx,
                 )
                 .into_any()
@@ -12521,7 +12521,7 @@ impl ThreadView {
         window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let markdown_style = MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
+        let markdown_style = crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx);
         let output = self
             .render_numbered_read_file_output(
                 markdown.clone(),
@@ -13199,6 +13199,9 @@ impl ThreadView {
     }
 
     fn tool_card_header_bg(&self, cx: &Context<Self>) -> Hsla {
+        if let Some(c) = crate::zepi_theme::palette(cx).and_then(|p| p.tool_pending_bg) {
+            return c;
+        }
         cx.theme()
             .colors()
             .element_background
@@ -13206,7 +13209,10 @@ impl ThreadView {
     }
 
     fn tool_card_border_color(&self, cx: &Context<Self>) -> Hsla {
-        cx.theme().colors().border.opacity(0.8)
+        crate::zepi_theme::palette(cx)
+            .and_then(|p| p.border)
+            .map(|c| c.opacity(0.6))
+            .unwrap_or_else(|| cx.theme().colors().border.opacity(0.8))
     }
 
     fn tool_name_font_size(&self) -> Rems {
@@ -13656,7 +13662,7 @@ impl ThreadView {
         };
 
         let markdown_style =
-            MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx);
+            crate::zepi_theme::style_markdown_muted(MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx), cx);
         let description = self
             .render_markdown(markdown, markdown_style, cx)
             .into_any_element();

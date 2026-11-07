@@ -12,11 +12,11 @@ import { convertPromptContent } from "./prompt-content.js";
 import { replayEntry } from "./replay.js";
 import { stopReasonFor } from "./stop-reason.js";
 import { translateEvent, toolDurationMeta } from "./translate.js";
+import { createFileIndex, createFileLinker, linkifyText } from "../../../runtime/src/pi/file-links.mjs";
 import { agentMessages, promptUsage, terminalAssistant, usageUpdate, } from "./usage.js";
 
 // Context usage walks the session history, so it is published at most twice a second.
 const USAGE_REFRESH_MS = 500;
-import { installPermissionWrapper } from "./permissions.js";
 import { ChildCleanupFailure } from "./child-process-registry.js";
 import { LOADED_TURN_ENDED_METHOD, } from "./loaded-turn.js";
 export class PiSession {
@@ -57,6 +57,8 @@ export class PiSession {
     constructor(options) {
         this.sessionId = options.sessionId;
         this.cwd = options.cwd;
+        this.getFileIndex = createFileIndex(options.cwd);
+        this.fileLinks = createFileLinker(options.cwd, this.getFileIndex);
         this.pi = options.session;
         this.manager = options.manager;
         this.client = options.client;
@@ -68,12 +70,6 @@ export class PiSession {
         this.childRegistry = options.childRegistry;
         this.lifecycleController = options.lifecycleController;
         this.onWedged = options.onWedged;
-        installPermissionWrapper(this.pi, {
-            sessionId: this.sessionId,
-            client: this.client,
-            drain: () => this.drain(),
-            turnSignal: () => this.activeTurn?.controller.signal,
-        });
         const innerAfterToolCall = this.pi.agent.afterToolCall;
         this.pi.agent.afterToolCall = async (context, signal) => {
             const innerResult = innerAfterToolCall ? await innerAfterToolCall(context, signal) : undefined;
@@ -104,8 +100,12 @@ export class PiSession {
             if (event.type === "tool_execution_end")
                 this.failedMcpResults.delete(event.toolCallId);
             for (const update of translateEvent(event, failedResult))
-                this.enqueue(update);
+                this.enqueue(this.linkFileRefs(update));
         });
+    }
+    linkFileRefs(update) {
+        if (update.sessionUpdate !== "agent_message_chunk" || update.content?.type !== "text") return update;
+        return { ...update, content: { ...update.content, text: this.fileLinks.push(update.content.text) } };
     }
     get busy() {
         return this.activeTurn !== undefined || this.configReserved || this.closing;
@@ -224,6 +224,8 @@ export class PiSession {
         return entries.flatMap(entry => {
             const prompt = entry.type === 'message' && entry.message.role === 'user' ? snapshots.get(entry.id) : undefined;
             return prompt ? prompt.map(content => ({sessionUpdate:'user_message_chunk',messageId:entry.id,content:structuredClone(content)})) : replayEntry(entry).map(update => {
+                if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text')
+                    return { ...update, content: { ...update.content, text: linkifyText(update.content.text, this.cwd, this.getFileIndex) } };
                 if (update.sessionUpdate !== 'tool_call_update' || !durations.has(update.toolCallId)) return update;
                 return {...update, _meta:{...update._meta,...toolDurationMeta(durations.get(update.toolCallId))}};
             });
@@ -266,6 +268,8 @@ export class PiSession {
     finish(turn, outcome) {
         if (turn.completed)
             return;
+        const held = this.fileLinks.flush();
+        if (held) this.enqueue({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: held } });
         const state = {version: 1, id: turn.zepiId, status: terminalTurnStatus(outcome)};
         try {
             appendZepiEntry(this.manager, TURN_RECORD, state);

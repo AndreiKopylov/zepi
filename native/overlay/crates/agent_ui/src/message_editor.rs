@@ -2290,7 +2290,7 @@ impl Render for MessageEditor {
                     },
                     font_weight: settings.buffer_font.weight,
                     line_height: relative(if std::env::var_os("ZEPI_ROOT").is_some() {
-                        1.55
+                        crate::zepi_theme::thread_line_height()
                     } else {
                         settings.buffer_line_height.value()
                     }),

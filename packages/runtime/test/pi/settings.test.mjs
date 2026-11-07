@@ -246,7 +246,11 @@ test("Jev configuration uses global settings and pi credentials without exposing
   assert.equal(result.defaultModel, 'test-model');
   assert.equal((await f.get(f.target, 'settings.json')).customSetting.retain, true);
   const env = await browserDecisionEnvironment(f.target);
-  assert.deepEqual(env, {JEV_API_URL:'http://127.0.0.1:19001/v1/systemone', JEV_MODEL:'jev-fixture', TYPESAFE_API_KEY:'fixture-jev-secret', ZEPI_BROWSER_ENGINE:'ultrafast', ZEPI_BROWSER_INSECURE:'', TEXT_MODEL_SOURCE:'pi',TEXT_MODEL_BASE_URL:'', TEXT_MODEL:'test-model', TEXT_MODEL_REASONING:'low', TEXT_MODEL_API_KEY:''});
+  const {ZEPI_BROWSER_EXECUTABLE, ZEPI_BROWSER_SOURCE, ZEPI_BROWSER_KEEP_OPEN, ...rest} = env;
+  assert.deepEqual(rest, {JEV_API_URL:'http://127.0.0.1:19001/v1/systemone', JEV_MODEL:'jev-fixture', TYPESAFE_API_KEY:'fixture-jev-secret', ZEPI_BROWSER_ENGINE:'ultrafast', ZEPI_BROWSER_INSECURE:'', TEXT_MODEL_SOURCE:'pi',TEXT_MODEL_BASE_URL:'', TEXT_MODEL:'test-model', TEXT_MODEL_REASONING:'low', TEXT_MODEL_API_KEY:''});
+  assert.ok(['setting', 'zepi', 'playwright', 'system', 'none', 'missing'].includes(ZEPI_BROWSER_SOURCE));
+  assert.equal(ZEPI_BROWSER_KEEP_OPEN, '');
+  assert.equal(typeof ZEPI_BROWSER_EXECUTABLE, 'string');
   await assertPrivateMode(join(f.target, 'auth.json'));
   await f.bridge.execute({operation:'browser-decision', apiUrl:'https://example.invalid/v1/systemone', model:'jev-new', key:''});
   assert.equal((await browserDecisionEnvironment(f.target)).TYPESAFE_API_KEY, 'fixture-jev-secret');
