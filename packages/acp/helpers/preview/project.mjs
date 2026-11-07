@@ -1,7 +1,7 @@
 // Supervises checks and a development server in a captured project directory.
 // These are ordinary local processes, not an OS security sandbox.
 import { spawn, execFile, spawnSync } from "node:child_process";
-import { readFile, writeFile, rename } from "node:fs/promises";
+import { readFile, writeFile, rename, realpath } from "node:fs/promises";
 import { createServer } from "node:net";
 import { delimiter, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -12,6 +12,9 @@ const commandScript = fileURLToPath(new URL("./command.mjs", import.meta.url));
 const exec = promisify(execFile);
 const [directory, owner] = process.argv.slice(2);
 const manifest = JSON.parse(await readFile(join(directory, "manifest.json"), "utf8"));
+// Windows keeps the symlink path as the child working directory, so node would resolve bare
+// specifiers through the project ancestors; POSIX resolves it to the private copy. Use the real path.
+const execCwd = await realpath(join(directory, "files")).catch(() => join(directory, "files"));
 const groups = new Set();
 let serverPort;
 let closing = false;
@@ -64,7 +67,7 @@ function launch(spec, port) {
   if (closing) throw new Error("Project run was cancelled.");
   const substitute = value => port === undefined ? value : value.replaceAll("{port}", String(port));
   const child = spawn(process.execPath, [commandScript], {
-    cwd: join(directory, "files"), env: { ...env, ...(port === undefined ? {} : { PORT: String(port), HOST: "127.0.0.1" }) },
+    cwd: execCwd, env: { ...env, ...(port === undefined ? {} : { PORT: String(port), HOST: "127.0.0.1" }) },
     stdio: ["ignore", "pipe", "pipe", "ipc"], detached: process.platform !== "win32",
   });
   if (child.pid) groups.add(child.pid);

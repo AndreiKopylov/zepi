@@ -1,7 +1,7 @@
 // P0 bundle smoke: seeding check -> ACP newSession -> browser -> preview run.
 // Usage: node scripts/smoke.mjs [--root <zepi root>] [--skip-browser] [--full]
 // Default root is the repository; pass the bundle dir (e.g. C:/Llm/zepi) to check a deploy.
-// Default suites are the green P0 legs; --full adds preview/shell (known-red, see below).
+// Default suites are the fast P0 legs; --full adds the preview/shell leg (real Chromium and builds).
 import {spawnSync} from 'node:child_process';
 import {readdir, stat} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
@@ -28,21 +28,6 @@ if ((await stat(join(root, 'auth.json')).catch(() => null))) {
 const step = (name) => console.log(`\n### smoke: ${name}`);
 const ok = (name) => console.log(mask(`ok - ${name}`));
 const fail = (name, why) => { failed++; console.log(mask(`FAIL - ${name}: ${why}`)); };
-// Red preview/shell tests: dangling-link lifecycle drift and shell review changes, pending a product decision.
-// Smoke fails only on failures NOT on this list.
-const KNOWN_RED = new Set([
-  'pi builds unsaved TypeScript with installed dependencies, repairs browser behavior and rechecks a fresh project',
-  'project command failure, timeout and snapshot mutation never claim a current successful verification',
-  'cancelling project startup cleans a stubborn descendant and a terminal returned late',
-  'project server cleans up after complete without an explicit stop tool call',
-  'project server cleans up after model error without an explicit stop tool call',
-  'project server cleans up after force-killed terminal without an explicit stop tool call',
-  'project commands cannot silently resolve uncaptured workspace packages through ancestor directories',
-  'shell conflict, deletion and binary outputs remain recoverable without overwriting manual edits',
-  'failed shell commands retain results and terminate background descendants',
-  'shell captures binary originals and proposes exact replacement and deletion without changing disk',
-]);
-
 // Seeding inputs: pi defaults ship neutral examples and validate against the bundled pi.
 step('seeding check');
 try {
@@ -84,8 +69,7 @@ const suites = [
   'packages/acp/test/pi-commands.test.ts',
   'packages/acp/test/subagents.test.ts',
   ...(skipBrowser ? [] : ['packages/acp/test/browser.test.ts']),
-  // preview/shell suites are known-red (dangling-link lifecycle drift in the test
-  // assertions, fails identically on the untouched baseline); include via --full.
+  // The preview/shell leg builds real projects and drives a browser; include it via --full.
   ...(full ? ['packages/acp/test/preview.test.ts'] : []),
 ];
 try {
@@ -96,13 +80,10 @@ try {
   const out = run.stdout + run.stderr;
   const pass = out.match(/# pass (\d+)/)?.[1] ?? '?';
   const failedNames = out.split('\n').filter((l) => l.startsWith('not ok')).map((l) => l.replace(/^not ok \d+ - /, '').trim());
-  const known = failedNames.filter((n) => KNOWN_RED.has(n));
-  const unexpected = failedNames.filter((n) => !KNOWN_RED.has(n));
-  if (known.length) console.log(mask(`known-red (${known.length}):\n` + known.map((n) => `  - ${n}`).join('\n')));
-  if (unexpected.length) throw new Error(mask(`new failures (${unexpected.length}):\n` + unexpected.map((n) => `  - ${n}`).join('\n')));
-  ok(`${pass} tests pass${known.length ? `, ${known.length} known-red` : ''}`);
+  if (failedNames.length) throw new Error(mask(`failures (${failedNames.length}):\n` + failedNames.map((n) => `  - ${n}`).join('\n')));
+  ok(`${pass} tests pass`);
 } catch (error) { fail('suites', String(error?.message ?? error)); }
 
-if (!full) console.log('note: preview/shell suites excluded (known-red); run smoke --full to include them.');
+if (!full) console.log('note: preview/shell leg excluded; run smoke --full to include it.');
 console.log(failed ? `\nSMOKE FAILED (${failed} steps)` : '\nSMOKE OK');
 process.exit(failed ? 1 : 0);

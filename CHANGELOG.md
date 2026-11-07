@@ -24,6 +24,13 @@ All notable changes to Zepi are documented here. The format follows
 - browser_open and browser_agent_command accept the page address as url or uri
   (a missing address now reports a clear error instead of an MCP validation failure).
 - Creating and reading unsaved new files through the agent works again: native file tools tolerate paths that exist only in editor buffers, not yet on disk.
+- Shell commands on Windows no longer leave background jobs behind: the command's shell reaps its
+  own jobs on exit, so a finished command cannot stall its supervisor or leak a process.
+- Project commands on Windows run in the private copy as intended: the supervisor resolves the
+  captured-inputs link, so the project's own `node_modules` can no longer satisfy a dependency
+  that was never captured.
+- The MCP status snapshot survives a concurrent reader on Windows: the atomic rename retries
+  instead of dropping the publish, so Extensions > MCP no longer shows a stale connection state.
 
 ## [0.0.1-beta2] - 2026-11-05
 

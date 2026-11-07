@@ -23,7 +23,14 @@ export function createMcpStatus(directory) {
       const temporary = `${path}.${crypto.randomUUID()}.tmp`;
       try {
         await writeFile(temporary, JSON.stringify({version:1, runtimeId:original.id, sessions:rows}), {mode:0o600});
-        await rename(temporary, path);
+        // Windows refuses to rename over a snapshot a reader still holds open, so retry briefly.
+        for (let attempt = 1; ; attempt++) {
+          try {await rename(temporary, path); break;}
+          catch (error) {
+            if (attempt === 5 || !['EPERM','EACCES','EBUSY'].includes(error?.code)) throw error;
+            await new Promise(resolve => setTimeout(resolve, 5 * attempt));
+          }
+        }
       } finally {await rm(temporary, {force:true});}
     }).catch(() => {if (!warned) {warned = true; console.error('MCP status could not be saved. Connections are unaffected.');}});
     return queue;

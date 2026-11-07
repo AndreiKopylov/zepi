@@ -253,6 +253,8 @@ test('MCP per-server deadlines include initialization and tool progress extends 
     assert.equal((await h.prompt(task.sessionId)).stopReason,'end_turn');
     assert.equal((await h.prompt(task.sessionId)).stopReason,'end_turn');
     assert.deepEqual(timed.calls,['progress','slow']); assert.equal(h.model.requests(),5);
+    // disableOnTimeout tears the transport down asynchronously, so let the peer observe EOF.
+    for(let i=0;i<100&&timed.streams.size;i++)await new Promise(resolve=>setTimeout(resolve,10));
     assert.equal(timed.streams.size,0);
   } finally {await h.close(); await timed.close(); await hung.close();}
 });
