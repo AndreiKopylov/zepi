@@ -4,6 +4,15 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.1-beta3] - 2026-11-07
+
+### Fixed
+
+- Browser cleanup on session dispose no longer raises an unhandled rejection:
+  rowser.close errors during forced dispose are caught and logged
+  (Zepi browser cleanup failed) instead of surfacing as an unhandled promise
+  rejection.
+
 ## [0.0.1-beta2] - 2026-11-05
 
 ### Added
