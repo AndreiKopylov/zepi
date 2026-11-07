@@ -57,17 +57,12 @@ english.CompOffice=Python for Office documents: Word, Excel, PowerPoint
 russian.CompOffice=Python для документов Office: Word, Excel, PowerPoint
 english.CompOfficeDesc=Bundled Python 3.13 with python-docx, openpyxl and python-pptx — 56 MB
 russian.CompOfficeDesc=Встроенный Python 3.13 с python-docx, openpyxl и python-pptx — 56 МБ
-english.CompBrowser=Built-in browser for the agent
-russian.CompBrowser=Встроенный браузер для агента
-english.CompBrowserDesc=Bundled Chromium for pages that need a real browser — 702 MB
-russian.CompBrowserDesc=Встроенный Chromium для страниц, которым нужен настоящий браузер — 702 МБ
 english.RemoveUserData=Also delete your Zepi settings, sessions and bundled skills from %LOCALAPPDATA%\Zepi?%n%nChoose No to keep them for a future reinstall.
 russian.RemoveUserData=Удалить также настройки, сессии и скиллы из %LOCALAPPDATA%\Zepi?%n%nВыберите «Нет», чтобы сохранить их для будущей установки.
 
 [Components]
 Name: "core"; Description: "{cm:CompCore}"; Flags: fixed
 Name: "office"; Description: "{cm:CompOffice}"; Flags: checkablealone
-Name: "browser"; Description: "{cm:CompBrowser}" ; Flags: checkablealone
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -79,7 +74,6 @@ Source: "{#StagingDir}\node_modules\*"; DestDir: "{app}\node_modules"; Flags: ig
 Source: "{#StagingDir}\native\*"; DestDir: "{app}\native"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\deps\node\*"; DestDir: "{app}\deps\node"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\deps\python\*"; DestDir: "{app}\deps\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: office
-Source: "{#StagingDir}\deps\browsers\*"; DestDir: "{app}\deps\browsers"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: browser
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"

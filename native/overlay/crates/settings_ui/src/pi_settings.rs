@@ -32,10 +32,6 @@ pub(crate) struct PiSettingsView {
     custom_url: Entity<Editor>,
     custom_model: Entity<Editor>,
     custom_api: String,
-    browser_text_url: Entity<Editor>,
-    browser_text_model: Entity<Editor>,
-    browser_text_key: Entity<Editor>,
-    browser_text_reasoning: String,
     busy: bool,
     notice: String,
     failed: bool,
@@ -62,10 +58,6 @@ impl PiSettingsView {
             custom_provider: input("Provider ID, e.g. my-provider", false, window, cx),
             custom_url: input("Base URL, e.g. https://api.example.com/v1", false, window, cx),
             custom_model: input("Model ID", false, window, cx),
-            browser_text_reasoning: "low".into(),
-            browser_text_url: input("OpenAI-compatible base URL, e.g. https://api.deepseek.com/v1", false, window, cx),
-            browser_text_model: input("Text model ID", false, window, cx),
-            browser_text_key: input("API key or $ENV_VAR reference; leave blank to keep", true, window, cx),
             custom_api: "openai-completions".into(), busy: false, notice: String::new(), failed: false,
         };
         view.request(json!({"operation":"status"}), window, cx);
@@ -134,12 +126,7 @@ impl PiSettingsView {
                             view.model = data["defaultModel"].as_str().unwrap_or_default().into();
                             view.thinking = data["defaultThinkingLevel"].as_str().unwrap_or("off").into();
                         }
-                        if view.data.is_none() || matches!(operation.as_str(), "status" | "browser-text") {
-                            view.browser_text_url.update(cx, |editor, cx| editor.set_text(data["browserText"]["overrideApiUrl"].as_str().or_else(|| data["browserText"]["apiUrl"].as_str()).unwrap_or_default(), window, cx));
-                            view.browser_text_model.update(cx, |editor, cx| editor.set_text(data["browserText"]["overrideModel"].as_str().or_else(|| data["browserText"]["model"].as_str()).unwrap_or_default(), window, cx));
-                            view.browser_text_reasoning = data["browserText"]["reasoning"].as_str().unwrap_or("low").into();
-                        }
-                        view.data = Some(data);
+                                                view.data = Some(data);
                         if matches!(operation.as_str(), "status" | "import") { view.model_settings.clear(); }
                         if operation == "model-settings" { view.model_settings.remove(&saved_model); }
                         if view.provider.is_empty() {
@@ -379,7 +366,6 @@ impl PiSettingsView {
                             "pi-model" => { view.model = value.clone(); if !view.levels().contains(&view.thinking) { view.thinking = "off".into(); } }
                             "pi-thinking" => view.thinking = value.clone(),
                             "pi-custom-api" => view.custom_api = value.clone(),
-                            "pi-browser-text-reasoning" => view.browser_text_reasoning = value.clone(),
                             _ => {}
                         }
                         view.ensure_model_settings(window, cx);
@@ -491,33 +477,7 @@ impl Render for PiSettingsView {
                     .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"custom-model",
                         "provider":this.custom_provider.read(cx).text(cx), "baseUrl":this.custom_url.read(cx).text(cx),
                         "api":this.custom_api, "model":this.custom_model.read(cx).text(cx)}), window, cx)))))
-                        .child(v_flex().gap_3().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
-                .child(Label::new("Browser Input Text"))
-                .child(Label::new("Uses your main language model and its existing authentication by default, only when entering text. A separate OpenAI-compatible text model is optional.").size(LabelSize::Small).color(Color::Muted))
-                .when_some(self.data.as_ref().and_then(|d| d["browserText"]["message"].as_str()).map(str::to_owned), |this, message| this.child(Label::new(message).size(LabelSize::Small).color(Color::Muted)))
-                .child(field("Base URL", text_field(self.browser_text_url.clone(), cx)))
-                .child(field("Model", text_field(self.browser_text_model.clone(), cx)))
-                .child(field("API Key", text_field(self.browser_text_key.clone(), cx)))
-                .child(field("Reasoning", self.selector("pi-browser-text-reasoning", self.browser_text_reasoning.clone(),
-                    vec![("low".into(), "Low".into()), ("none".into(), "None".into())], window, cx)))
-                .child(Label::new(match self.data.as_ref().and_then(|d| d["browserText"]["credential"].as_str()) {
-                    Some("configured") => "Authentication configured",
-                    Some("environment") => "Using TEXT_MODEL_API_KEY from the environment",
-                    _ => "Configure the main model or an optional text model override",
-                }).size(LabelSize::Small).color(Color::Muted))
-                .child(h_flex().gap_2()
-                    .child(Button::new("pi-use-main-browser-text", "Use Main Model").style(ButtonStyle::Outlined).disabled(self.busy)
-                        .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"browser-text", "source":"pi"}), window, cx))))
-                    .child(Button::new("pi-save-browser-text", "Save Text Override").style(ButtonStyle::Outlined).disabled(self.busy)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let key = this.browser_text_key.read(cx).text(cx);
-                            this.browser_text_key.update(cx, |editor, cx| editor.set_text("", window, cx));
-                            this.request(json!({"operation":"browser-text", "source":"custom", "apiUrl":this.browser_text_url.read(cx).text(cx),
-                                "model":this.browser_text_model.read(cx).text(cx), "reasoning":this.browser_text_reasoning, "key":key}), window, cx);
-                        })))
-                    .child(Button::new("pi-remove-browser-text-key", "Remove Override API Key").disabled(self.busy)
-                        .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"browser-text", "removeKey":true}), window, cx))))))
-            .child(v_flex().gap_2().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
+                        .child(v_flex().gap_2().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
                 .child(Label::new("pi Updates"))
                 .child(Label::new(update_label).size(LabelSize::Small).color(Color::Muted))
                 .when_some(checked_at, |this, text| this.child(Label::new(text).size(LabelSize::XSmall).color(Color::Muted)))

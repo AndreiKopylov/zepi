@@ -8745,7 +8745,7 @@ fn ai_page(_: &App) -> SettingsPage {
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: "pi Models & Credentials".into(),
                 r#type: Default::default(),
-                json_path: Some("llm_providers"),
+                json_path: Some("ai.providers"),
                 description: Some("Manage pi models, credentials, and updates.".into()),
                 search_aliases: &[
                     "ai", "pi", "model", "provider", "api key", "oauth", "update",
@@ -8753,6 +8753,18 @@ fn ai_page(_: &App) -> SettingsPage {
                 in_json: false,
                 files: USER,
                 render: crate::pi_settings::render_pi_settings_page,
+            }),
+            SettingsPageItem::SectionHeader("Browser use"),
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: "Browser use settings".into(),
+                r#type: Default::default(),
+                // Deep links from the agent filter by json_path prefix; share the pi providers root.
+                json_path: Some("ai.browser"),
+                description: Some("Browser executable, lifetime, installation and input text model.".into()),
+                search_aliases: &["ai", "pi", "browser", "chrome", "edge", "playwright", "keep open"],
+                in_json: false,
+                files: USER,
+                render: crate::pi_browser_settings::render_pi_browser_page,
             }),
         ]
         .into_boxed_slice(),

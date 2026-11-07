@@ -11,6 +11,7 @@
     "pi": "node packages/acp/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
     "dev": "npm run native:run",
     "doctor": "tsx scripts/tools.ts doctor",
+    "build:acp": "node scripts/build-acp.mjs",
     "check": "tsc --noEmit",
     "test": "npm run test:acp && npm run test:runtime && python3 scripts/test/test_native_prepare.py",
     "test:runtime": "npm --prefix packages/runtime test",

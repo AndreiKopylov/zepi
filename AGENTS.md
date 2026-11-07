@@ -59,7 +59,7 @@ scripts\win-run.py                 :: run with seeded configs
 - Code, identifiers and code comments are English. Existing Russian comments were translated or
   removed; keep it that way.
 - User-facing docs: README.md is Russian for now, an English version is planned; AGENTS.md is English.
-- Commit messages are Russian.
+- Commit messages are English, matching the repository history.
 - No secrets or internal endpoints in the repo: `native/pi-defaults` ships a neutral example
   (key via `$PROVIDER_API_KEY`); corp deployments keep their own seeds inside the bundle,
   never sync them back from the repo.

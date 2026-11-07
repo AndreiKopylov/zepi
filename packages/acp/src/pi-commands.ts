@@ -1,18 +1,17 @@
 import {appendZepiEntry} from './session-persistence.ts';
 import {PI_SHORTCUTS, type createPiShortcuts} from './pi-shortcuts.ts';
 import { methods, type AgentContext, type AvailableCommand, type SessionConfigOption, type SessionUpdate } from "@agentclientprotocol/sdk";
-import { resolveModelScopeWithDiagnostics, type AgentSession, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { ProjectTrustStore, resolveModelScopeWithDiagnostics, type AgentSession, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { createPiUI } from "./pi-ui.ts";
 import { exportPiSession, piChangelog } from "./pi-command-files.ts";
 import { manageAgentRoles } from "./agent-roles.ts";
 import { nativeUiAction } from "./native-ui.ts";
-import { createPiSettings } from "../../runtime/src/pi/settings.mjs";
 import {refreshOpenRouterCatalog} from '../../runtime/src/pi/model-catalog.mjs';
 import { shareCommand, bugCommand } from "./pi-sharing.ts";
 import { sessionCommand, treeCommand } from "./pi-session-commands.ts";
 import { loginPiProvider } from "./pi-auth.ts";
-import {basename} from 'node:path';
+import {basename, dirname} from 'node:path';
 
 // The audited adapter hook runs inside its existing turn boundary. Commands
 // share admission, cancellation and notification ordering with ordinary prompts.
@@ -29,11 +28,11 @@ export const piCommands: AvailableCommand[] = [
   { name: "export", description: "Export this pi session to HTML or JSONL", input: {hint: "[path.html | path.jsonl]"} },
   { name: "changelog", description: "Show release notes from the bundled pi version" },
   { name: "agents", description: "List, create or edit global agent roles", input: {hint: "[list | new | agent-name]"} },
+  { name: "trust", description: "Let this project's pi settings, extensions and packages load", input: {hint: "[trust | parent | no]"} },
   { name: "share", description: "Share a reviewed conversation export" },
   { name: "bug", description: "Prepare a report for pi developers", input:{hint:"[description]"} },
   { name: "logout", description: "Remove a provider's global pi credentials", input: {hint: "[provider]"} },
   { name: "login", description: "Sign in using pi provider authentication", input: {hint: "[provider] [api_key | oauth]"} },
-  { name: "trust", description: "Choose global Agent Access for all tasks", input: {hint: "[ask | full]"} },
 ];
 const nativeCommands: AvailableCommand[] = [
   {name:"quit", description:"Quit Zepi through its normal save and shutdown flow"},
@@ -202,18 +201,35 @@ export function installPiCommands(pi: AgentSession, client: AgentContext, suppor
             break;
           }
           case "trust": {
-            const selected = argument || await ui?.select("Agent Access · Global", ["Ask Before Actions", "Full Access"],
-              {defaultValue: (await createPiSettings(agentDir).status()).fullAccess ? "Full Access" : "Ask Before Actions"});
-            if (!selected) {output = "Agent Access unchanged. Use /trust ask or /trust full."; break;}
-            if (!["ask", "full", "Ask Before Actions", "Full Access"].includes(selected)) throw new Error("Usage: /trust ask or /trust full. Zepi supports global access only.");
-            const fullAccess = selected === "full" || selected === "Full Access";
-            if (fullAccess && !await ui?.confirm("Enable Full Access for all tasks?", "pi will decide tool permissions without asking. This changes the global Agent Access control beside the composer.")) {
-              output = "Agent Access unchanged."; break;
+            const cwd = pi.sessionManager.getCwd();
+            const store = new ProjectTrustStore(agentDir);
+            const parent = dirname(cwd);
+            const options: {key: string; label: string; trusted: boolean; updates: {path: string; decision: boolean | null}[]}[] = [
+              { key: "trust", label: "Trust", trusted: true, updates: [{path: cwd, decision: true}] },
+              ...(parent === cwd ? [] : [{ key: "parent", label: `Trust parent folder (${parent})`, trusted: true, updates: [{path: parent, decision: true}, {path: cwd, decision: null}] }]),
+              { key: "no", label: "Do not trust", trusted: false, updates: [{path: cwd, decision: false}] },
+            ];
+            const saved = store.get(cwd);
+            const pick = argument || (ui ? await ui.select("Project trust", options.map(option => option.label)) : undefined);
+            if (!pick) {
+              output = [
+                `Project trust for ${cwd}`,
+                `Saved decision: ${saved === null ? "none" : saved ? "trusted" : "not trusted"}`,
+                `Current session: ${pi.settingsManager.isProjectTrusted() ? "trusted" : "not trusted"}`,
+                "",
+                `A trusted project loads its own .pi settings, extensions and packages. Use /trust <${options.map(option => option.key).join(" | ")}>.`,
+              ].join("\n");
+              break;
             }
+            const choice = options.find(option => option.key === pick.toLowerCase() || option.label.toLowerCase() === pick.toLowerCase())
+              ?? options.find(option => option.label.toLowerCase().startsWith(pick.toLowerCase()));
+            if (!choice) throw new Error(`Usage: /trust <${options.map(option => option.key).join(" | ")}>.`);
             signal?.throwIfAborted();
-            await createPiSettings(agentDir).execute({operation: "access", fullAccess});
-            if (nativeUi) await nativeUiAction(client, pi.sessionId, "access_changed", {}, signal);
-            output = `Global Agent Access: ${fullAccess ? "Full Access" : "Ask Before Actions"}.`;
+            store.setMany(choice.updates);
+            pi.settingsManager.setProjectTrusted(choice.trusted);
+            await pi.reload();
+            context.enqueue({sessionUpdate: "available_commands_update", availableCommands: catalogue()});
+            output = `Project trust for ${cwd}: ${choice.trusted ? "trusted" : "not trusted"}. ${choice.trusted ? "Project settings, extensions and packages are loaded." : "Project-local pi resources are ignored."}`;
             break;
           }
           case "logout": {

@@ -888,6 +888,7 @@ export async function bridgeMcpServers(servers, openSignal, deps, binding) {
     let extensionApi;
     let piSession;
     let refreshQueue = Promise.resolve();
+    let pendingConnects = Promise.resolve();
     let refreshScheduled = false;
     let closing = false;
     let poisoned = false;
@@ -1267,8 +1268,10 @@ export async function bridgeMcpServers(servers, openSignal, deps, binding) {
     };
     const connectServers = async (servers, openSignal) => {
         const acquiredStart = acquiredHandles.length;
-    try {
-        for (const server of servers) {
+        const connected = [];
+        const connectOne = async (server) => {
+            if (closing)
+                return;
             reportStatus(server, "connecting");
             const token = allocateServerToken(server.name);
             const timeoutMs = server[Symbol.for("zepi.pi.mcp.options")]?.timeoutMs ?? deps.mcpTimeoutMs;
@@ -1309,6 +1312,7 @@ export async function bridgeMcpServers(servers, openSignal, deps, binding) {
                     initializing: true,
                 };
                 states.push(state);
+                connected.push(state);
                 handle.setToolsChangedHandler?.(() => refresh(state));
                 handle.setDisabledHandler?.(() => {
                     if (state.peerDead || state.disabled || closing)
@@ -1365,7 +1369,7 @@ export async function bridgeMcpServers(servers, openSignal, deps, binding) {
                 if (openSignal.aborted)
                     throw openSignal.reason;
                 await skipServer(server, state, handle);
-                continue;
+                return;
             }
             const caps = handle.getCapabilities?.();
             try {
@@ -1400,14 +1404,14 @@ export async function bridgeMcpServers(servers, openSignal, deps, binding) {
                 if (openSignal.aborted)
                     throw openSignal.reason;
                 await skipServer(server, state, handle);
-                continue;
+                return;
             }
-        }
-        // Keep the initialization window bridge-wide. Once every configured server has completed its
-        // first catalog, snapshot the dirty set and close that window for all servers. Notifications
-        // accepted while these coalesced passes run become ordinary post-open dirty work and therefore do
-        // not create an unbounded open-time quiescence loop.
-        const initialStates = states.filter(state => state.initializing);
+        };
+    try {
+        await Promise.all(servers.map(server => connectOne(server)));
+        // The initialization window covers only the servers this call connected, so a
+        // concurrent background connect keeps its own catalog and alias reservations.
+        const initialStates = connected.filter(state => state.initializing);
         const initialDirty = initialStates.filter((state) => state.dirty);
         for (const state of initialStates)
             state.initializing = false;
@@ -1461,8 +1465,32 @@ export async function bridgeMcpServers(servers, openSignal, deps, binding) {
         throw error;
     }
     };
-    try {await connectServers(servers, openSignal);}
+    // Servers that can contribute direct tools are cataloged before the session opens because
+    // the first prompt declares them; codemode-only servers connect in the background and the
+    // first prompt still picks them up at the turn boundary.
+    const blocksOpen = server => {
+        const config = server[Symbol.for("zepi.pi.mcp.options")]?.config;
+        if (!config) return true;
+        return config.exposure === "direct" || Object.values(config.toolExposure ?? {}).includes("direct");
+    };
+    const deferred = servers.filter(server => !blocksOpen(server));
+    try {await connectServers(servers.filter(blocksOpen), openSignal);}
     catch (error) {await statusSink?.close(); throw error;}
+    if (deferred.length) {
+        pendingConnects = (async () => {
+            const previousTools = new Set(tools.map(tool => tool.name));
+            try {
+                await connectServers(deferred, binding?.sessionSignal ?? openSignal);
+                if (closing) return;
+                for (const tool of tools) if (!previousTools.has(tool.name)) extensionApi?.registerTool(tool);
+            }
+            catch (error) {
+                if (!closing) binding?.emitDiagnostic('[mcp] background connect failed: ' + (error?.message ?? error) + '\n');
+            }
+        })();
+        refreshQueue = refreshQueue.then(() => pendingConnects);
+        refreshQueue.catch(() => undefined);
+    }
 // Zepi MCP registry v1
     const fixedNames = new Set(servers.filter(server => !server[Symbol.for("zepi.pi.mcp.options")]).map(server => server.name));
     const fingerprint = server => {
@@ -1591,6 +1619,7 @@ export async function bridgeMcpServers(servers, openSignal, deps, binding) {
         },
         assertReady,
         async acquireTurnBoundary() {
+            await pendingConnects.catch(() => undefined);
             while (pendingRegistration && !closing && !refreshPaused) {
                 const pending = refreshQueue;
                 await pending;

@@ -2,24 +2,24 @@
 
 [English](README.md) | [Русский](README.ru.md)
 
-**A Windows workspace for code and office documents — with an agent built in.**
+**A Windows workspace for code and office documents with an agent built in.**
 
 Zepi wires the [Zed](https://github.com/zed-industries/zed) editor to the
 [pi](https://github.com/badlogic/pi-mono) agent over ACP. One window holds code, terminal, git and a
-chat with your model — plus viewing and editing `.pptx`, `.docx` and `.xlsx` without Microsoft Office.
+chat with your model plus viewing and editing `.pptx`, `.docx` and `.xlsx` without Microsoft Office.
 
 > Status: **beta (0.0.1)**. Built on Zed v1.26.2 and pi 1.5.0.
 
 ## What it does
 
-| Area | Capabilities |
-| :--- | :--- |
-| **Code** | Full Zed editor: LSP, git, terminal, panels, themes, multi-cursor, command palette |
-| **Agent** | Chat with your provider's models, tools (files, search, PowerShell, codemode), subagents, sessions (`/fork`, `/export`, `/compact`), MCP, skills |
-| **Presentations** | `.pptx`: slide strip with zoom and search, text editing, send a slide or a region to the agent |
-| **Documents** | `.docx`: paginated view, search, editing, send a fragment to the agent |
-| **Spreadsheets** | `.xlsx`: sheets, formulas, cell editing saved straight to disk |
-| **Rendering** | `zepi office render` turns pptx/docx into PNGs with the same engine the viewer draws with — no LibreOffice, no Office |
+| Area              | Capabilities                                                                                                                                     |
+|:----------------- |:------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Code**          | Full Zed editor: LSP, git, terminal, panels, themes, multi-cursor, command palette                                                               |
+| **Agent**         | Chat with your provider's models, tools (files, search, PowerShell, codemode), subagents, sessions (`/fork`, `/export`, `/compact`), MCP, skills |
+| **Presentations** | `.pptx`: slide strip with zoom and search, text editing, send a slide or a region to the agent                                                   |
+| **Documents**     | `.docx`: paginated view, search, editing, send a fragment to the agent                                                                           |
+| **Spreadsheets**  | `.xlsx`: sheets, formulas, cell editing saved straight to disk                                                                                   |
+| **Rendering**     | `zepi office render` turns pptx/docx into PNGs with the same engine the viewer draws with — no LibreOffice, no Office                            |
 
 The agent handles documents on its own: bundled skills `zepi-office-docs`, `zepi-docx`, `zepi-xlsx`,
 `zepi-deck-build`, `zepi-deck-design`, `zepi-office-qa` plus a bundled Python 3.13 with python-docx,

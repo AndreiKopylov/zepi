@@ -5,7 +5,7 @@ use std::{env, path::{Path, PathBuf}};
 /// Called from main before the application starts threads or resolves resources.
 /// A bundle carries code/resources only; all mutable state lives in user storage.
 /// Product version shown in the About window and by the installer.
-pub const PRODUCT_VERSION: &str = "0.0.1-beta1";
+pub const PRODUCT_VERSION: &str = "0.0.1-beta2";
 
 // Assign this process to a job with KILL_ON_JOB_CLOSE so the OS terminates
 // leftover children (language servers, agents, terminals) on any exit path.
@@ -154,7 +154,10 @@ pub fn configure() -> Result<Option<PathBuf>> {
         env::set_var("PI_CODING_AGENT_DIR", &pi);
         env::set_var("ZEPI_NATIVE_SOURCE_ROOT", resources.join("editor"));
         env::set_var("ZEPI_INSTALLED_RUNTIME", "1");
-        env::set_var("PLAYWRIGHT_BROWSERS_PATH", resources.join("browsers"));
+        let browsers = resources.join("browsers");
+        if browsers.is_dir() {
+            env::set_var("PLAYWRIGHT_BROWSERS_PATH", browsers);
+        }
         env::set_var("PATH", env::join_paths(search)?);
     }
     Ok(Some(data.join("native")))
@@ -174,6 +177,7 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
         }
     }
     sync_skills(&root, &pi)?;
+    sync_themes(&root, &pi)?;
     // PowerShell replaces bash, which needs Git for Windows, and the native file tools
     // keep search off the shell. An explicit entry from the operator wins.
     let pi_settings = pi.join("settings.json");
@@ -221,7 +225,7 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
     merge(&mut settings, &json!({"telemetry":{"metrics":false,"diagnostics":false},"auto_update":false,
         "disable_ai":false,"auto_install_extensions":{"html":false}}));
     // office viewer knobs, shared by the slides and the future word viewer
-    merge(&mut settings, &json!({"zepi":{"officeViewer":{"reloadDebounceMs":600,
+    merge(&mut settings, &json!({"zepi":{"threadLineHeight":1.5,"officeViewer":{"reloadDebounceMs":600,
         "rasterCacheCap":12,"maxRasterPixels":6000000,"slideGap":14,"zoomStep":10}}}));
     settings["node"] = json!({"path":node,"ignore_system_version":false});
     settings["agent_servers"]["zepi-pi"] = json!({"type":"custom","command":node,
@@ -310,6 +314,28 @@ fn sync_skills(root: &Path, pi: &Path) -> Result<()> {
     }
     copy_dir(&source, &target).context("copying bundled skills")?;
     std::fs::write(target.join(".stamp"), stamp)?;
+    Ok(())
+}
+
+/// Copies bundled pi themes into the user's themes dir; refreshes seeded files when
+/// they change and never touches user-created ones.
+fn sync_themes(root: &Path, pi: &Path) -> Result<()> {
+    let source = root.join("native/pi-defaults/themes");
+    if !source.is_dir() {
+        return Ok(());
+    }
+    let target = pi.join("themes");
+    std::fs::create_dir_all(&target)?;
+    for entry in std::fs::read_dir(&source)? {
+        let from = entry?.path();
+        if !from.extension().is_some_and(|ext| ext == "json") {
+            continue;
+        }
+        let to = target.join(from.file_name().expect("file has a name"));
+        if std::fs::read(&from).ok() != std::fs::read(&to).ok() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
     Ok(())
 }
 
