@@ -27,7 +27,7 @@ if (-not $iscc) { throw 'Inno Setup not found. Install it with: winget install -
 $fromRepo = @('packages', 'node_modules')
 # native/overlay holds 635 MB of fork sources; the installer only needs the runtime defaults
 $nativeFiles = @('pi-defaults')
-$fromPayload = @('node', 'python', 'browsers')
+$fromPayload = @('node', 'python')
 if (-not (Test-Path $Exe)) { throw ('no build output: ' + $Exe + ' (run win-build.cmd first)') }
 foreach ($item in $fromRepo) { if (-not (Test-Path (Join-Path $Repo $item))) { throw ('repo is missing ' + $item) } }
 if (-not (Test-Path (Join-Path $Repo 'native\pi-defaults'))) { throw 'repo is missing native/pi-defaults' }

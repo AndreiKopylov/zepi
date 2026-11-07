@@ -154,7 +154,10 @@ pub fn configure() -> Result<Option<PathBuf>> {
         env::set_var("PI_CODING_AGENT_DIR", &pi);
         env::set_var("ZEPI_NATIVE_SOURCE_ROOT", resources.join("editor"));
         env::set_var("ZEPI_INSTALLED_RUNTIME", "1");
-        env::set_var("PLAYWRIGHT_BROWSERS_PATH", resources.join("browsers"));
+        let browsers = resources.join("browsers");
+        if browsers.is_dir() {
+            env::set_var("PLAYWRIGHT_BROWSERS_PATH", browsers);
+        }
         env::set_var("PATH", env::join_paths(search)?);
     }
     Ok(Some(data.join("native")))

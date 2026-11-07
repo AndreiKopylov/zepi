@@ -28,6 +28,11 @@ All notable changes to Zepi are documented here. The format follows
 - Deterministic file links: a code span outside fenced blocks that resolves to an existing file
   (relative to the task folder, or absolute) renders as a markdown link even when the model
   leaves it as plain code; identifiers, missing paths, URLs and fenced code stay untouched.
+- `Browser use` settings page under the AI section: the detected Chromium-family browser,
+  a pinned executable chosen through the file picker, keeping the task browser open between
+  turns, and on-demand installation of the pinned Chromium into the Zepi browsers directory
+  with the bundled playwright. Browser input text model settings moved here from
+  `pi Models & Credentials`.
 
 ### Changed
 
@@ -39,6 +44,11 @@ All notable changes to Zepi are documented here. The format follows
 - The ACP entry is compiled to plain JS (`npm run build:acp`, esbuild): the runtime loads
   `packages/acp/src/cli.js` instead of paying the tsx loader cost on every start. Dev launch
   (`win-run.py`) and bundle deploy build it automatically.
+- Browser executable resolution order: pinned path, Zepi browsers directory, playwright cache,
+  then system Chrome or Edge; re-resolved on every browser launch, so settings changes apply
+  inside a running task.
+- Deep links from the agent panel open the AI settings with the `#ai` filter, showing both
+  the `pi` and `Browser use` sections.
 
 ### Fixed
 
@@ -67,6 +77,9 @@ All notable changes to Zepi are documented here. The format follows
 - Tool access guards and the Agent Access toggle: Zepi always runs pi in full access now.
   Permission prompts, the footer access selector and the old Agent Access /trust command are
   gone; policy extensions such as pi-guardrails can be layered on top instead.
+- Bundled Chromium from the installer and the bundle (about 700 MB): a system Chrome or Edge
+  is used when present, and the pinned Chromium installs on demand from the `Browser use`
+  page.
 
 ## [0.0.1-beta1] - 2026-11-04
 

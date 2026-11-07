@@ -3,7 +3,9 @@ import { readFile, writeFile, mkdir, chmod, rename, mkdtemp, rm, access } from "
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { browserCredentialId, browserDecisionSettings, browserTextCredentialId, browserTextSettings } from "../browser/config.mjs";
+import { browserCandidates, browserCredentialId, browserDecisionSettings, browserTextCredentialId, browserTextSettings, resolveBrowserExecutable } from "../browser/config.mjs";
+import { spawn } from "node:child_process";
+import { openSync } from "node:fs";
 import {runtimeSettings, mergeRuntimeSettings, modelSettings, mergeModelSettings, PiRuntimeSettingsError} from './runtime-settings.mjs';
 import {httpProxyStatus, mergeHttpProxy, PiHttpSettingsError} from './http-settings.mjs';
 import {refreshOpenRouterCatalog} from './model-catalog.mjs';
@@ -69,6 +71,17 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
     } finally { await rm(temporary, { recursive: true, force: true }); }
   };
 
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  async function browserStatus() {
+    const config = (await readJson(join(directory, "settings.json"), {})).zepi?.browser ?? {};
+    const resolved = resolveBrowserExecutable(config.executablePath || '');
+    const target = join(dirname(directory), "browsers");
+    const marker = await readJson(join(target, "install.json"), null);
+    let install = "idle";
+    if (marker?.pid) install = alive(marker.pid) ? "installing" : (resolved.source === "zepi" ? "done" : "failed");
+    return { executablePath: config.executablePath ?? "", path: resolved.path ?? "", source: resolved.source, keepOpen: config.keepOpen === true, install, target, candidates: browserCandidates() };
+  }
+
   async function status(refreshModels = false) {
     const manager = settings();
     if (manager.drainErrors().length) throw new PiConfigError("Unable to read pi settings.json. Fix the configuration and try again.");
@@ -94,6 +107,7 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       httpProxy: httpProxyStatus(manager.getGlobalSettings()),
       browserDecision: await browserDecisionSettings(directory),
       browserText: await browserTextSettings(directory,modelRuntime),
+      browser: await browserStatus(),
       providers, update: await readJson(join(directory, "pi-update.json"), null) };
   }
 
@@ -139,6 +153,32 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
         return JSON.stringify(value, null, 2) + '\n';
       });
       await chmod(join(directory, 'settings.json'), 0o600);
+    } else if (operation === "browser-set") {
+      const keepOpen = request.keepOpen, executablePath = request.executablePath;
+      if (keepOpen !== undefined && typeof keepOpen !== "boolean") throw new PiConfigError("Keep-open must be true or false.");
+      if (executablePath !== undefined && typeof executablePath !== "string") throw new PiConfigError("Enter a browser executable path or leave it blank.");
+      new FileSettingsStorage(directory, directory).withLock("global", current => {
+        const value = current ? JSON.parse(current) : {};
+        const browser = { ...value.zepi?.browser };
+        if (keepOpen !== undefined) browser.keepOpen = keepOpen;
+        if (executablePath !== undefined) { if (executablePath.trim()) browser.executablePath = executablePath.trim(); else delete browser.executablePath; }
+        value.zepi = { ...value.zepi, browser };
+        return JSON.stringify(value, null, 2) + "\n";
+      });
+      await chmod(join(directory, "settings.json"), 0o600);
+      return status();
+    } else if (operation === "browser-install") {
+      const target = join(dirname(directory), "browsers");
+      const markerPath = join(target, "install.json");
+      const current = await readJson(markerPath, null);
+      if (current?.pid && alive(current.pid)) return status();
+      await mkdir(target, { recursive: true });
+      const log = openSync(join(target, "install.log"), "w");
+      const child = spawn(process.execPath, [join(process.cwd(), "node_modules", "playwright", "cli.js"), "install", "chromium", "chromium-headless-shell"],
+        { detached: true, stdio: ["ignore", log, log], env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: target } });
+      child.unref();
+      await atomicJson(markerPath, { pid: child.pid, startedAt: new Date().toISOString() });
+      return status();
     } else if (operation === "browser-text") {
       if(request.removeKey===true&&request.apiUrl===undefined&&request.model===undefined) {
         await AuthStorage.create(authPath).delete(browserTextCredentialId);

@@ -13,7 +13,7 @@ import { FLIGHTS_URL,verifyFlights,verifyTravel } from './ultrafast/verification
 import { startRecording } from './ultrafast/recording.ts';
 import { piDirectory } from '../paths.mjs';
 import {createBrowserTextModel} from './text-model.mjs';
-import {browserDecisionEnvironment} from './config.mjs';
+import {browserDecisionEnvironment, resolveBrowserExecutable} from './config.mjs';
 
 const text = value => ({ content: [{type:'text', text:typeof value === 'string' ? value : JSON.stringify(value)}] });
 const barrier = page => /captcha|verify you are human|security verification|安全验证|人机验证/i.test(`${page.title} ${page.text}`);
@@ -28,12 +28,19 @@ export async function serveBrowser() {
   const engine=process.env.ZEPI_BROWSER_ENGINE ?? 'ultrafast';
   const fastOperations=new Set(['click','type','select','scroll']);
   let activeAgent=null,activeFast=null,inspector=null;
-  const executable = chromium.executablePath();
+
+  const currentExecutable = () => resolveBrowserExecutable(process.env.ZEPI_BROWSER_EXECUTABLE || '').path ?? '';
   async function browser() {
-    if (!existsSync(executable)) throw new Error(`Bundled browser unavailable at ${executable}. Reinstall Zepi with its matching browser resources; do not install packages into the running app.`);
+    // Re-read settings per launch: a path or installation changed mid-session must win over the startup snapshot.
+    const fresh = await browserDecisionEnvironment(piDirectory());
+    const executable = resolveBrowserExecutable(fresh.ZEPI_BROWSER_EXECUTABLE || '').path ?? '';
+    if (!executable) throw new Error(`No Chromium-based browser found. Point Zepi settings (AI / Browser use) at a Chrome or Edge executable, or install one into the Zepi browsers directory with playwright.`);
     launch ??= (async()=>{
-      const insecure=(process.env.ZEPI_BROWSER_INSECURE||decisionEnv.ZEPI_BROWSER_INSECURE)==='1';
-      const b=await JevBrowser.launch({headed:process.env.JEV_BROWSER_HEADED !== '0',highlight:engine==='legacy'&&process.env.JEV_BROWSER_HEADED !== '0',...(insecure?{browser:await chromium.launch({headless:process.env.JEV_BROWSER_HEADED === '0',args:['--ignore-certificate-errors']})}:{}),
+      const insecure=(fresh.ZEPI_BROWSER_INSECURE||process.env.ZEPI_BROWSER_INSECURE)==='1';
+      const headed=process.env.JEV_BROWSER_HEADED !== '0';
+      // One launch owns the executable choice: the resolved path, else playwright's registry.
+      const pw=await chromium.launch({headless:!headed,executablePath:executable,...(insecure?{args:['--ignore-certificate-errors']}:{})});
+      const b=await JevBrowser.launch({headed,highlight:engine==='legacy'&&headed,browser:pw,
         ...(engine==='ultrafast'?{viewport:{width:1120,height:780}}:{})});
       if(engine==='ultrafast') {
         try {
@@ -122,7 +129,7 @@ export async function serveBrowser() {
         try {return await execute(args,extra);}
         catch(error) {
           return {isError:true,...text({status:extra.signal.aborted?'cancelled':'error',
-            message:String(error?.message??error).slice(0,1200),browserPath:executable,
+            message:String(error?.message??error).slice(0,1200),browserPath:currentExecutable(),
             recovery:'Re-observe with browser_snapshot or reopen after checking the error. Never repeat an unconfirmed action with side effects.'})};
         } finally {extra.signal.removeEventListener('abort',cancel);}
       };
@@ -260,7 +267,7 @@ export async function serveBrowser() {
       } finally {clearInterval(timer);}
     } finally {owner='agent';handoffEpoch++;}
   },true);
-  register('browser_status','Check browser resources and input ownership without launching a browser.',{},async()=>text({browserPath:executable,available:existsSync(executable),open:!!launch,owner,engine}),true);
+  register('browser_status','Check browser resources and input ownership without launching a browser.',{},async()=>{const exe=currentExecutable();return text({browserPath:exe,available:existsSync(exe),open:!!launch,owner,engine});},true);
   register('browser_close','Close the task browser. The next browser call opens an independent session.',{},async()=>{await close();return text({closed:true});},true);
   const shutdown=async()=>{await close();await inspector?.close();await server.close();};
   process.once('SIGINT',()=>{void shutdown().finally(()=>process.exit(0));});

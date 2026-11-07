@@ -12,16 +12,18 @@ export function browserGuidance(session: AgentSession | undefined, config: {engi
 
 // The published MCP bridge owns a separate browser for each ACP session.
 // A completed prompt retains the conversation, but must release its test browser.
-export function browserLifecycle(session: AgentSession) {
+export function browserLifecycle(session: AgentSession, options: {keepOpen?: boolean} = {}) {
   let used = false;
   let closing: Promise<void> | undefined;
   return {
     track(name: string) {
       if (name.startsWith("mcp__zepi_browser__browser_")) used = true;
     },
-    async close() {
+    async close(force = false) {
       if (closing) return closing;
       if (!used) return;
+      // keepOpen retains the browser between turns; disposal closes it for good.
+      if (options.keepOpen && !force) return;
       closing = (async () => {
         const name = "mcp__zepi_browser__browser_close";
         const info = session.getAllTools().find(tool => tool.name === name);

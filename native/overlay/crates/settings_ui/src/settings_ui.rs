@@ -1,6 +1,7 @@
 mod components;
 mod page_data;
 pub mod pages;
+mod pi_browser_settings;
 mod pi_settings;
 
 use anyhow::{Context as _, Result};
@@ -461,9 +462,10 @@ pub fn init(cx: &mut App) {
                             && (action.path.starts_with("agent")
                                 || action.path.starts_with("language_model")
                                 || action.path.starts_with("edit_prediction")
-                                || action.path == "context_servers")
+                                || action.path == "context_servers"
+                                || action.path == "llm_providers")
                         {
-                            "llm_providers"
+                            "ai"
                         } else {
                             &action.path
                         },
@@ -935,6 +937,7 @@ fn active_language_mut() -> Option<std::sync::RwLockWriteGuard<'static, Option<S
 
 pub struct SettingsWindow {
     pub(crate) pi_settings: Option<Entity<pi_settings::PiSettingsView>>,
+    pub(crate) pi_browser_settings: Option<Entity<pi_browser_settings::PiBrowserSettingsView>>,
     title_bar: Option<Entity<PlatformTitleBar>>,
     original_window: Option<WindowHandle<MultiWorkspace>>,
     files: Vec<(SettingsUiFile, FocusHandle)>,
@@ -1950,10 +1953,13 @@ impl SettingsWindow {
             last_copied_link_path: None,
 
             pi_settings: None,
+            pi_browser_settings: None,
         };
 
         this.pi_settings = std::env::var_os("ZEPI_ROOT")
             .map(|_| cx.new(|cx| pi_settings::PiSettingsView::new(window, cx)));
+        this.pi_browser_settings = std::env::var_os("ZEPI_ROOT")
+            .map(|_| cx.new(|cx| pi_browser_settings::PiBrowserSettingsView::new(window, cx)));
         this.fetch_files(window, cx);
         this.build_ui(window, cx);
         this.build_search_index();
@@ -5276,6 +5282,7 @@ pub mod test {
                 last_copied_link_path: None,
 
                 pi_settings: None,
+                pi_browser_settings: None,
             }
         }
     }
