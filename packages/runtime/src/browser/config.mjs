@@ -89,9 +89,10 @@ export async function browserDecisionEnvironment(directory) {
   const browserConfig=(await settings(directory)).browser??{};
   const browser=resolveBrowserExecutable(browserConfig.executablePath||process.env.ZEPI_BROWSER_EXECUTABLE||'');
   const keepOpen=browserConfig.keepOpen===true||process.env.ZEPI_BROWSER_KEEP_OPEN==='1';
+  const windowMode=['normal','maximized','fullscreen'].includes(browserConfig.window)?browserConfig.window:(process.env.ZEPI_BROWSER_WINDOW||'fullscreen');
   const key=await resolveKey(directory,browserCredentialId,process.env.TYPESAFE_API_KEY);
   const textKey=text.source==='custom'?await resolveKey(directory,browserTextCredentialId,process.env.TEXT_MODEL_API_KEY):'';
   return {JEV_API_URL:config.apiUrl,JEV_MODEL:config.model,ZEPI_BROWSER_ENGINE:config.engine,ZEPI_BROWSER_INSECURE:config.insecure??process.env.ZEPI_BROWSER_INSECURE??'',
-    ZEPI_BROWSER_EXECUTABLE:browser.path??'',ZEPI_BROWSER_SOURCE:browser.source,ZEPI_BROWSER_KEEP_OPEN:keepOpen?'1':'',
+    ZEPI_BROWSER_EXECUTABLE:browser.path??'',ZEPI_BROWSER_SOURCE:browser.source,ZEPI_BROWSER_KEEP_OPEN:keepOpen?'1':'',ZEPI_BROWSER_WINDOW:windowMode,
     TYPESAFE_API_KEY:key,TEXT_MODEL_SOURCE:text.source,TEXT_MODEL_BASE_URL:text.source==='custom'?text.apiUrl:'',TEXT_MODEL:text.model,TEXT_MODEL_REASONING:text.reasoning,TEXT_MODEL_API_KEY:textKey};
 }

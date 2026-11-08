@@ -2,7 +2,8 @@ import {piDirectory, runtimeRoot as root, bundledPiEntry} from '../paths.mjs';
 import {validateMcp, credentials, usesOAuth} from '../mcp/config.mjs';
 import {readMcpStatus, mcpRevision} from '../mcp/status.mjs';
 export {validateMcp, configuredMcp} from '../mcp/config.mjs';
-import { mkdir, readFile, writeFile, rename, rm, readdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
+import { renameWithRetry } from "../fs/rename.mjs";
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -13,6 +14,7 @@ import lockfile from 'proper-lockfile';
 const revisionOf = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const sourceOf = value => typeof value === "string" ? value : value.source;
 const RUNTIME_LEASE_TTL_MS = 6 * 60 * 60 * 1000;
+const LEASE_RENEWAL_MS = 15 * 60 * 1000;
 const readJson = async (path, fallback) => {
   try { return JSON.parse(await readFile(path, "utf8")); }
   catch (error) { if (error.code === "ENOENT") return fallback; throw new Error(`Invalid ${basename(path)}. It was not changed.`); }
@@ -20,9 +22,12 @@ const readJson = async (path, fallback) => {
 const atomic = async (path, data) => {
   await mkdir(dirname(path), {recursive: true, mode: 0o700});
   const temp = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  try { await writeFile(temp, JSON.stringify(data, null, 2) + "\n", {mode: 0o600}); await rename(temp, path); }
+  try { await writeFile(temp, JSON.stringify(data, null, 2) + "\n", {mode: 0o600}); await renameWithRetry(temp, path); }
   finally { await rm(temp, {force: true}); }
 };
+// An inspection deletes a lease older than its TTL, and with it the MCP status bound to that
+// id, so a runtime that outlives the TTL rewrites the lease keeping the same id.
+export const renewLease = (path, id) => atomic(path, {id, startedAt: new Date().toISOString()});
 const npmName = source => {
   const name = source.replace(/^npm:/, "");
   if (!/^(@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*(?:@[a-zA-Z0-9.*^~<>=| -]+)?$/.test(name)) throw new Error("Enter an npm package name or an absolute local package path.");
@@ -220,8 +225,12 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
   return {execute, async acquireRuntime() {
     return locked(async () => {
       await applyPending(); await mkdir(leases, {recursive: true, mode: 0o700});
-      const path = join(leases, `${process.pid}.json`); await atomic(path, {id:crypto.randomUUID(), startedAt: new Date().toISOString()});
+      const path = join(leases, `${process.pid}.json`), id = crypto.randomUUID();
+      await renewLease(path, id);
+      const renewal = setInterval(() => { renewLease(path, id).catch(() => {}); }, LEASE_RENEWAL_MS);
+      renewal.unref();
       return async () => {
+        clearInterval(renewal);
         await rm(path, {force:true}); await rm(join(leases, `${process.pid}.mcp.json`), {force:true});
         // The last runtime to close is the moment queued package changes can be applied.
         await applyPending().catch(() => {});

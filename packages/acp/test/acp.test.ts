@@ -215,19 +215,15 @@ test("new ACP tasks reload global pi defaults and ignore project settings", { ti
 });
 
 
-test("pi sees the current global access mode on each turn", { timeout: 30_000 }, async () => {
+test("pi always runs in full access regardless of the legacy access key", { timeout: 30_000 }, async () => {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), "zepi-access-")));
   const settings = { defaultProvider: "zepi-fixture", defaultModel: "scripted", defaultThinkingLevel: "off", zepi: {fullAccess:false} };
   const save = () => writeFile(join(cwd, "settings.json"), JSON.stringify(settings));
   await save();
   const fixture = await fixtureModel(cwd, [
-    context => { assert.match(JSON.stringify(context), /Zepi access mode: Ask Before Actions/); return "Review mode."; },
-    context => { assert.match(JSON.stringify(context), /Zepi access mode: Full Access/); return "Autonomous mode."; },
-    context => {
-      const messages = JSON.stringify(context);
-      assert.ok(messages.lastIndexOf("Zepi access mode: Ask Before Actions") > messages.lastIndexOf("Zepi access mode: Full Access"));
-      return "Review mode restored.";
-    },
+    context => { assert.doesNotMatch(JSON.stringify(context), /Ask Before Actions/); return "No prompts."; },
+    context => { assert.doesNotMatch(JSON.stringify(context), /Ask Before Actions/); return "Still no prompts."; },
+    context => { assert.doesNotMatch(JSON.stringify(context), /Ask Before Actions/); return "Always full access."; },
   ]);
   const toAgent = new TransformStream(), toClient = new TransformStream();
   const server = await startZepiAgent(cwd, join(cwd,"sessions"), {readable:toAgent.readable,writable:toClient.writable}, fixture.runtime);

@@ -4,6 +4,68 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.1-beta3] - 2026-11-07
+
+### Added
+
+- `npm run smoke`: a P0 bundle check (seeded defaults, freshness of the compiled ACP entry,
+  session open, tools, subagents, browser, optional preview) that also runs against a deployed
+  bundle via `--root`, masks credentials in its output and fails only on newly red tests.
+- The task browser honors a window mode: the Browser use page gains a Window setting
+  (Fullscreen by default, plus Maximized and Normal); headed Chromium starts in that mode
+  and the page fills the window instead of a fixed 1120x780 viewport. Headless verification
+  keeps the fixed viewport, so screenshots and tests measure the same geometry as before.
+  The window state is additionally applied over CDP, because Chrome drops the startup
+  switches whenever it restores previous session bounds. The page's dropdowns open
+  left-aligned under their trigger, and the save notice appears in the section header
+  instead of shifting the whole page.
+- Closing the task browser window by hand no longer poisons the next browser call: the
+  service drops the dead handle on disconnect and relaunches once inside the failing call.
+- A headed browser in fullscreen or maximized mode no longer shows the page at half width
+  for a moment: the 1120x780 device-metrics override is skipped when the page follows the
+  window, because the override died with its CDP session right after launch and Chrome
+  snapped to the window size mid-paint.
+- Code spans with an elided path (`core/.../Events/ApplicantDto.cs`) become clickable file
+  mentions when exactly one worktree file matches the head and tail around `...`. Paths with
+  multiple elisions or several matches stay plain, so a reply cannot link to the wrong file;
+  the lookup filters by file name before walking worktree entries. Covered by a gpui test.
+- The agent message context menu gains `Add Selection to Thread`, reusing Zed's existing
+  action instead of introducing a new command.
+
+### Fixed
+
+- Browser cleanup on session dispose no longer raises an unhandled rejection:
+  browser.close errors during forced dispose are caught and logged
+  (Zepi browser cleanup failed) instead of surfacing as an unhandled promise
+  rejection.
+- Search outside the project falls back to stock pi disk search: find/grep with a path
+  outside the workspace no longer fail; read/ls behavior and the native editor index
+  inside the project are unchanged.
+- browser_open and browser_agent_command accept the page address as url or uri
+  (a missing address now reports a clear error instead of an MCP validation failure).
+- Creating and reading unsaved new files through the agent works again: native file tools tolerate paths that exist only in editor buffers, not yet on disk.
+- Shell commands on Windows no longer leave background jobs behind: the command's shell reaps its
+  own jobs on exit, so a finished command cannot stall its supervisor or leak a process.
+- Project commands on Windows run in the private copy as intended: the supervisor resolves the
+  captured-inputs link, so the project's own `node_modules` can no longer satisfy a dependency
+  that was never captured.
+- Replacing a file that a reader or a virus scanner still holds open no longer fails the whole
+  operation on Windows: atomic writes back off and retry. Before this, the MCP status in
+  Extensions could stay stale, a healthy project verification could fail with a rename error,
+  and the preview supervisor could survive its run without a cleanup acknowledgement. The MCP
+  status now also republishes itself while a task is open, so a lost write heals on its own.
+- An editor left open for more than six hours no longer loses the agent's Extensions state: the
+  runtime lease renews itself, so the MCP panel keeps seeing a live runtime instead of expiring
+  it and going blank until restart.
+- A finished turn no longer leaves the last lines of a reply unreachable behind the
+  status row: the message list remeasures its tail and returns to the bottom when the
+  turn ends, instead of keeping stale row heights until the thread is reopened.
+- `PRODUCT_VERSION` reports `0.0.1-beta3` in the About window, matching the changelog.
+- `npm run test:acp` no longer fails on load: the removed Computer Use suite was still listed
+  in `package.json`.
+- `AGENTS.md` matches the pinned stack (pi 1.5.0, English and Russian READMEs) and asks the
+  agent to offer `npm run smoke` after medium or large changes, never as a pre-build gate.
+
 ## [0.0.1-beta2] - 2026-11-05
 
 ### Added

@@ -124,7 +124,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         const dispose = created.session.dispose.bind(created.session);
         created.session.dispose = () => { browserForce?.(); disposeImages(); ledger.dispose(); if(deliveries.get(created.session.sessionId)===ledger)deliveries.delete(created.session.sessionId); dispose(); };
         const browser = browserLifecycle(created.session, {keepOpen: browserDecision.ZEPI_BROWSER_KEEP_OPEN === '1'});
-        browserForce = () => { void browser.close(true); };
+        browserForce = () => { void browser.close(true).catch(error => console.error("Zepi browser cleanup failed:", error)); };
         const prompt = created.session.prompt.bind(created.session);
         created.session.prompt = async (...args) => {
           try {

@@ -35,7 +35,7 @@ powershell -File scripts\deploy-bundle.ps1   # copy the build into the bundle an
 ```
 
 The bundle is a folder such as `C:\Llm\zepi` holding `zepi.exe`, `packages`, `node_modules`,
-`native` and `deps\{node,python,browsers}`. It carries no state: that lives in
+`native` and `deps\{node,python}` (browsers are not bundled: the agent uses system Chrome/Edge or installs the pinned Chromium on demand into the state directory). It carries no state: that lives in
 `%LOCALAPPDATA%\Zepi`.
 
 ## Payload (deps)
@@ -45,8 +45,8 @@ The bundle is a folder such as `C:\Llm\zepi` holding `zepi.exe`, `packages`, `no
 powershell -File scripts\prepare-python.ps1            # -> .local\payload\python
 
 # Node 24 (node.exe + npm.cmd): unpack the zip from nodejs.org into .local\payload\node
-# Chromium for the agent
-node scripts\setup\browser.mjs                        # -> .local\browsers, then copy to the payload
+# Chromium is not shipped: system Chrome/Edge or on-demand install into the state directory.
+# scripts\setup\browser.mjs (-> .local\browsers) remains for dev use only and is not copied to the payload.
 ```
 
 ## Installer

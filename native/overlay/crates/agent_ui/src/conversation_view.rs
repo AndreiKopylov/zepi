@@ -53,8 +53,9 @@ use crate::{AgentThreadSource, DEFAULT_THREAD_TITLE, resolve_agent_image};
 use lru::LruCache;
 use rope::Point;
 use settings::{NotifyWhenAgentWaiting, Settings as _, SettingsStore};
+use std::ffi::OsStr;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{rc::Rc, time::Duration};
@@ -4410,23 +4411,84 @@ impl AgentCodeSpanResolver {
                     continue;
                 }
 
-                let abs_path = worktree.absolutize(&relative_path);
-                let mention = match path_with_position.row.and_then(|row| row.checked_sub(1)) {
-                    Some(line) => MentionUri::Selection {
-                        abs_path: Some(abs_path),
-                        line_range: line..=line,
-                        column: path_with_position
-                            .column
-                            .map(|column| column.saturating_sub(1)),
-                    },
-                    None => MentionUri::File { abs_path },
-                };
+                return Some(Self::mention_uri(&path_with_position, worktree, &relative_path));
+            }
 
-                return Some(mention.to_uri().to_string().into());
+            if let Some(relative_path) = Self::resolve_elided(candidate_path, worktree) {
+                return Some(Self::mention_uri(&path_with_position, worktree, &relative_path));
             }
         }
 
         None
+    }
+
+    /// Mention URI for a worktree-relative path, keeping the position parsed from the span.
+    fn mention_uri(
+        path_with_position: &PathWithPosition,
+        worktree: &project::Worktree,
+        relative_path: &RelPath,
+    ) -> SharedString {
+        let abs_path = worktree.absolutize(relative_path);
+        let mention = match path_with_position.row.and_then(|row| row.checked_sub(1)) {
+            Some(line) => MentionUri::Selection {
+                abs_path: Some(abs_path),
+                line_range: line..=line,
+                column: path_with_position
+                    .column
+                    .map(|column| column.saturating_sub(1)),
+            },
+            None => MentionUri::File { abs_path },
+        };
+        mention.to_uri().to_string().into()
+    }
+
+    /// Resolves a path the model abbreviated with `...` (`core/.../Events/A.cs`) by matching
+    /// its leading and trailing segments against a unique file of the worktree.
+    fn resolve_elided(path: &Path, worktree: &project::Worktree) -> Option<Arc<RelPath>> {
+        let path = if path.is_absolute() {
+            path.strip_prefix(worktree.abs_path()).ok()?
+        } else {
+            path
+        };
+        let segments: Vec<&OsStr> = path
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(segment) => Some(segment),
+                _ => None,
+            })
+            .collect();
+        let elision = segments.iter().position(|segment| Self::is_elision(segment))?;
+        let suffix_segments = &segments[elision + 1..];
+        if suffix_segments.is_empty()
+            || suffix_segments.iter().any(|segment| Self::is_elision(segment))
+        {
+            return None;
+        }
+        let tail = *suffix_segments.last()?;
+        let prefix: PathBuf = segments[..elision].iter().collect();
+        let suffix: PathBuf = suffix_segments.iter().collect();
+
+        let snapshot = worktree.snapshot();
+        let mut found: Option<Arc<RelPath>> = None;
+        for entry in snapshot.files(false, 0) {
+            let candidate = entry.path.as_std_path();
+            if candidate.file_name() != Some(tail)
+                || candidate.components().count() <= elision + suffix_segments.len()
+                || !candidate.starts_with(&prefix)
+                || !candidate.ends_with(&suffix)
+            {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(entry.path.clone());
+        }
+        found
+    }
+
+    fn is_elision(segment: &OsStr) -> bool {
+        segment == OsStr::new("...") || segment == OsStr::new("…")
     }
 
     fn candidate_relative_paths(
@@ -5475,6 +5537,81 @@ pub(crate) mod tests {
                 line_range: 9..=9,
                 column: None,
             }
+        );
+    }
+
+    #[gpui::test]
+    async fn test_zepi_code_span_resolver_expands_elided_paths(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            util::path!("/project"),
+            json!({
+                "core": {
+                    "src": {
+                        "Events": {
+                            "Epgu": { "EpguApplicant.cs": "" }
+                        }
+                    }
+                },
+                "other": {
+                    "src": {
+                        "Events": {
+                            "Epgu": { "EpguApplicant.cs": "" }
+                        }
+                    }
+                },
+                "README.md": ""
+            }),
+        )
+        .await;
+
+        let project = Project::test(fs, [Path::new(util::path!("/project"))], cx).await;
+        let resolver = cx.update(|cx| AgentCodeSpanResolver::new(&project.downgrade(), cx));
+
+        let uri = cx
+            .update(|cx| resolver.try_resolve("core/.../Epgu/EpguApplicant.cs", cx))
+            .expect("expected elided path to resolve");
+        assert_eq!(
+            MentionUri::parse(&uri, PathStyle::local()).unwrap(),
+            MentionUri::File {
+                abs_path: PathBuf::from(util::path!(
+                    "/project/core/src/Events/Epgu/EpguApplicant.cs"
+                )),
+            }
+        );
+
+        let uri = cx
+            .update(|cx| resolver.try_resolve("core/.../Events/Epgu/EpguApplicant.cs:7", cx))
+            .expect("expected elided path with a line to resolve");
+        assert_eq!(
+            MentionUri::parse(&uri, PathStyle::local()).unwrap(),
+            MentionUri::Selection {
+                abs_path: Some(PathBuf::from(util::path!(
+                    "/project/core/src/Events/Epgu/EpguApplicant.cs"
+                ))),
+                line_range: 6..=6,
+                column: None,
+            }
+        );
+
+        assert!(
+            cx.update(|cx| resolver.try_resolve("core/.../Events", cx))
+                .is_none(),
+            "an elided path without a matching tail keeps the span plain"
+        );
+
+        assert!(
+            cx.update(|cx| resolver.try_resolve(".../Events/Epgu/EpguApplicant.cs", cx))
+                .is_none(),
+            "ambiguous elided paths keep the span plain"
+        );
+
+        assert!(
+            cx.update(|cx| resolver.try_resolve("core/.../.../EpguApplicant.cs", cx))
+                .is_none(),
+            "multiple elisions are not resolved"
         );
     }
 

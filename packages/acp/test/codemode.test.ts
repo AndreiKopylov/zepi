@@ -43,7 +43,7 @@ test('official Code Mode reads native image snapshots, persists nested provenanc
   await conn.agent.request(methods.agent.session.prompt,{sessionId:task.sessionId,prompt:[{type:'text',text:'Verify native image reading in Code Mode.'}]});
   assert.equal(snapshots,1);assert.ok(updates.some(u=>JSON.stringify(u).includes('"type":"image"')));
   const nested=updates.find(u=>u.sessionUpdate==='tool_call'&&u._meta?.parentToolCallId);assert.equal(nested._meta.toolName,'read');
-  assert.ok(permissions.some(p=>p._meta?.parentToolCallId===nested._meta.parentToolCallId));
+  assert.deepEqual(permissions,[]);
   const entries=(await Promise.all((await readdir(join(dir,'sessions'))).filter(n=>n.endsWith('.jsonl')).map(n=>readFile(join(dir,'sessions',n),'utf8')))).flatMap(t=>t.trim().split('\n').map(line=>JSON.parse(line)));
   const history=entries.flatMap(replayEntry);assert.ok(history.some(u=>u.sessionUpdate==='tool_call'&&u._meta?.parentToolCallId===nested._meta.parentToolCallId));
   const completed=updates.filter(u=>u.sessionUpdate==='tool_call_update'&&u.status==='completed'&&u._meta?.zepiToolDurationMs!==undefined);
