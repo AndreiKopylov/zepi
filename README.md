@@ -27,13 +27,12 @@ openpyxl, python-pptx, pypdf and Pillow. Nothing to install.
 
 ## Install
 
-1. Download the latest installer, `zepi-0.0.1-beta1-setup.exe`, from [Releases](../../releases).
+1. Download the latest installer (`zepi-<version>-setup.exe`) from [Releases](../../releases).
 2. Run it and accept the UAC prompt. Zepi installs to `C:\Program Files\Zepi` and appears under
    Settings → Apps.
 3. Pick components:
    - **Zepi** — editor and agent (required);
-   - **Python for Office documents** — needed for `.docx`/`.xlsx`/`.pptx` (56 MB);
-   - **Bundled browser** — Chromium for the agent's browser tools (702 MB, optional).
+   - **Python for Office documents** — needed for `.docx`/`.xlsx`/`.pptx` (56 MB).
 4. Configure a model provider in the agent settings (`Settings → Agent`) or in
    `%LOCALAPPDATA%\Zepi\pi\models.json`. No providers ship with the build: bring your own endpoint
    and key.
@@ -44,6 +43,7 @@ Settings, sessions and skills live in `%LOCALAPPDATA%\Zepi`; updates never touch
 
 - Windows 10/11 x64.
 - A model provider (any OpenAI-compatible endpoint, or one of pi's built-in providers).
+- For the agent's browser tools: a system Chrome or Edge, or install the pinned Chromium on demand from the `Browser use` settings page.
 - No system Node.js, Python or git required — everything is bundled.
 
 ## How it is built
@@ -53,7 +53,6 @@ zepi.exe                 editor + agent host (Rust: Zed plus the Zepi overlay)
 packages/, node_modules/ ACP adapter and pi
 deps/node/               Node 24 for the agent
 deps/python/             CPython 3.13 with document libraries
-deps/browsers/           Chromium (Playwright) for browser tools
 native/                  appearance, pi defaults, skills
 ```
 

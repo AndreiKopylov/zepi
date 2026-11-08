@@ -30,7 +30,8 @@ export async function serveBrowser() {
   let activeAgent=null,activeFast=null,inspector=null;
 
   const currentExecutable = () => resolveBrowserExecutable(process.env.ZEPI_BROWSER_EXECUTABLE || '').path ?? '';
-  async function browser() {
+  const deadBrowser = error => /has been closed|has been disconnected|Target closed|Connection closed|disconnected|no object with guid|browser is closing|Session closed/i.test(String(error?.message ?? error));
+  async function browser(retry = true) {
     // Re-read settings per launch: a path or installation changed mid-session must win over the startup snapshot.
     const fresh = await browserDecisionEnvironment(piDirectory());
     const executable = resolveBrowserExecutable(fresh.ZEPI_BROWSER_EXECUTABLE || '').path ?? '';
@@ -38,20 +39,46 @@ export async function serveBrowser() {
     launch ??= (async()=>{
       const insecure=(fresh.ZEPI_BROWSER_INSECURE||process.env.ZEPI_BROWSER_INSECURE)==='1';
       const headed=process.env.JEV_BROWSER_HEADED !== '0';
+      // A headed window follows the user's window mode; headless keeps the fixed viewport the tests measure.
+      const windowMode=headed?(process.env.ZEPI_BROWSER_WINDOW||'fullscreen'):'normal';
+      const windowArgs=windowMode==='normal'?[]:(windowMode==='maximized'?['--start-maximized']:['--start-fullscreen']);
       // One launch owns the executable choice: the resolved path, else playwright's registry.
-      const pw=await chromium.launch({headless:!headed,executablePath:executable,...(insecure?{args:['--ignore-certificate-errors']}:{})});
+      const pw=await chromium.launch({headless:!headed,executablePath:executable,args:[...(insecure?['--ignore-certificate-errors']:[]),...windowArgs]});
+      pw.on('disconnected', () => { launch = undefined; });
       const b=await JevBrowser.launch({headed,highlight:engine==='legacy'&&headed,browser:pw,
-        ...(engine==='ultrafast'?{viewport:{width:1120,height:780}}:{})});
+        ...(windowMode==='normal'?(engine==='ultrafast'?{viewport:{width:1120,height:780}}:{}):{viewport:null})});
       if(engine==='ultrafast') {
         try {
           const initial=b.page,fast=await FastBrowser.create('about:blank',lifetime.signal,{context:b.context});
           b.page=fast.page;await initial.close();await fast.detach();
         } catch(error) {await b.close();throw error;}
       }
+      if (headed && windowMode!=='normal') {
+        // Chrome drops --start-fullscreen/--start-maximized whenever it restores session bounds;
+        // the window state over CDP applies regardless of that. Applied after the fast page
+        // exists: maximizing earlier stops Chrome from materializing the background target.
+        await pw.newBrowserCDPSession().then(async cdp => {
+          try {
+            const {targetInfos} = await cdp.send('Target.getTargets');
+            const page = targetInfos.find(info => info.type === 'page');
+            if (page) {
+              const {windowId} = await cdp.send('Browser.getWindowForTarget', {targetId: page.targetId});
+              await cdp.send('Browser.setWindowBounds', {windowId, bounds:{windowState: windowMode==='maximized'?'maximized':'fullscreen'}});
+            }
+          } finally { await cdp.detach().catch(() => {}); }
+        }).catch(() => {});
+      }
+      b.zepiPw = pw;
       return b;
     })()
       .catch(error => {launch=undefined;throw error;});
-    return launch;
+    const handle = await launch;
+    // A window closed by hand leaves a resolved but dead handle; catch it before the tool runs.
+    if (retry && handle?.zepiPw && !handle.zepiPw.isConnected()) {
+      launch = undefined;
+      return browser(false);
+    }
+    return handle;
   }
   async function close() {
     handoffEpoch++;
@@ -89,12 +116,12 @@ export async function serveBrowser() {
       const scenario=body.scenario??'flights',goal=(body.goal??'').trim();
       if(!['travel','research','flights'].includes(scenario)) throw new Error('Unknown demo scenario');
       if(!goal||[...goal].length>2000) throw new Error('Enter 1–2,000 characters');
-      if(!body.url&&scenario!=='flights'&&!origin) throw new Error('Open browser_inspect first to use the local scenarios.');
+      if(!body.url&&!body.uri&&scenario!=='flights'&&!origin) throw new Error('Open browser_inspect first to use the local scenarios.');
       await close();const b=await browser();
       const signal=AbortSignal.any([lifetime.signal,inputLifetime.signal,...(requestSignal?[requestSignal]:[])]);
       try {
         activeFast=await FastBrowser.attach(b.page,signal);
-        await activeFast.navigate(body.url??(scenario==='flights'?FLIGHTS_URL:`${origin}/fixture.html?scenario=${scenario}`));
+        await activeFast.navigate(body.url??body.uri??(scenario==='flights'?FLIGHTS_URL:`${origin}/fixture.html?scenario=${scenario}`));
         activeAgent=new FastAgent(activeFast,goal,agentOptions(signal,{screenshots:body.screenshots??true,recordDir:body.record?await recordingDirectory():undefined}));
         activeAgent.scenario=scenario;await activeAgent.initialize();
       } catch(error) {await close();throw error;}
@@ -128,6 +155,12 @@ export async function serveBrowser() {
         extra.signal.addEventListener('abort',cancel,{once:true});
         try {return await execute(args,extra);}
         catch(error) {
+          // Closing the window by hand leaves the cached handle dead; relaunch once
+          // inside the same call instead of reporting the stale handle's error.
+          if (!extra.signal.aborted && deadBrowser(error)) {
+            launch = undefined;
+            try {return await execute(args,extra);} catch (again) {error = again;}
+          }
           return {isError:true,...text({status:extra.signal.aborted?'cancelled':'error',
             message:String(error?.message??error).slice(0,1200),browserPath:currentExecutable(),
             recovery:'Re-observe with browser_snapshot or reopen after checking the error. Never repeat an unconfirmed action with side effects.'})};
@@ -139,7 +172,9 @@ export async function serveBrowser() {
       return pending;
     });
   }
-  register('browser_open','Open a URL in the task browser. Returns the observed page and any user verification barrier.',{url:z.string().url()},async ({url})=>{
+  register('browser_open','Open a URL in the task browser. Returns the observed page and any user verification barrier. Pass the address as url (uri also works).',{url:z.string().url().optional(),uri:z.string().url().optional()},async args=>{
+    const url=args.url??args.uri;
+    if(!url) throw new Error("Pass the page address as url (uri works too).");
     const b=await browser();activeAgent=null;await activeFast?.detach();activeFast=null;
     if(engine==='legacy') await b.open(url);
     else {
@@ -217,7 +252,7 @@ export async function serveBrowser() {
   });
   register('browser_agent_state','Inspect the full Ultrafast run state: page, indexed elements, pending decision, plan, operation/target probabilities, history, text calls and timestamps.',{},async()=>text(inspectorState(activeAgent,process.env.TEXT_MODEL??'deepseek-chat')));
   register('browser_agent_command','Use the complete Ultrafast command interface. reset starts a run; predict chooses without acting; act consumes the pending decision once and requires its observed fingerprint; tick chooses and acts. Screenshot/record options are independent of model input.',{
-    command:z.enum(['reset','predict','act','tick']),goal:z.string().optional(),url:z.string().url().optional(),scenario:z.enum(['flights','travel','research']).optional(),
+    command:z.enum(['reset','predict','act','tick']),goal:z.string().optional(),url:z.string().url().optional(),uri:z.string().url().optional(),scenario:z.enum(['flights','travel','research']).optional(),
     fingerprint:z.string().optional(),screenshots:z.boolean().optional(),record:z.boolean().optional(),
   },async({command,...body},extra)=>text(await agentCommand(command,body,inspector?.url,extra.signal)));
   register('browser_inspect','Open the loopback Ultrafast inspector for this task browser. Includes live screenshots, indexed target overlays, operation/target rankings, separate Choose/Execute, auto-run/pause, travel/research scenarios and trace export. Uses global model settings and the existing browser ownership controls.',{port:z.number().int().min(0).max(65535).optional()},async({port})=>{

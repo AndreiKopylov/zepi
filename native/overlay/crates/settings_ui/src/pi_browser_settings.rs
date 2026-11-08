@@ -10,6 +10,7 @@ pub(crate) struct PiBrowserSettingsView {
     scroll_handle: gpui::ScrollHandle,
     executable: Entity<Editor>,
     keep_open: bool,
+    window_mode: String,
     candidates: Vec<(String, String)>,
     browser_text_url: Entity<Editor>,
     browser_text_model: Entity<Editor>,
@@ -45,6 +46,7 @@ impl PiBrowserSettingsView {
             scroll_handle: gpui::ScrollHandle::new(),
             executable: input("Detected automatically", false, window, cx),
             keep_open: false,
+            window_mode: "fullscreen".into(),
             candidates: Vec::new(),
             browser_text_url: input("OpenAI-compatible base URL, e.g. https://api.deepseek.com/v1", false, window, cx),
             browser_text_model: input("Text model ID", false, window, cx),
@@ -98,6 +100,7 @@ impl PiBrowserSettingsView {
                     Ok(data) => {
                         let first = view.data.is_none();
                         view.keep_open = data["browser"]["keepOpen"] == true;
+                        view.window_mode = data["browser"]["window"].as_str().unwrap_or("fullscreen").to_owned();
                         view.candidates = data["browser"]["candidates"].as_array().into_iter().flatten()
                             .filter_map(|item| Some((item["path"].as_str()?.to_owned(), item["source"].as_str().unwrap_or_default().to_owned())))
                             .collect();
@@ -235,6 +238,32 @@ impl PiBrowserSettingsView {
         DropdownMenu::new(id, label, menu).style(DropdownStyle::Outlined).full_width(true).into_any_element()
     }
 
+    fn window_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let weak = cx.entity().downgrade();
+        let label = format!("Window: {}", match self.window_mode.as_str() {
+            "normal" => "Normal",
+            "maximized" => "Maximized",
+            _ => "Fullscreen",
+        });
+        let menu = ContextMenu::build(window, cx, move |mut menu, _, _| {
+            for (value, name) in [("fullscreen", "Fullscreen"), ("maximized", "Maximized"), ("normal", "Normal")] {
+                let weak = weak.clone();
+                let value = value.to_owned();
+                menu = menu.entry(name, None, move |window, cx| {
+                    let _ = weak.update(cx, |view, cx| {
+                        view.window_mode = value.clone();
+                        view.request(json!({"operation": "browser-set", "window": value}), window, cx);
+                        cx.notify();
+                    });
+                });
+            }
+            menu
+        });
+        DropdownMenu::new("pib-window", label, menu)
+            .style(DropdownStyle::Outlined)
+            .attach(gpui::Anchor::BottomLeft)
+            .into_any_element()
+    }
     fn install_section(&self, cx: &mut Context<Self>, heading: &str) -> gpui::AnyElement {
         let browser = self.browser();
         let install = browser["install"].as_str().unwrap_or("idle");
@@ -282,9 +311,12 @@ impl Render for PiBrowserSettingsView {
         };
         v_flex().id("zepi-pi-browser-settings").size_full().overflow_y_scroll().track_scroll(&self.scroll_handle).px_8().pb_12().gap_6()
             .child(v_flex().gap_2().pt_4()
-                .child(Label::new("Browser"))
+                .child(h_flex().w_full().justify_between().gap_2()
+                    .child(Label::new("Browser"))
+                    .when(!self.notice.is_empty(), |this| {
+                        this.child(Label::new(self.notice.clone()).size(LabelSize::Small).color(if self.failed { Color::Error } else { Color::Success }))
+                    }))
                 .child(Label::new("Chromium-family browser for browser tasks, takeovers and preview captures.").size(LabelSize::Small).color(Color::Muted)))
-            .when(!self.notice.is_empty(), |this| this.child(Label::new(self.notice.clone()).size(LabelSize::Small).color(if self.failed { Color::Error } else { Color::Success })))
             .child(v_flex().gap_3().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
                 .child(Label::new("Browser use"))
                 .when(found, |this| this
@@ -312,6 +344,13 @@ impl Render for PiBrowserSettingsView {
                         let keep = !this.keep_open;
                         this.request(json!({"operation": "browser-set", "keepOpen": keep}), window, cx);
                     }))))
+            .child(v_flex().gap_2()
+                .child(Label::new(match self.window_mode.as_str() {
+                    "normal" => "The window opens at its default size and the page keeps a fixed 1120x780 viewport.",
+                    "maximized" => "The window opens maximized and the page fills it. Applies to browsers opened after the change.",
+                    _ => "The window opens in fullscreen and the page fills it. Applies to browsers opened after the change.",
+                }).size(LabelSize::Small).color(Color::Muted))
+                .child(h_flex().child(self.window_menu(window, cx))))
             .child(v_flex().gap_3().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
                 .child(Label::new("Input text model"))
                 .child(Label::new("Uses your main language model and its existing authentication by default, only when entering text. A separate OpenAI-compatible text model is optional.").size(LabelSize::Small).color(Color::Muted))

@@ -79,7 +79,8 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
     const marker = await readJson(join(target, "install.json"), null);
     let install = "idle";
     if (marker?.pid) install = alive(marker.pid) ? "installing" : (resolved.source === "zepi" ? "done" : "failed");
-    return { executablePath: config.executablePath ?? "", path: resolved.path ?? "", source: resolved.source, keepOpen: config.keepOpen === true, install, target, candidates: browserCandidates() };
+    const window = ["normal", "maximized", "fullscreen"].includes(config.window) ? config.window : "fullscreen";
+    return { executablePath: config.executablePath ?? "", path: resolved.path ?? "", source: resolved.source, keepOpen: config.keepOpen === true, window, install, target, candidates: browserCandidates() };
   }
 
   async function status(refreshModels = false) {
@@ -154,13 +155,15 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       });
       await chmod(join(directory, 'settings.json'), 0o600);
     } else if (operation === "browser-set") {
-      const keepOpen = request.keepOpen, executablePath = request.executablePath;
+      const keepOpen = request.keepOpen, executablePath = request.executablePath, windowMode = request.window;
       if (keepOpen !== undefined && typeof keepOpen !== "boolean") throw new PiConfigError("Keep-open must be true or false.");
+      if (windowMode !== undefined && !["normal", "maximized", "fullscreen"].includes(windowMode)) throw new PiConfigError("Window mode must be normal, maximized or fullscreen.");
       if (executablePath !== undefined && typeof executablePath !== "string") throw new PiConfigError("Enter a browser executable path or leave it blank.");
       new FileSettingsStorage(directory, directory).withLock("global", current => {
         const value = current ? JSON.parse(current) : {};
         const browser = { ...value.zepi?.browser };
         if (keepOpen !== undefined) browser.keepOpen = keepOpen;
+        if (windowMode !== undefined) browser.window = windowMode;
         if (executablePath !== undefined) { if (executablePath.trim()) browser.executablePath = executablePath.trim(); else delete browser.executablePath; }
         value.zepi = { ...value.zepi, browser };
         return JSON.stringify(value, null, 2) + "\n";

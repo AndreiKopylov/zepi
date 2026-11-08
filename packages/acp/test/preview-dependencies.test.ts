@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import {chmod, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
-import {join} from "node:path";
+import {join, sep} from "node:path";
 import {captureDependencies, changedDependencies} from "../src/preview-dependencies.ts";
 
 test("dependency copies preserve executable links, track added files and keep snapshot writes separate",async()=>{
@@ -13,7 +13,7 @@ test("dependency copies preserve executable links, track added files and keep sn
     await symlink(join(root,"node_modules/tool/bin/cli.js"),join(root,"node_modules/.bin/tool"));
     const inputs=await captureDependencies(root,["node_modules","node_modules/tool"],dest,["src.ts"]);
     assert.deepEqual(inputs.roots,["node_modules"]);
-    assert.equal(await readlink(join(dest,"node_modules/.bin/tool")),"../tool/bin/cli.js");
+    assert.equal((await readlink(join(dest,"node_modules/.bin/tool"))).split(sep).join("/"),"../tool/bin/cli.js");
     assert.deepEqual(await changedDependencies(root,inputs.entries),{changed:[],unavailable:[]});
     assert.deepEqual(await changedDependencies(dest,inputs.entries,undefined,true),{changed:[],unavailable:[]});
     await writeFile(join(root,"node_modules/tool/added.js"),"new dependency");

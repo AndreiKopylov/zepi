@@ -19,7 +19,12 @@ export function editorTools(cwd: string, sessionId: string, client: Pick<AgentCo
   const detectImageMimeType = async (path: string) => {
     const output = outputImage(path); if (output) return output.mimeType;
     // Reads may target skills and commands outside the project; only writes stay inside it.
-    const canonical = (await readableFile(cwd, path)).canonical;
+    // Missing files cannot be images: let the read/write itself report ENOENT.
+    const canonical = await readableFile(cwd, path).then(file => file.canonical).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (!canonical) return null;
     // The public pi detector only sniffs the header. Read actual image contents
     // through the native snapshot endpoint, with its exclusions and size bound.
     const mime = await detectSupportedImageMimeTypeFromFile(canonical).catch((error: NodeJS.ErrnoException) => {
@@ -29,9 +34,18 @@ export function editorTools(cwd: string, sessionId: string, client: Pick<AgentCo
     if (mime) imagePaths.add(canonical); else imagePaths.delete(canonical);
     return mime;
   };
+  // Missing files may live only in native buffers (created but unsaved): resolve the
+  // workspace boundary tolerantly, then read natively. Disk reads stay exact.
+  const locate = async (path: string) => {
+    try { return await readableFile(cwd, path); }
+    catch (error) {
+      if ((error as Error).message.startsWith('Private workspace storage')) throw error;
+      return { canonical: await workspacePath(cwd, path, true), insideWorkspace: true };
+    }
+  };
   const readFile = async (path: string) => {
     const output = outputImage(path); if (output) return Buffer.from(output.data, 'base64');
-    const file = await readableFile(cwd, path);
+    const file = await locate(path);
     // Skills and commands live outside the project as plain files: no buffer, no snapshot.
     if (!file.insideWorkspace) return readFileFromDisk(file.canonical);
     const canonical = file.canonical;
@@ -57,7 +71,15 @@ export function editorTools(cwd: string, sessionId: string, client: Pick<AgentCo
     }, { cancellationSignal: signals.getStore() });
     readPaths.add(canonical);
   };
-  const access = async (path: string) => { if (!outputImage(path)) await readableFile(cwd, path); };
+  const access = async (path: string) => {
+    if (outputImage(path)) return;
+    try { await readableFile(cwd, path); }
+    catch (error) {
+      // Writes create missing files: only the workspace boundary and private storage apply.
+      if ((error as Error).message.startsWith('Private workspace storage')) throw error;
+      await workspacePath(cwd, path, true);
+    }
+  };
   return [
     defineTool(createReadToolDefinition(cwd, { operations: { readFile, access, detectImageMimeType } })),
     defineTool(createEditToolDefinition(cwd, { operations: { readFile, writeFile, access } })),

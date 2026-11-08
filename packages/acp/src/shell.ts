@@ -20,7 +20,9 @@ const winShell=():{command:string;args:(command:string)=>string[]}=>{
   }
   candidates.push('C:/Program Files/Git/bin/bash.exe','C:/Program Files (x86)/Git/bin/bash.exe');
   const bash=candidates.find(path=>existsSync(path));
-  return bash?{command:bash,args:(c:string)=>['--noprofile','--norc','-c',c]}:{command:'cmd.exe',args:(c:string)=>['/c',c]};
+  // Nothing on Windows reaps a background job whose parent shell already exited, so bash kills its own on EXIT.
+  const reaped=(c:string)=>`trap 'kill -9 $(jobs -p) 2>/dev/null; wait 2>/dev/null' EXIT; ${c}`;
+  return bash?{command:bash,args:(c:string)=>['--noprofile','--norc','-c',reaped(c)]}:{command:'cmd.exe',args:(c:string)=>['/c',c]};
 };
 const shellSpec=process.platform==='win32'?winShell():{command:'/bin/bash',args:(c:string)=>['--noprofile','--norc','-c',c]};
 type Snapshot={content:string;disk:string|null;buffer:string|null};

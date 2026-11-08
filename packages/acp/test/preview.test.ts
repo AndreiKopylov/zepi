@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile, readdir, symlink, cp, readlink, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile, readdir, symlink, cp, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,7 +64,6 @@ async function harness(steps: FixtureStep[], options: {
   const toAgent = new TransformStream(), toClient = new TransformStream();
   const server = await startZepiAgent(cwd, join(cwd, "sessions"), { readable: toAgent.readable, writable: toClient.writable }, fixture.runtime);
   const updates: unknown[] = [];
-  const proposals: any[] = [];
   const connection = client({ name: "zepi-preview-test" })
     .onRequest(methods.client.fs.readTextFile, async ({ params }) => {
       await options.beforeRead?.(params._meta?.["zepi.dev/observeBuffer"] === true);
@@ -79,12 +78,6 @@ async function harness(steps: FixtureStep[], options: {
       const disk=await readFile(params.path).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error;return undefined;});
       const buffer=buffers.get(params.path)??(disk&&!disk.includes(0)&&Buffer.from(disk.toString('utf8')).equals(disk)?disk.toString('utf8'):null);
       return {content:(buffer===null?disk!:Buffer.from(buffer)).toString('base64'),disk:disk?.toString('base64')??null,buffer};
-    })
-    .onRequest('_zepi/fs/propose', {parse:raw=>raw}, async ({params}: any) => {
-      const disk=await readFile(params.path).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error;return undefined;});
-      assert.equal(disk?.toString('base64')??null,params.expectedDisk);
-      if(params.expectedBuffer!==null)assert.equal(buffers.get(params.path)??disk?.toString('utf8'),params.expectedBuffer);
-      const reviewId=crypto.randomUUID();proposals.push({...params,reviewId});return {reviewId};
     })
     .onRequest(EDITOR_QUERY,{parse:raw=>raw},()=>({output:[...buffers.keys()].map(path=>path.slice(cwd.length+1)).join('\n'),truncated:false}))
     .onRequest(methods.client.session.requestPermission, () => ({ outcome: { outcome: "selected", optionId: "allow_once" } }))
@@ -113,7 +106,7 @@ async function harness(steps: FixtureStep[], options: {
   const newTask = () => connection.agent.request(methods.agent.session.new, { cwd, mcpServers: options.browser ? [{ name: "zepi_browser", command: process.execPath,
     args: [fileURLToPath(new URL("../../runtime/bin/browser-server.mjs", import.meta.url))], env: [{ name: "JEV_BROWSER_HEADED", value: "0" }],
   }] : [] });
-  return { cwd, buffers, terminals, updates, proposals, newTask, requests: fixture.requests,
+  return { cwd, buffers, terminals, updates, newTask, requests: fixture.requests,
     prompt: (sessionId: string) => connection.agent.request(methods.agent.session.prompt, { sessionId, prompt: [{ type: "text", text: "Run the preview verification fixture." }] }),
     cancel: (sessionId: string) => connection.agent.notify(methods.agent.session.cancel, { sessionId }),
     close: (sessionId: string) => connection.agent.request(methods.agent.session.close, { sessionId }),
@@ -287,12 +280,10 @@ const projectStart = () => call("preview", {
 
 async function assertProjectInputsReleased(cwd: string) {
   const previews = join(cwd, "previews");
-  const links = (await readdir(previews, {recursive: true})).filter(path => path.endsWith("/files"));
-  assert.ok(links.length > 0);
-  for (const path of links) {
-    const target = await readlink(join(previews, path));
-    await assert.rejects(stat(target), {code: "ENOENT"}, "temporary inputs must be removed before the ACP session is closed");
-  }
+  const entries = await readdir(previews, {recursive: true});
+  // A released run keeps its evidence; releaseInputs drops the captured inputs and their link together.
+  assert.ok(entries.some(path => /[\\/]manifest\.json$/.test(path)), "the project run keeps its manifest after cleanup");
+  assert.deepEqual(entries.filter(path => /[\\/]files$/.test(path)), [], "captured inputs must be released before the ACP session is closed");
 }
 
 test("pi builds unsaved TypeScript with installed dependencies, repairs browser behavior and rechecks a fresh project", {timeout:120_000}, async () => {
@@ -480,11 +471,10 @@ test('shell conflict, deletion and binary outputs remain recoverable without ove
     assert.equal(h.buffers.get(join(h.cwd,'doomed.txt')),'Unsaved content to retain');
     assert.equal(await readFile(join(result.recovery,'index.html'),'utf8'),'command edit');
     assert.deepEqual(await readFile(join(result.recovery,'binary.bin')),Buffer.from([0]));
-    assert.ok(result.changes.some((c:any)=>c.kind==='deleted'&&c.status==='review'));
-    assert.ok(result.changes.some((c:any)=>c.path==='binary.bin'&&c.status==='review'));
-    assert.equal(h.proposals.length,2);
-    assert.equal(h.proposals.find((p:any)=>p.path.endsWith('doomed.txt')).expectedBuffer,'Unsaved content to retain');
-    assert.ok(result.changes.some((c:any)=>c.path==='index.html'&&c.status==='preserved'));
+    // Only plain new text merges into buffers; binary, deleted and conflicting outputs stay in the copy.
+    assert.deepEqual(result.changes.map((c:any)=>`${c.path}:${c.kind}:${c.status}`).sort(),
+      ['binary.bin:created:preserved','changed.html:created:applied','doomed.txt:deleted:preserved','index.html:modified:preserved']);
+    assert.ok(result.changes.filter((c:any)=>c.status==='preserved').every((c:any)=>c.reason));
     assert.equal(await readFile(join(h.cwd,'index.html'),'utf8'),source(7));
   } finally {await h.dispose();}
 });
@@ -505,7 +495,7 @@ test('failed shell commands retain results and terminate background descendants'
   } finally {await h.dispose();}
 });
 
-test('shell captures binary originals and proposes exact replacement and deletion without changing disk', {timeout:30_000}, async()=>{
+test('shell captures binary outputs into a recoverable copy without changing the project disk', {timeout:30_000}, async()=>{
   let result:any;
   const h=await harness([
     ()=>call('bash',{command:"cp asset.bin copy.bin; printf '\\000\\377\\004' > asset.bin; rm doomed.bin",files:['asset.bin','doomed.bin']}),
@@ -515,16 +505,12 @@ test('shell captures binary originals and proposes exact replacement and deletio
     await writeFile(join(h.cwd,'asset.bin'),Buffer.from([0,255,2]));
     await writeFile(join(h.cwd,'doomed.bin'),Buffer.from([0,3]));
     const task=await h.newTask();await h.prompt(task.sessionId);
-    assert.equal(result.changes.length,3);
-    assert.ok(result.changes.every((change:any)=>change.status==='review'&&change.reviewId));
-    assert.equal(h.proposals.length,3);
-    const asset=h.proposals.find(p=>p.path.endsWith('/asset.bin'));
-    assert.deepEqual(Buffer.from(asset.expectedDisk,'base64'),Buffer.from([0,255,2]));
-    assert.deepEqual(Buffer.from(asset.output,'base64'),Buffer.from([0,255,4]));
-    assert.equal(asset.expectedBuffer,null);
-    const deleted=h.proposals.find(p=>p.path.endsWith('/doomed.bin'));
-    assert.equal(deleted.output,null);
-    assert.deepEqual(Buffer.from(deleted.expectedDisk,'base64'),Buffer.from([0,3]));
+    assert.deepEqual(result.changes.map((c:any)=>`${c.path}:${c.kind}:${c.status}`).sort(),
+      ['asset.bin:modified:preserved','copy.bin:created:preserved','doomed.bin:deleted:preserved']);
+    assert.ok(result.changes.every((c:any)=>c.reason));
+    // The captured copy keeps every binary output byte for byte, so nothing is lost by not touching the project.
+    assert.deepEqual(await readFile(join(result.recovery,'asset.bin')),Buffer.from([0,255,4]));
+    assert.deepEqual(await readFile(join(result.recovery,'copy.bin')),Buffer.from([0,255,2]));
     assert.deepEqual(await readFile(join(h.cwd,'asset.bin')),Buffer.from([0,255,2]));
     assert.deepEqual(await readFile(join(h.cwd,'doomed.bin')),Buffer.from([0,3]));
     await assert.rejects(stat(join(h.cwd,'copy.bin')));

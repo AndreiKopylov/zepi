@@ -23,7 +23,7 @@ $iscc = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw 'Inno Setup not found. Install it with: winget install -e --id JRSoftware.InnoSetup' }
 
-# Sources: build output, the repository itself, and the runtime payload (node/python/browsers).
+# Sources: build output, the repository itself, and the runtime payload (node/python).
 $fromRepo = @('packages', 'node_modules')
 # native/overlay holds 635 MB of fork sources; the installer only needs the runtime defaults
 $nativeFiles = @('pi-defaults')
@@ -31,7 +31,7 @@ $fromPayload = @('node', 'python')
 if (-not (Test-Path $Exe)) { throw ('no build output: ' + $Exe + ' (run win-build.cmd first)') }
 foreach ($item in $fromRepo) { if (-not (Test-Path (Join-Path $Repo $item))) { throw ('repo is missing ' + $item) } }
 if (-not (Test-Path (Join-Path $Repo 'native\pi-defaults'))) { throw 'repo is missing native/pi-defaults' }
-foreach ($item in $fromPayload) { if (-not (Test-Path (Join-Path $Payload $item))) { throw ('payload is missing ' + (Join-Path $Payload $item) + ' (scripts/prepare-python.ps1, node zip, scripts/setup/browser.mjs)') } }
+foreach ($item in $fromPayload) { if (-not (Test-Path (Join-Path $Payload $item))) { throw ('payload is missing ' + (Join-Path $Payload $item) + ' (scripts/prepare-python.ps1, node zip)') } }
 if (-not (Test-Path (Join-Path $Repo 'native\pi-defaults\skills'))) { throw 'repo is missing native/pi-defaults/skills' }
 
 function Copy-Tree([string]$From, [string]$To) {
