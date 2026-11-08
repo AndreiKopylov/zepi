@@ -11,6 +11,20 @@ All notable changes to Zepi are documented here. The format follows
 - `npm run smoke`: a P0 bundle check (seeded defaults, freshness of the compiled ACP entry,
   session open, tools, subagents, browser, optional preview) that also runs against a deployed
   bundle via `--root`, masks credentials in its output and fails only on newly red tests.
+- The task browser honors a window mode: the Browser use page gains a Window setting
+  (Fullscreen by default, plus Maximized and Normal); headed Chromium starts in that mode
+  and the page fills the window instead of a fixed 1120x780 viewport. Headless verification
+  keeps the fixed viewport, so screenshots and tests measure the same geometry as before.
+  The window state is additionally applied over CDP, because Chrome drops the startup
+  switches whenever it restores previous session bounds. The page's dropdowns open
+  left-aligned under their trigger, and the save notice appears in the section header
+  instead of shifting the whole page.
+- Closing the task browser window by hand no longer poisons the next browser call: the
+  service drops the dead handle on disconnect and relaunches once inside the failing call.
+- A headed browser in fullscreen or maximized mode no longer shows the page at half width
+  for a moment: the 1120x780 device-metrics override is skipped when the page follows the
+  window, because the override died with its CDP session right after launch and Chrome
+  snapped to the window size mid-paint.
 
 ### Fixed
 

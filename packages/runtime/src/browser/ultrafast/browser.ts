@@ -29,7 +29,9 @@ export class FastBrowser {
     const browser=new FastBrowser(session,signal);
     browser.page=page;
     try {
-      await browser.call('Emulation.setDeviceMetricsOverride',{width:1120,height:780,deviceScaleFactor:1,mobile:false});
+      // A null viewport means the page follows the window: pinning it there would show a
+      // half-width page until the attach session detaches and the override dies with it.
+      if (page.viewportSize() !== null) await browser.call('Emulation.setDeviceMetricsOverride',{width:1120,height:780,deviceScaleFactor:1,mobile:false});
       await browser.call('Emulation.setFocusEmulationEnabled',{enabled:true});
       browser.target=(await browser.call('Target.getTargetInfo')).targetInfo.targetId;
       return browser;

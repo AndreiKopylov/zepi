@@ -30,7 +30,8 @@ export async function serveBrowser() {
   let activeAgent=null,activeFast=null,inspector=null;
 
   const currentExecutable = () => resolveBrowserExecutable(process.env.ZEPI_BROWSER_EXECUTABLE || '').path ?? '';
-  async function browser() {
+  const deadBrowser = error => /has been closed|has been disconnected|Target closed|Connection closed|disconnected|no object with guid|browser is closing|Session closed/i.test(String(error?.message ?? error));
+  async function browser(retry = true) {
     // Re-read settings per launch: a path or installation changed mid-session must win over the startup snapshot.
     const fresh = await browserDecisionEnvironment(piDirectory());
     const executable = resolveBrowserExecutable(fresh.ZEPI_BROWSER_EXECUTABLE || '').path ?? '';
@@ -38,20 +39,46 @@ export async function serveBrowser() {
     launch ??= (async()=>{
       const insecure=(fresh.ZEPI_BROWSER_INSECURE||process.env.ZEPI_BROWSER_INSECURE)==='1';
       const headed=process.env.JEV_BROWSER_HEADED !== '0';
+      // A headed window follows the user's window mode; headless keeps the fixed viewport the tests measure.
+      const windowMode=headed?(process.env.ZEPI_BROWSER_WINDOW||'fullscreen'):'normal';
+      const windowArgs=windowMode==='normal'?[]:(windowMode==='maximized'?['--start-maximized']:['--start-fullscreen']);
       // One launch owns the executable choice: the resolved path, else playwright's registry.
-      const pw=await chromium.launch({headless:!headed,executablePath:executable,...(insecure?{args:['--ignore-certificate-errors']}:{})});
+      const pw=await chromium.launch({headless:!headed,executablePath:executable,args:[...(insecure?['--ignore-certificate-errors']:[]),...windowArgs]});
+      pw.on('disconnected', () => { launch = undefined; });
       const b=await JevBrowser.launch({headed,highlight:engine==='legacy'&&headed,browser:pw,
-        ...(engine==='ultrafast'?{viewport:{width:1120,height:780}}:{})});
+        ...(windowMode==='normal'?(engine==='ultrafast'?{viewport:{width:1120,height:780}}:{}):{viewport:null})});
       if(engine==='ultrafast') {
         try {
           const initial=b.page,fast=await FastBrowser.create('about:blank',lifetime.signal,{context:b.context});
           b.page=fast.page;await initial.close();await fast.detach();
         } catch(error) {await b.close();throw error;}
       }
+      if (headed && windowMode!=='normal') {
+        // Chrome drops --start-fullscreen/--start-maximized whenever it restores session bounds;
+        // the window state over CDP applies regardless of that. Applied after the fast page
+        // exists: maximizing earlier stops Chrome from materializing the background target.
+        await pw.newBrowserCDPSession().then(async cdp => {
+          try {
+            const {targetInfos} = await cdp.send('Target.getTargets');
+            const page = targetInfos.find(info => info.type === 'page');
+            if (page) {
+              const {windowId} = await cdp.send('Browser.getWindowForTarget', {targetId: page.targetId});
+              await cdp.send('Browser.setWindowBounds', {windowId, bounds:{windowState: windowMode==='maximized'?'maximized':'fullscreen'}});
+            }
+          } finally { await cdp.detach().catch(() => {}); }
+        }).catch(() => {});
+      }
+      b.zepiPw = pw;
       return b;
     })()
       .catch(error => {launch=undefined;throw error;});
-    return launch;
+    const handle = await launch;
+    // A window closed by hand leaves a resolved but dead handle; catch it before the tool runs.
+    if (retry && handle?.zepiPw && !handle.zepiPw.isConnected()) {
+      launch = undefined;
+      return browser(false);
+    }
+    return handle;
   }
   async function close() {
     handoffEpoch++;
@@ -128,6 +155,12 @@ export async function serveBrowser() {
         extra.signal.addEventListener('abort',cancel,{once:true});
         try {return await execute(args,extra);}
         catch(error) {
+          // Closing the window by hand leaves the cached handle dead; relaunch once
+          // inside the same call instead of reporting the stale handle's error.
+          if (!extra.signal.aborted && deadBrowser(error)) {
+            launch = undefined;
+            try {return await execute(args,extra);} catch (again) {error = again;}
+          }
           return {isError:true,...text({status:extra.signal.aborted?'cancelled':'error',
             message:String(error?.message??error).slice(0,1200),browserPath:currentExecutable(),
             recovery:'Re-observe with browser_snapshot or reopen after checking the error. Never repeat an unconfirmed action with side effects.'})};
