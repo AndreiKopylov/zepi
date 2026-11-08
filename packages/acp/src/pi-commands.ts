@@ -7,7 +7,6 @@ import { createPiUI } from "./pi-ui.ts";
 import { exportPiSession, piChangelog } from "./pi-command-files.ts";
 import { manageAgentRoles } from "./agent-roles.ts";
 import { nativeUiAction } from "./native-ui.ts";
-import {refreshOpenRouterCatalog} from '../../runtime/src/pi/model-catalog.mjs';
 import { shareCommand, bugCommand } from "./pi-sharing.ts";
 import { sessionCommand, treeCommand } from "./pi-session-commands.ts";
 import { loginPiProvider } from "./pi-auth.ts";
@@ -313,18 +312,12 @@ export function installPiCommands(pi: AgentSession, client: AgentContext, suppor
           }
           case "reload": {
             if (argument) throw new Error("Usage: /reload (no arguments).");
-            let modelCatalogNotice = '';
-            await pi.reload({beforeSessionStart: async () => {
-              await pi.modelRuntime.refresh({allowNetwork: false, signal});
-              modelCatalogNotice = await refreshOpenRouterCatalog(pi.modelRuntime, signal);
-            }});
+            await pi.reload();
             const errors = pi.resourceLoader.getExtensions().errors;
-            await refreshModelScope?.();
-            await context.publishAvailableModels(await pi.modelRuntime.getAvailable());
             context.enqueue({sessionUpdate: "available_commands_update", availableCommands: catalogue()});
             context.enqueue({sessionUpdate: "config_option_update", configOptions: context.configOptions()});
             if (errors.length) throw new Error(`Reload completed with extension errors:\n${errors.map(error => error.error).join("\n")}`);
-            output = "Reloaded global pi extensions, skills, templates and settings." + (modelCatalogNotice ? `\n${modelCatalogNotice}` : '');
+            output = "Reloaded global pi extensions, skills, templates and settings.";
             break;
           }
           case "scoped-models": {

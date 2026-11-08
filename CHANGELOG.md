@@ -4,6 +4,42 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.1-beta4] - 2026-11-08
+
+### Added
+
+- Zepi refreshes its model catalog from pi.dev on startup, in the background and at most once
+  every four hours. The catalog is cached in `ZEPI_PI_CONFIG_DIR/models-store.json`, so
+  offline launches still see the latest models, and `PI_OFFLINE` suppresses network access.
+  Picking up renamed or newly released models (such as `hy4`) no longer requires a
+  separately installed pi: Zepi owns its own config directory and bundled catalog.
+- The pi settings page button is now `Reload & update models`: it re-reads the settings
+  page and forces a catalog refresh regardless of the four-hour interval.
+- Selecting text in an agent message and choosing `Copy selection into composer` (or
+  pressing `Ctrl-Shift-.`) inserts that selection into the message composer and focuses it.
+  Both previously dispatched `AddSelectionToThread`, which only reads editor and terminal
+  selections, so they silently did nothing in message views.
+
+### Changed
+
+- `/reload` in the composer is a pure pi reload again: extensions, skills, templates,
+  themes and settings, followed by a republish of the command and config-option lists.
+  It no longer refreshes the model runtime, model scope or the available-model list.
+- Catalog refresh is shared by startup and the settings button. The OpenRouter-only
+  helper is gone; all built-in providers are refreshed from the same pi.dev catalog.
+- `Ctrl-Shift-.` still works for editor and terminal selections: when a message has no
+  markdown selection, the new handler propagates the action to the original Zed handler.
+
+### Fixed
+
+- The agent message context menu no longer advertises `Add Selection to Thread`, which
+  could not act on message selections.
+
+### Tests
+
+- A unit test covers the offline, forced-refresh and provider-failure paths of the shared
+  catalog refresh.
+
 ## [0.0.1-beta3] - 2026-11-07
 
 ### Added

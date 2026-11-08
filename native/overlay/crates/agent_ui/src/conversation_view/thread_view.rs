@@ -9502,14 +9502,39 @@ impl ThreadView {
     ) -> AnyElement {
         let entity = cx.entity();
         let workspace = self.workspace.clone();
+        let trigger_markdown = markdown.clone();
+        let trigger_editor = self.message_editor.clone();
+        let menu_editor = self.message_editor.clone();
 
         right_click_menu(format!("agent_context_menu-{}", entry_ix))
-            .trigger(move |_, _, _| message_body)
+            .trigger(move |_, _, _| {
+                div()
+                    .child(message_body)
+                    .on_action(
+                        move |_: &zed_actions::agent::AddSelectionToThread, window, cx| {
+                            let text = trigger_markdown
+                                .as_ref()
+                                .and_then(|markdown| {
+                                    markdown.read(cx).selected_source().map(|text| text.to_string())
+                                })
+                                .filter(|text| !text.is_empty());
+                            let Some(text) = text else {
+                                cx.propagate();
+                                return;
+                            };
+                            trigger_editor.update(cx, |editor, cx| {
+                                editor.insert_text(&text, window, cx);
+                            });
+                            trigger_editor.read(cx).focus_handle(cx).focus(window, cx);
+                        },
+                    )
+            })
             .menu(move |window, cx| {
                 let focus = window.focused(cx);
                 let entity = entity.clone();
                 let workspace = workspace.clone();
                 let markdown = markdown.clone();
+                let menu_editor = menu_editor.clone();
 
                 ContextMenu::build(window, cx, move |menu, _, cx| {
                     let this = entity.read(cx);
@@ -9579,18 +9604,18 @@ impl ThreadView {
                             })
                             .separator()
                         })
-                        .when_some(selected_text.clone(), |menu, _| {
+                        .when_some(selected_text.clone(), |menu, selected_text| {
+                            let composer = menu_editor.clone();
                             menu.item(
-                                ContextMenuEntry::new("Add Selection to Thread")
+                                ContextMenuEntry::new("Copy selection into composer")
                                     .action(
                                         zed_actions::agent::AddSelectionToThread.boxed_clone(),
                                     )
-                                    .handler(|window, cx| {
-                                        window.dispatch_action(
-                                            zed_actions::agent::AddSelectionToThread
-                                                .boxed_clone(),
-                                            cx,
-                                        );
+                                    .handler(move |window, cx| {
+                                        composer.update(cx, |editor, cx| {
+                                            editor.insert_text(&selected_text.to_string(), window, cx);
+                                        });
+                                        composer.read(cx).focus_handle(cx).focus(window, cx);
                                     }),
                             )
                         })
