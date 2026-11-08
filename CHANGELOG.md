@@ -25,6 +25,12 @@ All notable changes to Zepi are documented here. The format follows
   for a moment: the 1120x780 device-metrics override is skipped when the page follows the
   window, because the override died with its CDP session right after launch and Chrome
   snapped to the window size mid-paint.
+- Code spans with an elided path (`core/.../Events/ApplicantDto.cs`) become clickable file
+  mentions when exactly one worktree file matches the head and tail around `...`. Paths with
+  multiple elisions or several matches stay plain, so a reply cannot link to the wrong file;
+  the lookup filters by file name before walking worktree entries. Covered by a gpui test.
+- The agent message context menu gains `Add Selection to Thread`, reusing Zed's existing
+  action instead of introducing a new command.
 
 ### Fixed
 
@@ -54,6 +60,11 @@ All notable changes to Zepi are documented here. The format follows
 - A finished turn no longer leaves the last lines of a reply unreachable behind the
   status row: the message list remeasures its tail and returns to the bottom when the
   turn ends, instead of keeping stale row heights until the thread is reopened.
+- `PRODUCT_VERSION` reports `0.0.1-beta3` in the About window, matching the changelog.
+- `npm run test:acp` no longer fails on load: the removed Computer Use suite was still listed
+  in `package.json`.
+- `AGENTS.md` matches the pinned stack (pi 1.5.0, English and Russian READMEs) and asks the
+  agent to offer `npm run smoke` after medium or large changes, never as a pre-build gate.
 
 ## [0.0.1-beta2] - 2026-11-05
 

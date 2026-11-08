@@ -1,7 +1,7 @@
 # AGENTS.md — zepi
 
 Windows port of zepi: an AI workspace on top of Zed v1.26.2 (pin in `native/zed.json`) with the
-pi 1.4.0 agent (ACP) and office document viewers (xlsx with editing, docx, pptx) on vendored
+pi 1.5.0 agent (ACP) and office document viewers (xlsx with editing, docx, pptx) on vendored
 crafts. Rust (gpui) + TypeScript (pi layer). See README.md for the human-readable intro.
 
 ## Repository layout
@@ -53,12 +53,14 @@ scripts\win-run.py                 :: run with seeded configs
 - TS tests: `npm run test:acp` (clean env: unset OPENCODE_API_KEY), types: `npm run check`.
 - Vendor tests: `cargo test` inside `native/overlay/vendor/gridcraft` (own workspace, fast).
 - zepi_ui has `#[cfg(test)]` units; first run builds the Zed dev chain (~40 min), run on demand.
+- After medium or large changes, offer to run `npm run smoke -- --root <bundle>` (`--full` for
+  preview/shell or `packages/acp/helpers`). Propose only; never before a build or without a go-ahead.
 
 ## Conventions
 
 - Code, identifiers and code comments are English. Existing Russian comments were translated or
   removed; keep it that way.
-- User-facing docs: README.md is Russian for now, an English version is planned; AGENTS.md is English.
+- User-facing docs: README.md (English) and README.ru.md (Russian); AGENTS.md is English.
 - Commit messages are English, matching the repository history.
 - No secrets or internal endpoints in the repo: `native/pi-defaults` ships a neutral example
   (key via `$PROVIDER_API_KEY`); corp deployments keep their own seeds inside the bundle,

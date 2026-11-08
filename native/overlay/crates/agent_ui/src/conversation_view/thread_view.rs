@@ -9579,6 +9579,21 @@ impl ThreadView {
                             })
                             .separator()
                         })
+                        .when_some(selected_text.clone(), |menu, _| {
+                            menu.item(
+                                ContextMenuEntry::new("Add Selection to Thread")
+                                    .action(
+                                        zed_actions::agent::AddSelectionToThread.boxed_clone(),
+                                    )
+                                    .handler(|window, cx| {
+                                        window.dispatch_action(
+                                            zed_actions::agent::AddSelectionToThread
+                                                .boxed_clone(),
+                                            cx,
+                                        );
+                                    }),
+                            )
+                        })
                         .when_some(selected_text, |menu, selected_text| {
                             menu.entry("Copy", Some(Box::new(markdown::Copy)), move |_, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
