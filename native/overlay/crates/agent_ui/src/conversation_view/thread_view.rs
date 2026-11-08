@@ -699,6 +699,18 @@ fn zepi_line_height(cx: &App) -> f32 {
         * crate::zepi_theme::thread_line_height()
 }
 
+/// One owner of the composer height and clipping; every render site reads this
+/// instead of re-deriving the state from flags.
+#[derive(Clone, Copy, PartialEq)]
+enum ZepiComposerLayout {
+    /// Grows with the draft up to the editor auto-height cap, then scrolls inside.
+    Auto,
+    /// Height dragged by the user and persisted; the draft scrolls inside it.
+    Capped(Pixels),
+    /// The expand toggle: most of the panel height.
+    Expanded,
+}
+
 pub struct ThreadView {
     pub(crate) root_thread_id: ThreadId,
     pub session_id: acp_v2::SessionId,
@@ -3521,6 +3533,18 @@ impl ThreadView {
 
     // editor methods
 
+    /// Auto growth also gets a panel-share ceiling in the render, so a misbehaving
+    /// auto-height can never eat the thread list; the editor scrolls inside either way.
+    fn composer_layout(&self) -> ZepiComposerLayout {
+        if self.editor_expanded {
+            return ZepiComposerLayout::Expanded;
+        }
+        match self.zepi_composer_px.filter(|_| self.zepi_composer_floor) {
+            Some(h) => ZepiComposerLayout::Capped(h),
+            None => ZepiComposerLayout::Auto,
+        }
+    }
+
     fn composer_mode_key(&self) -> isize {
         let lh = (crate::zepi_theme::thread_line_height() * 100.0).round() as isize;
         match self.zepi_composer_px {
@@ -5877,7 +5901,7 @@ impl ThreadView {
         // once dragged, the box stays until double click reset;
         // the editor fills it, so the area is usable input, not dead space
         self.zepi_composer_floor = self.zepi_composer_px.is_some();
-        let composer_cap = self.zepi_composer_px;
+        let composer_layout = self.composer_layout();
         let mode_key = self.composer_mode_key();
         if mode_key != self.zepi_composer_mode_key {
             let view = cx.entity();
@@ -5948,6 +5972,7 @@ impl ThreadView {
                         .w_full()
                         .h(px(6.))
                         .cursor(gpui::CursorStyle::ResizeUpDown)
+                        .tooltip(Tooltip::text("Drag to cap the composer height; drag it down or toggle expand at max to return to auto"))
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
                             {
                                 if this.editor_expanded {
@@ -5973,13 +5998,13 @@ impl ThreadView {
                         .flex_none()
                         .border_t_1()
                         .border_color(cx.theme().colors().border)
-                        .when(editor_expanded, |this| this.h(vh(0.8, window)))
+                        .when(composer_layout == ZepiComposerLayout::Expanded, |this| this.h(vh(0.8, window)))
                 } else if zepi {
                     this.flex_none()
                         .w_full()
                         .border_t_1()
                         .border_color(cx.theme().colors().border)
-                        .when(editor_expanded, |this| this.h(vh(0.8, window)))
+                        .when(composer_layout == ZepiComposerLayout::Expanded, |this| this.h(vh(0.8, window)))
                 } else {
                     this.flex_1().size_full()
                 }
@@ -6010,12 +6035,23 @@ impl ThreadView {
                             .pt_1()
                             .pr_2p5()
                             .when(zepi, |this| {
-                                match composer_cap.filter(|_| self.zepi_composer_floor) {
-                                    Some(h) => this.h(h).flex_none().overflow_hidden(),
-                                    None => this.min_h(px(72.)).flex_none(),
+                                match composer_layout {
+                                    ZepiComposerLayout::Capped(h) => this.h(h).flex_none().overflow_hidden(),
+                                    ZepiComposerLayout::Expanded => this.flex_1().min_h_0(),
+                                    ZepiComposerLayout::Auto => this
+                                        .min_h(px(72.))
+                                        .max_h(vh(0.4, window))
+                                        .flex_none()
+                                        .overflow_hidden(),
                                 }
                             })
-                            .when(zepi && composer_cap.is_some(), |this| {
+                            .when(zepi, |this| {
+                                this.rounded_md()
+                                    .border_1()
+                                    .border_color(cx.theme().colors().border_variant)
+                                    .bg(cx.theme().colors().editor_background)
+                            })
+                            .when(matches!(composer_layout, ZepiComposerLayout::Capped(_)), |this| {
                                 this.on_mouse_down(gpui::MouseButton::Left, {
                                     let focus = self
                                         .message_editor
