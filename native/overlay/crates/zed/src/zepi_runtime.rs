@@ -43,6 +43,8 @@ fn reap_descendants_on_exit() {
 pub fn configure() -> Result<Option<PathBuf>> {
     #[cfg(windows)]
     reap_descendants_on_exit();
+    // Agents inherit this so a new connection can replace a lease its own Zepi abandoned.
+    unsafe { env::set_var("ZEPI_APP_PID", std::process::id().to_string()); }
 
     let executable = env::current_exe()?;
     let Some(contents) = executable.parent().and_then(Path::parent) else { return Ok(None); };

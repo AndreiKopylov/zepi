@@ -111,3 +111,26 @@ test('a stale ownership record is taken over instead of blocking the task foreve
     assert.deepEqual(await readdir(join(dir,'session-owners')),[]);
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
+
+test('a new connection from the same Zepi instance replaces its abandoned lease', {timeout:10_000}, async () => {
+  const dir=await realpath(await mkdtemp(join(tmpdir(),'zepi-owner-app-')));
+  const previous=process.env.ZEPI_APP_PID;
+  try {
+    process.env.ZEPI_APP_PID='424242';
+    const sessionId='task';
+    const release=await sessionOwners(dir)(sessionId);
+    const file=join(dir,'session-owners',createHash('sha256').update(sessionId).digest('hex')+'.json');
+    await writeFile(file, JSON.stringify({pid:process.pid,token:'abandoned',updatedAt:Date.now(),app:424242}));
+    const takeover=await sessionOwners(dir)(sessionId);
+    assert.notEqual(JSON.parse(await readFile(file,'utf8')).token,'abandoned');
+    await takeover();
+    // Another Zepi instance still keeps its live lease.
+    await writeFile(file, JSON.stringify({pid:process.pid,token:'other',updatedAt:Date.now(),app:999}));
+    await assert.rejects(sessionOwners(dir)(sessionId),/already open/);
+    await release();
+    assert.equal(JSON.parse(await readFile(file,'utf8')).token,'other');
+  } finally {
+    if (previous===undefined) delete process.env.ZEPI_APP_PID; else process.env.ZEPI_APP_PID=previous;
+    await rm(dir,{recursive:true,force:true});
+  }
+});

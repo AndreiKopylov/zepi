@@ -42,6 +42,10 @@ All notable changes to Zepi are documented here. The format follows
 
 - The agent message context menu no longer advertises `Add Selection to Thread`, which
   could not act on message selections.
+- Reopening a task no longer stays stuck on `This task is already open in another Zepi
+  window or process`. Each agent process records which Zepi instance spawned it, so a
+  connection the same instance replaces takes over its own abandoned lease instead of
+  being refused by a stale heartbeat forever.
 
 ### Tests
 
