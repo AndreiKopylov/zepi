@@ -4,7 +4,7 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
-## [0.0.1-beta4] - 2026-11-08
+## [0.0.1-beta4] - 2026-11-09
 
 ### Added
 
@@ -19,6 +19,10 @@ All notable changes to Zepi are documented here. The format follows
   pressing `Ctrl-Shift-.`) inserts that selection into the message composer and focuses it.
   Both previously dispatched `AddSelectionToThread`, which only reads editor and terminal
   selections, so they silently did nothing in message views.
+- Code spans with a line range (`path.cs:82-94`) and a trailing parenthesized note now resolve
+  to a file mention covering the whole range, matching the `:5-9` suffix Zepi emits for
+  selections. Previously those spans stayed plain text because the position parser only
+  understood a single `:row`.
 
 ### Changed
 
@@ -29,16 +33,26 @@ All notable changes to Zepi are documented here. The format follows
   helper is gone; all built-in providers are refreshed from the same pi.dev catalog.
 - `Ctrl-Shift-.` still works for editor and terminal selections: when a message has no
   markdown selection, the new handler propagates the action to the original Zed handler.
+- `write` and `read` now reach outside the workspace like pi: external paths go straight to
+  disk, while files inside the workspace keep the native editor buffers and review flow.
+  Private workspace storage (`.git`, `.local`, `.pi`, review temps) stays restricted.
+- `PRODUCT_VERSION` reports `0.0.1-beta4` in the About window.
 
 ### Fixed
 
 - The agent message context menu no longer advertises `Add Selection to Thread`, which
   could not act on message selections.
+- The composer no longer clips the last line of long drafts: the row cap accounts for the
+  container padding and borders and keeps one spare line.
+- Reopening a task no longer jumps on the first scroll: the message list remeasures its rows
+  right after restoring the saved scroll position.
 
 ### Tests
 
 - A unit test covers the offline, forced-refresh and provider-failure paths of the shared
   catalog refresh.
+- ACP tests cover external writes and private-path rejection; gpui asserts cover line-range
+  file links.
 
 ## [0.0.1-beta3] - 2026-11-07
 
@@ -164,8 +178,8 @@ All notable changes to Zepi are documented here. The format follows
   and hot-reloads, including an already dragged composer height.
 - Reading a file outside the project no longer fails with `File is outside this workspace`:
   reads follow the product full-access rule, so screenshots and documents handed by path open
-  directly instead of being copied into the project. Writes and private workspace storage
-  (`.git`, `.pi`, review temps) stay restricted.
+  directly instead of being copied into the project. Private workspace storage
+  (`.git`, `.local`, `.pi`, review temps) stays restricted.
 - File links also resolve code spans written relative to a subfolder or nested repo: a unique
   suffix match against the project file index becomes a clickable link; ambiguous matches stay
   plain code.

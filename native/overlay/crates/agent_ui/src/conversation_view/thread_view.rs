@@ -3563,9 +3563,12 @@ impl ThreadView {
         }
         self.zepi_composer_mode_key = key;
         let line_h = zepi_line_height(cx);
+        // Hard-coded box chrome for the first experiment; measure the real box next.
+        const COMPOSER_CHROME_PX: f32 = 6.0;
         let mode = match self.zepi_composer_px {
             Some(h) => {
-                let cap = (f32::from(h) / line_h).floor().max(3.0) as usize;
+                let usable = (f32::from(h) - COMPOSER_CHROME_PX).max(line_h);
+                let cap = ((usable / line_h).floor() as usize).saturating_sub(1).max(3);
                 let min = if self.zepi_composer_floor {
                     cap
                 } else {

@@ -13,7 +13,16 @@ export async function readableFile(cwd: string, path: string) {
   }
 }
 
-export async function workspacePath(cwd: string, path: string, allowMissing = false) {
+// Writes follow pi and reach outside the workspace; private storage stays blocked.
+export async function writableFile(cwd: string, path: string) {
+  const canonical = await workspacePath(cwd, path, true, true);
+  const root = await realpath(cwd);
+  const local = relative(root, canonical);
+  const insideWorkspace = !isAbsolute(local) && local !== ".." && !local.startsWith(".." + sep);
+  return { canonical, insideWorkspace };
+}
+
+export async function workspacePath(cwd: string, path: string, allowMissing = false, allowOutside = false) {
   const root = await realpath(cwd);
   let ancestor = resolve(cwd, path);
   const suffix: string[] = [];
@@ -32,7 +41,7 @@ export async function workspacePath(cwd: string, path: string, allowMissing = fa
     }
   }
   const local = relative(root, canonical);
-  if (local === ".." || local.startsWith(`..${sep}`) || isAbsolute(local)) {
+  if (!allowOutside && (local === ".." || local.startsWith(`..${sep}`) || isAbsolute(local))) {
     throw new Error("File is outside this workspace.");
   }
   if (local.split(sep).some(part => [".git", ".local", ".pi"].includes(part) || part.startsWith('.zepi-review-'))) {

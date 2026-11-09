@@ -55,6 +55,7 @@ use rope::Point;
 use settings::{NotifyWhenAgentWaiting, Settings as _, SettingsStore};
 use std::ffi::OsStr;
 use std::num::NonZeroUsize;
+use std::ops::RangeInclusive;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -1626,6 +1627,11 @@ impl ConversationView {
             list_state.scroll_to(scroll_position);
         } else {
             list_state.scroll_to_end();
+        }
+        // Row heights are cached on first render; remeasure now so the restored
+        // position stays anchored to its item instead of jumping on the first scroll.
+        if count > 0 {
+            list_state.remeasure_items(0..count);
         }
 
         AgentDiff::set_active_thread(&self.workspace, thread.clone(), window, cx);
@@ -4385,7 +4391,8 @@ impl AgentCodeSpanResolver {
     }
 
     fn resolve_uncached(&self, trimmed: &str, cx: &App) -> Option<SharedString> {
-        let path_with_position = PathWithPosition::parse_str(trimmed);
+        let (position_text, line_range) = Self::split_line_range(trimmed);
+        let path_with_position = PathWithPosition::parse_str(&position_text);
         let candidate_path = &path_with_position.path;
         if candidate_path.as_os_str().is_empty() {
             return None;
@@ -4411,11 +4418,11 @@ impl AgentCodeSpanResolver {
                     continue;
                 }
 
-                return Some(Self::mention_uri(&path_with_position, worktree, &relative_path));
+                return Some(Self::mention_uri(&path_with_position, worktree, &relative_path, line_range.clone()));
             }
 
             if let Some(relative_path) = Self::resolve_elided(candidate_path, worktree) {
-                return Some(Self::mention_uri(&path_with_position, worktree, &relative_path));
+                return Some(Self::mention_uri(&path_with_position, worktree, &relative_path, line_range.clone()));
             }
         }
 
@@ -4427,12 +4434,19 @@ impl AgentCodeSpanResolver {
         path_with_position: &PathWithPosition,
         worktree: &project::Worktree,
         relative_path: &RelPath,
+        line_range: Option<RangeInclusive<u32>>,
     ) -> SharedString {
         let abs_path = worktree.absolutize(relative_path);
-        let mention = match path_with_position.row.and_then(|row| row.checked_sub(1)) {
-            Some(line) => MentionUri::Selection {
+        let line_range = line_range.or_else(|| {
+            path_with_position
+                .row
+                .and_then(|row| row.checked_sub(1))
+                .map(|line| line..=line)
+        });
+        let mention = match line_range {
+            Some(line_range) => MentionUri::Selection {
                 abs_path: Some(abs_path),
-                line_range: line..=line,
+                line_range,
                 column: path_with_position
                     .column
                     .map(|column| column.saturating_sub(1)),
@@ -4440,6 +4454,32 @@ impl AgentCodeSpanResolver {
             None => MentionUri::File { abs_path },
         };
         mention.to_uri().to_string().into()
+    }
+
+    /// Splits an N-M line range and any trailing parenthesized note off the path text.
+    fn split_line_range(text: &str) -> (String, Option<RangeInclusive<u32>>) {
+        let mut text = text.trim_end();
+        if text.ends_with(')') {
+            if let Some(open) = text.rfind(" (") {
+                text = text[..open].trim_end();
+            }
+        }
+        let Some(colon) = text.rfind(':') else {
+            return (text.to_owned(), None);
+        };
+        let Some((start, end)) = text[colon + 1..].split_once('-') else {
+            return (text.to_owned(), None);
+        };
+        let (Ok(first), Ok(last)) = (start.parse::<u32>(), end.parse::<u32>()) else {
+            return (text.to_owned(), None);
+        };
+        if first == 0 || last < first {
+            return (text.to_owned(), None);
+        }
+        (
+            format!("{}:{}", &text[..colon], first),
+            Some((first - 1)..=(last - 1)),
+        )
     }
 
     /// Resolves a path the model abbreviated with `...` (`core/.../Events/A.cs`) by matching
@@ -5538,6 +5578,19 @@ pub(crate) mod tests {
                 column: None,
             }
         );
+        for span in ["src/main.rs:10-20", "src/main.rs:10-20 (StatusesToReject)"] {
+            let uri = cx
+                .update(|cx| resolver.try_resolve(span, cx))
+                .expect("expected a line-range code span to resolve");
+            assert_eq!(
+                MentionUri::parse(&uri, PathStyle::local()).unwrap(),
+                MentionUri::Selection {
+                    abs_path: Some(PathBuf::from(util::path!("/project/src/main.rs"))),
+                    line_range: 9..=19,
+                    column: None,
+                }
+            );
+        }
     }
 
     #[gpui::test]
