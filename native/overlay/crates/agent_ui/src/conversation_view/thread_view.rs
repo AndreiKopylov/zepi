@@ -788,6 +788,7 @@ pub struct ThreadView {
     zepi_composer_mode_key: isize,
     zepi_composer_floor: bool,
     zepi_was_generating: bool,
+    zepi_turn_stats_restored: bool,
     zepi_last_ui_columns: usize,
     zepi_last_ui_light: Option<bool>,
     pub add_context_menu_handle: PopoverMenuHandle<ContextMenu>,
@@ -1359,6 +1360,7 @@ impl ThreadView {
             zepi_composer_mode_key: -1,
             zepi_composer_floor: false,
             zepi_was_generating: false,
+            zepi_turn_stats_restored: false,
             zepi_last_ui_columns: 0,
             zepi_last_ui_light: None,
             add_context_menu_handle: PopoverMenuHandle::default(),
@@ -1793,7 +1795,7 @@ impl ThreadView {
         generation
     }
 
-    pub fn stop_turn(&mut self, generation: usize, _cx: &mut Context<Self>) {
+    pub fn stop_turn(&mut self, generation: usize, cx: &mut Context<Self>) {
         if self.turn_fields.turn_generation != generation {
             return;
         }
@@ -1804,9 +1806,35 @@ impl ThreadView {
             .map(|started| started.elapsed());
         self.turn_fields.last_turn_tokens = self.turn_fields.turn_tokens.take();
         self.turn_fields._turn_timer_task = None;
+        self.persist_turn_stats(cx);
+    }
+
+    /// Token and duration labels live in memory, so a restored thread reloads them.
+    fn restore_turn_stats(&mut self, cx: &mut Context<Self>) {
+        if self.zepi_turn_stats_restored { return; }
+        self.zepi_turn_stats_restored = true;
+        if self.agent_id.as_ref() != "zepi-pi" { return; }
+        let session = self.thread.read(cx).session_id().to_string();
+        let record = crate::zepi_task::read(&session, cx);
+        if self.turn_fields.last_turn_tokens.is_none() && self.turn_fields.last_turn_duration.is_none() {
+            self.turn_fields.last_turn_tokens = record.tokens;
+            self.turn_fields.last_turn_duration = record.duration_ms.map(std::time::Duration::from_millis);
+        }
+        if self.thread.read(cx).token_usage().is_none() {
+            if let Some(usage) = record.usage {
+                self.thread.update(cx, |thread, cx| thread.update_token_usage(Some(usage), cx));
+            }
+        }
+    }
+
+    fn persist_turn_stats(&self, cx: &mut Context<Self>) {
+        if self.agent_id.as_ref() != "zepi-pi" { return; }
+        let session = self.thread.read(cx).session_id().to_string();
+        crate::zepi_task::remember_turn(&session, self.turn_fields.last_turn_tokens, self.turn_fields.last_turn_duration, cx);
     }
 
     pub(crate) fn sync_reported_activity(&mut self, cx: &mut Context<Self>) {
+        self.restore_turn_stats(cx);
         let thread = self.thread.read(cx);
         if !thread.uses_reported_activity() {
             return;
@@ -1817,6 +1845,7 @@ impl ThreadView {
         let duration = thread.activity_duration();
         let output_tokens = thread.reported_activity_output_tokens();
 
+        let mut zepi_persist_turn_stats = false;
         match activity {
             ForegroundActivity::Unconfirmed => {
                 self.turn_fields.reported_activity_generation = None;
@@ -1842,7 +1871,11 @@ impl ThreadView {
                 if let Some(output_tokens) = output_tokens {
                     self.turn_fields.last_turn_tokens = Some(output_tokens);
                 }
+                zepi_persist_turn_stats = true;
             }
+        }
+        if zepi_persist_turn_stats {
+            self.persist_turn_stats(cx);
         }
         cx.notify();
     }
@@ -2086,7 +2119,16 @@ impl ThreadView {
         )
     }
 
+    /// The context circle reads live usage, so the last known value is kept with the task.
+    fn persist_token_usage(&self, cx: &mut Context<Self>) {
+        if self.agent_id.as_ref() != "zepi-pi" { return; }
+        let session = self.thread.read(cx).session_id().to_string();
+        let usage = self.thread.read(cx).token_usage().cloned();
+        crate::zepi_task::remember_usage(&session, usage, cx);
+    }
+
     pub fn update_turn_tokens(&mut self, update: OutputTokensUpdate, cx: &mut Context<Self>) {
+        self.persist_token_usage(cx);
         match update {
             OutputTokensUpdate::Unchanged => {}
             OutputTokensUpdate::LegacyAdd {
@@ -3557,6 +3599,7 @@ impl ThreadView {
     }
 
     fn apply_composer_mode(&mut self, cx: &mut Context<Self>) {
+        if self.editor_expanded { return; }
         let key = self.composer_mode_key();
         if self.zepi_composer_mode_key == key {
             return;
@@ -3599,18 +3642,14 @@ impl ThreadView {
             return;
         }
         if std::env::var_os("ZEPI_ROOT").is_some() {
-            // zepi: the button toggles the drag box between auto and its limit,
-            // vanilla Full mode never enters the picture
-            let at_max = self
-                .zepi_composer_px
-                .map_or(false, |h| f32::from(h) >= self.zepi_composer_max_px - 0.5);
-            if at_max {
+            // zepi: Zed full mode, so a draft longer than the box scrolls inside it
+            let expanded = !self.editor_expanded;
+            self.set_editor_is_expanded(expanded, cx);
+            if expanded {
                 self.zepi_composer_px = None;
                 save_zepi_composer_px(None);
-            } else {
-                self.zepi_composer_px = Some(px(self.zepi_composer_max_px));
-                save_zepi_composer_px(self.zepi_composer_px);
             }
+            self.zepi_composer_mode_key = -1;
             self.apply_composer_mode(cx);
             cx.stop_propagation();
             cx.notify();
@@ -5998,13 +6037,13 @@ impl ThreadView {
                         .flex_none()
                         .border_t_1()
                         .border_color(cx.theme().colors().border)
-                        .when(composer_layout == ZepiComposerLayout::Expanded, |this| this.h(vh(0.8, window)))
+                        .when(composer_layout == ZepiComposerLayout::Expanded, |this| this.h(vh(0.8, window)).min_h_0().flex_shrink_1())
                 } else if zepi {
                     this.flex_none()
                         .w_full()
                         .border_t_1()
                         .border_color(cx.theme().colors().border)
-                        .when(composer_layout == ZepiComposerLayout::Expanded, |this| this.h(vh(0.8, window)))
+                        .when(composer_layout == ZepiComposerLayout::Expanded, |this| this.h(vh(0.8, window)).min_h_0().flex_shrink_1())
                 } else {
                     this.flex_1().size_full()
                 }
@@ -6036,13 +6075,14 @@ impl ThreadView {
                             .pr_2p5()
                             .when(zepi, |this| {
                                 match composer_layout {
-                                    ZepiComposerLayout::Capped(h) => this.h(h).flex_none().overflow_hidden(),
-                                    ZepiComposerLayout::Expanded => this.flex_1().min_h_0(),
-                                    ZepiComposerLayout::Auto => this
-                                        .min_h(px(72.))
-                                        .max_h(vh(0.4, window))
+                                    ZepiComposerLayout::Capped(h) => this
+                                        .h(h)
+                                        .max_h(vh(0.8, window))
                                         .flex_none()
                                         .overflow_hidden(),
+                                    ZepiComposerLayout::Expanded => this.flex_1().min_h_0(),
+                                    // Same as Zed: the editor line-based auto height owns the box.
+                                    ZepiComposerLayout::Auto => this,
                                 }
                             })
                             .when(zepi, |this| {

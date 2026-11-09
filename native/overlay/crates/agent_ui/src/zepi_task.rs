@@ -10,6 +10,12 @@ pub struct Record {
     pub unread: bool,
     #[serde(default)]
     pub pending_review: usize,
+    #[serde(default)]
+    pub tokens: Option<u64>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub usage: Option<acp_thread::TokenUsage>,
 }
 
 pub fn read(session: &str, cx: &App) -> Record {
@@ -49,6 +55,28 @@ pub fn mark_read(session: &str, cx: &mut App) {
     }
 }
 
+/// Token and duration labels are display state, so a restored thread reloads them.
+pub fn remember_turn(session: &str, tokens: Option<u64>, duration: Option<std::time::Duration>, cx: &mut App) {
+    let mut record = read(session, cx);
+    let duration_ms = duration.map(|value| value.as_millis().min(u64::MAX as u128) as u64);
+    if record.tokens == tokens && record.duration_ms == duration_ms { return; }
+    record.tokens = tokens;
+    record.duration_ms = duration_ms;
+    if let Ok(payload) = serde_json::to_string(&record) {
+        let _ = crate::zepi_session_store::write(NAMESPACE, session.into(), payload, cx);
+    }
+}
+
+pub fn remember_usage(session: &str, usage: Option<acp_thread::TokenUsage>, cx: &mut App) {
+    let Some(usage) = usage else { return };
+    let mut record = read(session, cx);
+    if record.usage.as_ref() == Some(&usage) { return; }
+    record.usage = Some(usage);
+    if let Ok(payload) = serde_json::to_string(&record) {
+        let _ = crate::zepi_session_store::write(NAMESPACE, session.into(), payload, cx);
+    }
+}
+
 pub fn observe(session: &str, turn: ZepiTurnState, visible: bool, pending_review: usize, cx: &mut App) {
     let previous = read(session, cx);
     let mut next = previous.clone();
@@ -83,6 +111,18 @@ mod tests {
         cx.read(|cx| crate::zepi_session_store::flush(NAMESPACE, "persisted-task", cx)).await.unwrap();
     }
 
+
+    #[gpui::test]
+    async fn test_zepi_task_keeps_last_turn_stats_for_a_restored_thread(cx: &mut gpui::TestAppContext) {
+        crate::conversation_view::tests::init_test(cx);
+        cx.update(|cx| remember_turn("persisted-stats", Some(1234), Some(std::time::Duration::from_millis(5000)), cx));
+        cx.read(|cx| crate::zepi_session_store::flush(NAMESPACE, "persisted-stats", cx)).await.unwrap();
+        cx.update(|cx| {
+            let restored = read("persisted-stats", cx);
+            assert_eq!(restored.tokens, Some(1234));
+            assert_eq!(restored.duration_ms, Some(5000));
+        });
+    }
     #[test]
     fn test_zepi_task_outcomes_and_unread_are_independent_of_visibility() {
         let mut record = Record::default();

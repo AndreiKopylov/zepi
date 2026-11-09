@@ -46,6 +46,16 @@ All notable changes to Zepi are documented here. The format follows
   window or process`. Each agent process records which Zepi instance spawned it, so a
   connection the same instance replaces takes over its own abandoned lease instead of
   being refused by a stale heartbeat forever.
+- The composer box is laid out like Zed again: auto mode has no minimum or maximum pixel
+  height, so the editor line-based height owns the box and resizing the panel no longer
+  recalculates it twice. A dragged height still caps the box as before.
+- The last turn tokens and duration survive reopening a task: they are stored with the task
+  state instead of living only in the view, so the footer no longer loses them on restore.
+- The composer expand toggle uses Zed full-height mode again (`EditorMode::Full` inside an
+  eighty-percent box that shrinks to the panel), so a long draft scrolls inside instead of
+  losing its last lines behind the window edge.
+- The context usage circle survives reopening a task: the agent publishes current usage when
+  it replays a session, and the last known value is also kept with the task state.
 
 ### Tests
 

@@ -234,6 +234,8 @@ export class PiSession {
     async replay(entries) {
         for (const update of this.historyUpdates(entries)) this.enqueue(update);
         this.publishTurnState();
+        // A restored thread shows its context usage before the first new turn.
+        this.publishUsage(true);
         try {
             await this.drain();
         }
