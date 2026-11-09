@@ -1628,11 +1628,6 @@ impl ConversationView {
         } else {
             list_state.scroll_to_end();
         }
-        // Row heights are cached on first render; remeasure now so the restored
-        // position stays anchored to its item instead of jumping on the first scroll.
-        if count > 0 {
-            list_state.remeasure_items(0..count);
-        }
 
         AgentDiff::set_active_thread(&self.workspace, thread.clone(), window, cx);
 

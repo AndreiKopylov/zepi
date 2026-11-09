@@ -42,10 +42,6 @@ All notable changes to Zepi are documented here. The format follows
 
 - The agent message context menu no longer advertises `Add Selection to Thread`, which
   could not act on message selections.
-- The composer no longer clips the last line of long drafts: the row cap accounts for the
-  container padding and borders and keeps one spare line.
-- Reopening a task no longer jumps on the first scroll: the message list remeasures its rows
-  right after restoring the saved scroll position.
 
 ### Tests
 
