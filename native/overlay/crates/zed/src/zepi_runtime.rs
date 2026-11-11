@@ -226,9 +226,9 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
     merge(&mut settings, &defaults);
     merge(&mut settings, &json!({"telemetry":{"metrics":false,"diagnostics":false},"auto_update":false,
         "disable_ai":false,"auto_install_extensions":{"html":false}}));
-    // office viewer knobs, shared by the slides and the future word viewer
-    merge(&mut settings, &json!({"zepi":{"threadLineHeight":1.5,"officeViewer":{"reloadDebounceMs":600,
-        "rasterCacheCap":12,"maxRasterPixels":6000000,"slideGap":14,"zoomStep":10}}}));
+    // zepi knobs: composer height and the office viewers
+    merge(&mut settings, &json!({"zepi":{"threadLineHeight":1.5,"composerMinLines":5,"composerMaxLines":12,
+        "officeViewer":{"reloadDebounceMs":600,"rasterCacheCap":12,"maxRasterPixels":6000000,"slideGap":14,"zoomStep":10}}}));
     settings["node"] = json!({"path":node,"ignore_system_version":false});
     settings["agent_servers"]["zepi-pi"] = json!({"type":"custom","command":node,
         "args":[root.join("packages/acp/src/cli.js")],"env":{"ZEPI_ROOT":root,"PI_CODING_AGENT_DIR":env::var("ZEPI_PI_CONFIG_DIR")?}});

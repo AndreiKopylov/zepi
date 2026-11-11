@@ -37,18 +37,28 @@ All notable changes to Zepi are documented here. The format follows
   disk, while files inside the workspace keep the native editor buffers and review flow.
   Private workspace storage (`.git`, `.local`, `.pi`, review temps) stays restricted.
 - `PRODUCT_VERSION` reports `0.0.1-beta4` in the About window.
+- The composer height belongs to Zed again: the pixel drag box that capped it is gone, so the
+  editor line-based auto height owns the box and the expand toggle switches to full mode.
+  `zepi.composerMinLines` (default 5) sets the initial height and `zepi.composerMaxLines`
+  (default 12) how many lines it grows to before scrolling inside. Lines survive font, theme
+  and line-spacing changes, the persisted pixel height did not.
 
 ### Fixed
 
+- The composer no longer resizes itself. The drag box wrote one auto-height cap into the editor
+  while `sync_editor_mode` wrote another, so the box flipped between the two whenever entries
+  streamed in, the line-height knob changed or a drag released, and the thread scrollbar
+  resized with it.
+- The composer no longer measures its ceiling against the window (80% of the viewport minus a
+  fixed 220px), which ignored the title bar, the status bar and any open bottom dock and could
+  squeeze the thread below its minimum. Only the expand toggle sizes against the window now,
+  and it shrinks to keep the thread list visible.
 - The agent message context menu no longer advertises `Add Selection to Thread`, which
   could not act on message selections.
 - Reopening a task no longer stays stuck on `This task is already open in another Zepi
   window or process`. Each agent process records which Zepi instance spawned it, so a
   connection the same instance replaces takes over its own abandoned lease instead of
   being refused by a stale heartbeat forever.
-- The composer box is laid out like Zed again: auto mode has no minimum or maximum pixel
-  height, so the editor line-based height owns the box and resizing the panel no longer
-  recalculates it twice. A dragged height still caps the box as before.
 - The last turn tokens and duration survive reopening a task: they are stored with the task
   state instead of living only in the view, so the footer no longer loses them on restore.
 - The composer expand toggle uses Zed full-height mode again (`EditorMode::Full` inside an
