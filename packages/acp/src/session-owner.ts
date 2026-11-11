@@ -13,7 +13,10 @@ const OWNERSHIP_ERROR = 'This task is already open in another Zepi window or pro
 const HEARTBEAT_MS = 20_000;
 const STALE_MS = 120_000;
 
-type OwnershipRecord = { pid: number; token: string; updatedAt?: number };
+type OwnershipRecord = { pid: number; token: string; updatedAt?: number; app?: number };
+
+// The Zepi process that spawned this agent; a restart of its own connection replaces the lease.
+function appInstance() { return Number(process.env.ZEPI_APP_PID) || 0; }
 
 const owned = new Map<string, string>();
 let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -21,7 +24,7 @@ let heartbeat: ReturnType<typeof setInterval> | undefined;
 async function writeOwnershipRecord(path: string, token: string) {
   const temp = `${path}.${token}.tmp`;
   try {
-    await writeFile(temp, JSON.stringify({ pid: process.pid, token, updatedAt: Date.now() }), { mode: 0o600 });
+    await writeFile(temp, JSON.stringify({ pid: process.pid, token, updatedAt: Date.now(), app: appInstance() }), { mode: 0o600 });
     await rename(temp, path);
   } finally {
     await rm(temp, { force: true });
@@ -80,7 +83,12 @@ export function sessionOwners(directory: string) {
         try { process.kill(previous.pid, 0); }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') alive = false; }
         const fresh = Date.now() - (previous.updatedAt ?? 0) < STALE_MS;
-        if (alive && fresh) throw new RequestError(-32602, OWNERSHIP_ERROR);
+        // A live owner from this very Zepi instance is a connection it already abandoned.
+        // shortcut: this cannot tell a second window of the same process apart, revisit
+        // if opening one task in two windows becomes a real workflow.
+        const app = appInstance();
+        const replaced = app !== 0 && previous.app === app;
+        if (alive && fresh && !replaced) throw new RequestError(-32602, OWNERSHIP_ERROR);
       }
       await writeOwnershipRecord(path, token);
     });

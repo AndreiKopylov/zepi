@@ -170,7 +170,8 @@ pub fn palette(cx: &App) -> Option<Arc<PiPalette>> {
 /// GUI knobs live in Zed settings under "zepi", next to the officeViewer knobs.
 fn zed_knob_f(key: &str) -> Option<f32> {
     use std::sync::Mutex;
-    static KNOB_CACHE: Mutex<Option<(u64, Option<f32>)>> = Mutex::new(None);
+    // Caches the whole "zepi" object: several knobs read it, a per-value cache would mix them up.
+    static KNOB_CACHE: Mutex<Option<(u64, Option<serde_json_lenient::Value>)>> = Mutex::new(None);
     let mtime = std::fs::metadata(paths::settings_file())
         .and_then(|meta| meta.modified())
         .ok()
@@ -178,19 +179,32 @@ fn zed_knob_f(key: &str) -> Option<f32> {
         .map_or(0, |d| d.as_nanos() as u64);
     let mut guard = KNOB_CACHE.lock().unwrap_or_else(|p| p.into_inner());
     if guard.as_ref().map_or(true, |(cached, _)| *cached != mtime) {
-        let value = std::fs::read_to_string(paths::settings_file())
+        let knobs = std::fs::read_to_string(paths::settings_file())
             .ok()
             .and_then(|raw| serde_json_lenient::from_str::<serde_json_lenient::Value>(&raw).ok())
-            .and_then(|root| root["zepi"][key].as_f64())
-            .map(|v| v as f32);
-        *guard = Some((mtime, value));
+            .map(|root| root["zepi"].clone());
+        *guard = Some((mtime, knobs));
     }
-    guard.as_ref().and_then(|(_, value)| *value)
+    guard
+        .as_ref()
+        .and_then(|(_, knobs)| knobs.as_ref())
+        .and_then(|knobs| knobs[key].as_f64())
+        .map(|v| v as f32)
 }
 
 /// Thread markdown line spacing; override via "zepi": {"threadLineHeight": ...} in Zed settings.
 pub fn thread_line_height() -> f32 {
     zed_knob_f("threadLineHeight").unwrap_or(1.5)
+}
+
+/// Composer auto-height cap in lines; override via "zepi": {"composerMaxLines": ...}.
+pub fn composer_max_lines() -> usize {
+    (zed_knob_f("composerMaxLines").unwrap_or(12.0) as usize).clamp(1, 100)
+}
+
+/// Initial composer height in lines; override via "zepi": {"composerMinLines": ...}.
+pub fn composer_min_lines() -> usize {
+    (zed_knob_f("composerMinLines").unwrap_or(5.0) as usize).clamp(1, 100)
 }
 
 fn pi_style_for(p: &PiPalette, name: &str) -> Option<HighlightStyle> {

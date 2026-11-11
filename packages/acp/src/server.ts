@@ -1,4 +1,5 @@
 import {createMcpConnector} from './mcp.ts';
+import {refreshModelCatalogs} from '../../runtime/src/pi/model-catalog.mjs';
 import {sessionOwners} from './session-owner.ts';
 import {createShell} from './shell.ts';
 import {refreshPiNetwork} from './pi-network.ts';
@@ -211,6 +212,8 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   server.agent.newSession = async context => create(await withMcp(context));
   server.agent.loadSession = async context => load(await withMcp(context));
   connectClient(server.connection.client);
+  void refreshModelCatalogs(runtime).then(() => server.agent.refreshGlobalModelScope())
+    .catch((error: unknown) => console.error("background model catalog refresh failed", error));
   admitRequests();
   return server;
 }

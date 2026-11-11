@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {mkdtemp, realpath, writeFile, symlink, rm, access} from "node:fs/promises";
+import {mkdtemp, realpath, readFile, writeFile, symlink, rm, access} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {client, methods} from "@agentclientprotocol/sdk";
-import {workspacePath} from "../src/workspace-path.ts";
+import {workspacePath, writableFile} from "../src/workspace-path.ts";
 import {startZepiAgent} from "../src/server.ts";
+import {editorTools} from "../src/editor-tools.ts";
 import {fixtureModel, call, lastToolText} from "./fixture-model.ts";
 
 test("new file resolution preserves workspace boundaries without creating directories", async () => {
@@ -14,15 +15,27 @@ test("new file resolution preserves workspace boundaries without creating direct
     assert.equal(await workspacePath(dir,"a/b/new.ts",true),join(dir,"a/b/new.ts"));
     await assert.rejects(access(join(dir,"a")));
     await assert.rejects(workspacePath(dir,"a/b/new.ts"),/ENOENT/);
-    await assert.rejects(workspacePath(dir,"../escape.ts",true),/outside/);
+    assert.equal((await writableFile(dir,"../escape.ts")).insideWorkspace,false);
     await assert.rejects(workspacePath(dir,".pi/new.ts",true),/Private/);
+    await assert.rejects(writableFile(dir,"../.pi/secret.ts"),/Private/);
     await symlink(tmpdir(),join(dir,"outside"));
-    await assert.rejects(workspacePath(dir,"outside/escape.ts",true),/outside/);
+    assert.equal((await writableFile(dir,"outside/escape.ts")).insideWorkspace,false);
     await symlink(join(dir,"missing"),join(dir,"dangling"));
     await assert.rejects(workspacePath(dir,"dangling/new.ts",true),/ENOENT/);
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 
+test("write outside the workspace goes straight to disk like pi", async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(),"zepi-write-outside-")));
+  const target = join(dir,"..","zepi-write-outside-target.md");
+  const client = {request: async () => {throw new Error("ACP write must not be used outside the workspace");}};
+  const tools = editorTools(dir,"session",client as never);
+  const write = tools.find(tool => tool.name === "write")!;
+  try {
+    await (write.execute as never as (...args: unknown[]) => Promise<unknown>)("call-1",{path:target,content:"external marker"},undefined,undefined,undefined);
+    assert.equal(await readFile(target,"utf8"),"external marker");
+  } finally {await rm(target,{force:true}); await rm(dir,{recursive:true,force:true});}
+});
 test("pi creates, reads and edits a new unsaved file through native ACP", {timeout:30_000}, async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(),"zepi-new-file-")));
   await writeFile(join(dir,"settings.json"),JSON.stringify({defaultProvider:"zepi-fixture",defaultModel:"scripted",compaction:{enabled:false}}));

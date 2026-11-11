@@ -670,47 +670,6 @@ fn reveal_subagent_scrollbar(view: &Entity<ThreadView>, cx: &mut App) {
     .detach();
 }
 
-fn zepi_composer_height_path() -> std::path::PathBuf {
-    paths::state_dir().join("zepi-composer-height")
-}
-
-fn load_zepi_composer_px() -> Option<Pixels> {
-    let raw = std::fs::read_to_string(zepi_composer_height_path()).ok()?;
-    let v: f32 = raw.trim().parse().ok()?;
-    if v >= 72.0 {
-        Some(px(v))
-    } else {
-        None
-    }
-}
-
-fn save_zepi_composer_px(height: Option<Pixels>) {
-    let content = match height {
-        Some(h) => format!("{:.1}", f32::from(h)),
-        None => "auto".to_string(),
-    };
-    let _ = std::fs::write(zepi_composer_height_path(), content);
-}
-
-// The composer is drawn with the agent UI font and the thread line-height knob,
-// so the drag box and the line cap match what the editor element paints.
-fn zepi_line_height(cx: &App) -> f32 {
-    f32::from(theme_settings::ThemeSettings::get_global(cx).agent_ui_font_size(cx))
-        * crate::zepi_theme::thread_line_height()
-}
-
-/// One owner of the composer height and clipping; every render site reads this
-/// instead of re-deriving the state from flags.
-#[derive(Clone, Copy, PartialEq)]
-enum ZepiComposerLayout {
-    /// Grows with the draft up to the editor auto-height cap, then scrolls inside.
-    Auto,
-    /// Height dragged by the user and persisted; the draft scrolls inside it.
-    Capped(Pixels),
-    /// The expand toggle: most of the panel height.
-    Expanded,
-}
-
 pub struct ThreadView {
     pub(crate) root_thread_id: ThreadId,
     pub session_id: acp_v2::SessionId,
@@ -781,13 +740,8 @@ pub struct ThreadView {
     zepi_editor_revision: u64,
     zepi_last_editor_text: Option<String>,
     zepi_ui_columns: usize,
-    zepi_composer_px: Option<Pixels>,
-    zepi_composer_measured: f32,
-    zepi_composer_drag: Option<(f32, f32)>,
-    zepi_composer_max_px: f32,
-    zepi_composer_mode_key: isize,
-    zepi_composer_floor: bool,
     zepi_was_generating: bool,
+    zepi_turn_stats_restored: bool,
     zepi_last_ui_columns: usize,
     zepi_last_ui_light: Option<bool>,
     pub add_context_menu_handle: PopoverMenuHandle<ContextMenu>,
@@ -1352,13 +1306,8 @@ impl ThreadView {
             zepi_editor_revision: 0,
             zepi_last_editor_text: None,
             zepi_ui_columns: 80,
-            zepi_composer_px: load_zepi_composer_px(),
-            zepi_composer_measured: 0.0,
-            zepi_composer_drag: None,
-            zepi_composer_max_px: 800.0,
-            zepi_composer_mode_key: -1,
-            zepi_composer_floor: false,
             zepi_was_generating: false,
+            zepi_turn_stats_restored: false,
             zepi_last_ui_columns: 0,
             zepi_last_ui_light: None,
             add_context_menu_handle: PopoverMenuHandle::default(),
@@ -1793,7 +1742,7 @@ impl ThreadView {
         generation
     }
 
-    pub fn stop_turn(&mut self, generation: usize, _cx: &mut Context<Self>) {
+    pub fn stop_turn(&mut self, generation: usize, cx: &mut Context<Self>) {
         if self.turn_fields.turn_generation != generation {
             return;
         }
@@ -1804,9 +1753,35 @@ impl ThreadView {
             .map(|started| started.elapsed());
         self.turn_fields.last_turn_tokens = self.turn_fields.turn_tokens.take();
         self.turn_fields._turn_timer_task = None;
+        self.persist_turn_stats(cx);
+    }
+
+    /// Token and duration labels live in memory, so a restored thread reloads them.
+    fn restore_turn_stats(&mut self, cx: &mut Context<Self>) {
+        if self.zepi_turn_stats_restored { return; }
+        self.zepi_turn_stats_restored = true;
+        if self.agent_id.as_ref() != "zepi-pi" { return; }
+        let session = self.thread.read(cx).session_id().to_string();
+        let record = crate::zepi_task::read(&session, cx);
+        if self.turn_fields.last_turn_tokens.is_none() && self.turn_fields.last_turn_duration.is_none() {
+            self.turn_fields.last_turn_tokens = record.tokens;
+            self.turn_fields.last_turn_duration = record.duration_ms.map(std::time::Duration::from_millis);
+        }
+        if self.thread.read(cx).token_usage().is_none() {
+            if let Some(usage) = record.usage {
+                self.thread.update(cx, |thread, cx| thread.update_token_usage(Some(usage), cx));
+            }
+        }
+    }
+
+    fn persist_turn_stats(&self, cx: &mut Context<Self>) {
+        if self.agent_id.as_ref() != "zepi-pi" { return; }
+        let session = self.thread.read(cx).session_id().to_string();
+        crate::zepi_task::remember_turn(&session, self.turn_fields.last_turn_tokens, self.turn_fields.last_turn_duration, cx);
     }
 
     pub(crate) fn sync_reported_activity(&mut self, cx: &mut Context<Self>) {
+        self.restore_turn_stats(cx);
         let thread = self.thread.read(cx);
         if !thread.uses_reported_activity() {
             return;
@@ -1817,6 +1792,7 @@ impl ThreadView {
         let duration = thread.activity_duration();
         let output_tokens = thread.reported_activity_output_tokens();
 
+        let mut zepi_persist_turn_stats = false;
         match activity {
             ForegroundActivity::Unconfirmed => {
                 self.turn_fields.reported_activity_generation = None;
@@ -1842,7 +1818,11 @@ impl ThreadView {
                 if let Some(output_tokens) = output_tokens {
                     self.turn_fields.last_turn_tokens = Some(output_tokens);
                 }
+                zepi_persist_turn_stats = true;
             }
+        }
+        if zepi_persist_turn_stats {
+            self.persist_turn_stats(cx);
         }
         cx.notify();
     }
@@ -2086,7 +2066,16 @@ impl ThreadView {
         )
     }
 
+    /// The context circle reads live usage, so the last known value is kept with the task.
+    fn persist_token_usage(&self, cx: &mut Context<Self>) {
+        if self.agent_id.as_ref() != "zepi-pi" { return; }
+        let session = self.thread.read(cx).session_id().to_string();
+        let usage = self.thread.read(cx).token_usage().cloned();
+        crate::zepi_task::remember_usage(&session, usage, cx);
+    }
+
     pub fn update_turn_tokens(&mut self, update: OutputTokensUpdate, cx: &mut Context<Self>) {
+        self.persist_token_usage(cx);
         match update {
             OutputTokensUpdate::Unchanged => {}
             OutputTokensUpdate::LegacyAdd {
@@ -3533,62 +3522,6 @@ impl ThreadView {
 
     // editor methods
 
-    /// Auto growth also gets a panel-share ceiling in the render, so a misbehaving
-    /// auto-height can never eat the thread list; the editor scrolls inside either way.
-    fn composer_layout(&self) -> ZepiComposerLayout {
-        if self.editor_expanded {
-            return ZepiComposerLayout::Expanded;
-        }
-        match self.zepi_composer_px.filter(|_| self.zepi_composer_floor) {
-            Some(h) => ZepiComposerLayout::Capped(h),
-            None => ZepiComposerLayout::Auto,
-        }
-    }
-
-    fn composer_mode_key(&self) -> isize {
-        let lh = (crate::zepi_theme::thread_line_height() * 100.0).round() as isize;
-        match self.zepi_composer_px {
-            Some(h) => {
-                (f32::from(h).round() as isize + lh * 1000) * 2
-                    + if self.zepi_composer_floor { 1 } else { 0 }
-            }
-            None => -2,
-        }
-    }
-
-    fn apply_composer_mode(&mut self, cx: &mut Context<Self>) {
-        let key = self.composer_mode_key();
-        if self.zepi_composer_mode_key == key {
-            return;
-        }
-        self.zepi_composer_mode_key = key;
-        let line_h = zepi_line_height(cx);
-        let mode = match self.zepi_composer_px {
-            Some(h) => {
-                let cap = (f32::from(h) / line_h).floor().max(3.0) as usize;
-                let min = if self.zepi_composer_floor {
-                    cap
-                } else {
-                    AgentSettings::get_global(cx).message_editor_min_lines
-                };
-                editor::EditorMode::AutoHeight {
-                    min_lines: min.min(cap),
-                    max_lines: Some(cap),
-                }
-            }
-            None => editor::EditorMode::AutoHeight {
-                min_lines: AgentSettings::get_global(cx).message_editor_min_lines,
-                max_lines: Some(if !workspace::zepi_mode() {
-                    6
-                } else {
-                    AgentSettings::get_global(cx).set_message_editor_max_lines()
-                }),
-            },
-        };
-        self.message_editor
-            .update(cx, |message_editor, cx| message_editor.set_mode(mode, cx));
-    }
-
     pub fn expand_message_editor(
         &mut self,
         _: &ExpandMessageEditor,
@@ -3596,24 +3529,6 @@ impl ThreadView {
         cx: &mut Context<Self>,
     ) {
         if !self.has_visible_conversation(cx) && std::env::var_os("ZEPI_ROOT").is_none() {
-            return;
-        }
-        if std::env::var_os("ZEPI_ROOT").is_some() {
-            // zepi: the button toggles the drag box between auto and its limit,
-            // vanilla Full mode never enters the picture
-            let at_max = self
-                .zepi_composer_px
-                .map_or(false, |h| f32::from(h) >= self.zepi_composer_max_px - 0.5);
-            if at_max {
-                self.zepi_composer_px = None;
-                save_zepi_composer_px(None);
-            } else {
-                self.zepi_composer_px = Some(px(self.zepi_composer_max_px));
-                save_zepi_composer_px(self.zepi_composer_px);
-            }
-            self.apply_composer_mode(cx);
-            cx.stop_propagation();
-            cx.notify();
             return;
         }
         self.set_editor_is_expanded(!self.editor_expanded, cx);
@@ -5873,12 +5788,7 @@ impl ThreadView {
         let editor_bg_color = cx.theme().colors().editor_background;
 
         let editor_expanded = self.editor_expanded;
-        // in zepi the drag box at its limit counts as expanded for the icon
-        let zepi_at_max = std::env::var_os("ZEPI_ROOT").is_some()
-            && self
-                .zepi_composer_px
-                .map_or(false, |h| f32::from(h) >= self.zepi_composer_max_px - 0.5);
-        let (expand_icon, expand_tooltip) = if editor_expanded || zepi_at_max {
+        let (expand_icon, expand_tooltip) = if editor_expanded {
             (IconName::Minimize, "Minimize Message Editor")
         } else {
             (IconName::Maximize, "Expand Message Editor")
@@ -5887,47 +5797,9 @@ impl ThreadView {
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
         let has_messages = self.has_visible_conversation(cx);
         let zepi = std::env::var_os("ZEPI_ROOT").is_some();
-        if zepi {
-            // same limit the old expanded mode used: 80% of the window height,
-            // and always leave room for the thread above
-            let vh = f32::from(window.viewport_size().height);
-            self.zepi_composer_max_px = (vh * 0.8).min(vh - 220.0).max(160.0);
-            if let Some(h) = self.zepi_composer_px {
-                if f32::from(h) > self.zepi_composer_max_px {
-                    self.zepi_composer_px = Some(px(self.zepi_composer_max_px));
-                }
-            }
-        }
-        // once dragged, the box stays until double click reset;
-        // the editor fills it, so the area is usable input, not dead space
-        self.zepi_composer_floor = self.zepi_composer_px.is_some();
-        let composer_layout = self.composer_layout();
-        let mode_key = self.composer_mode_key();
-        if mode_key != self.zepi_composer_mode_key {
-            let view = cx.entity();
-            cx.defer(move |cx| {
-                let _ = view.update(cx, |this, cx| this.apply_composer_mode(cx));
-            });
-        }
         // zepi keeps the composer compact at the bottom instead of filling the panel
         let fills_container = editor_expanded || (!has_messages && !zepi);
         let view = cx.entity().downgrade();
-        let measure_height = gpui::canvas(
-            {
-                let view = view.clone();
-                move |bounds, _window, cx| {
-                    let h = f32::from(bounds.size.height);
-                    cx.defer(move |cx| {
-                        let _ = view.update(cx, |this, _| this.zepi_composer_measured = h);
-                    });
-                }
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full()
-        .top_0()
-        .left_0();
         let measure = gpui::canvas(move |bounds, _window, cx| {
             let font = theme::theme_settings(cx).buffer_font(cx);
             let font_id = cx.text_system().resolve_font(&font);
@@ -5962,35 +5834,6 @@ impl ThreadView {
             .bg(editor_bg_color)
             .justify_center()
             .relative()
-            .when(zepi, |this| {
-                this.child(
-                    div()
-                        .id("zepi-composer-resize")
-                        .absolute()
-                        .top(px(-3.))
-                        .left_0()
-                        .w_full()
-                        .h(px(6.))
-                        .cursor(gpui::CursorStyle::ResizeUpDown)
-                        .tooltip(Tooltip::text("Drag to cap the composer height; drag it down or toggle expand at max to return to auto"))
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
-                            {
-                                if this.editor_expanded {
-                                    // drag takes over from the expanded layout
-                                    this.set_editor_is_expanded(false, cx);
-                                }
-                                let start_px = this
-                                    .zepi_composer_px
-                                    .map(f32::from)
-                                    .unwrap_or(this.zepi_composer_measured);
-                                this.zepi_composer_drag =
-                                    Some((f32::from(event.position.y), start_px));
-                            }
-                            cx.stop_propagation();
-                            cx.notify();
-                        })),
-                )
-            })
             .on_action(cx.listener(Self::handle_message_editor_move_up))
             .map(|this| {
                 if has_messages {
@@ -5998,13 +5841,13 @@ impl ThreadView {
                         .flex_none()
                         .border_t_1()
                         .border_color(cx.theme().colors().border)
-                        .when(composer_layout == ZepiComposerLayout::Expanded, |this| this.h(vh(0.8, window)))
+                        .when(editor_expanded, |this| this.h(vh(0.8, window)).min_h_0().flex_shrink_1())
                 } else if zepi {
                     this.flex_none()
                         .w_full()
                         .border_t_1()
                         .border_color(cx.theme().colors().border)
-                        .when(composer_layout == ZepiComposerLayout::Expanded, |this| this.h(vh(0.8, window)))
+                        .when(editor_expanded, |this| this.h(vh(0.8, window)).min_h_0().flex_shrink_1())
                 } else {
                     this.flex_1().size_full()
                 }
@@ -6030,37 +5873,14 @@ impl ThreadView {
                             .relative()
                             .w_full()
                             .min_h_0()
-                            .when(zepi, |this| this.child(measure_height))
                             .when(fills_container, |this| this.flex_1())
                             .pt_1()
                             .pr_2p5()
-                            .when(zepi, |this| {
-                                match composer_layout {
-                                    ZepiComposerLayout::Capped(h) => this.h(h).flex_none().overflow_hidden(),
-                                    ZepiComposerLayout::Expanded => this.flex_1().min_h_0(),
-                                    ZepiComposerLayout::Auto => this
-                                        .min_h(px(72.))
-                                        .max_h(vh(0.4, window))
-                                        .flex_none()
-                                        .overflow_hidden(),
-                                }
-                            })
                             .when(zepi, |this| {
                                 this.rounded_md()
                                     .border_1()
                                     .border_color(cx.theme().colors().border_variant)
                                     .bg(cx.theme().colors().editor_background)
-                            })
-                            .when(matches!(composer_layout, ZepiComposerLayout::Capped(_)), |this| {
-                                this.on_mouse_down(gpui::MouseButton::Left, {
-                                    let focus = self
-                                        .message_editor
-                                        .read(cx)
-                                        .editor()
-                                        .read(cx)
-                                        .focus_handle(cx);
-                                    move |_, window, cx| window.focus(&focus, cx)
-                                })
                             })
                             .child(self.message_editor.clone())
                             .when(has_messages || zepi, |this| {
@@ -9171,20 +8991,27 @@ impl ThreadView {
                 show_active_line_background: false,
                 sizing_behavior: SizingBehavior::ExcludeOverscrollMargin,
             }
-        } else if v2_empty_state {
+        } else if v2_empty_state && std::env::var_os("ZEPI_ROOT").is_none() {
+            // zepi keeps the empty-state composer compact; Full mode would collapse it to zero height
             EditorMode::Full {
                 scale_ui_elements_with_buffer_font_size: false,
                 show_active_line_background: false,
                 sizing_behavior: SizingBehavior::Default,
             }
         } else {
+            let (min_lines, max_lines) = if std::env::var_os("ZEPI_ROOT").is_some() {
+                let max = crate::zepi_theme::composer_max_lines();
+                (crate::zepi_theme::composer_min_lines().min(max), max)
+            } else {
+                let settings = AgentSettings::get_global(cx);
+                (
+                    settings.message_editor_min_lines,
+                    settings.set_message_editor_max_lines(),
+                )
+            };
             EditorMode::AutoHeight {
-                min_lines: AgentSettings::get_global(cx).message_editor_min_lines,
-                max_lines: Some(if std::env::var_os("ZEPI_ROOT").is_some() {
-                    6
-                } else {
-                    AgentSettings::get_global(cx).set_message_editor_max_lines()
-                }),
+                min_lines,
+                max_lines: Some(max_lines),
             }
         };
         self.message_editor.update(cx, |editor, cx| {
@@ -9502,14 +9329,39 @@ impl ThreadView {
     ) -> AnyElement {
         let entity = cx.entity();
         let workspace = self.workspace.clone();
+        let trigger_markdown = markdown.clone();
+        let trigger_editor = self.message_editor.clone();
+        let menu_editor = self.message_editor.clone();
 
         right_click_menu(format!("agent_context_menu-{}", entry_ix))
-            .trigger(move |_, _, _| message_body)
+            .trigger(move |_, _, _| {
+                div()
+                    .child(message_body)
+                    .on_action(
+                        move |_: &zed_actions::agent::AddSelectionToThread, window, cx| {
+                            let text = trigger_markdown
+                                .as_ref()
+                                .and_then(|markdown| {
+                                    markdown.read(cx).selected_source().map(|text| text.to_string())
+                                })
+                                .filter(|text| !text.is_empty());
+                            let Some(text) = text else {
+                                cx.propagate();
+                                return;
+                            };
+                            trigger_editor.update(cx, |editor, cx| {
+                                editor.insert_text(&text, window, cx);
+                            });
+                            trigger_editor.read(cx).focus_handle(cx).focus(window, cx);
+                        },
+                    )
+            })
             .menu(move |window, cx| {
                 let focus = window.focused(cx);
                 let entity = entity.clone();
                 let workspace = workspace.clone();
                 let markdown = markdown.clone();
+                let menu_editor = menu_editor.clone();
 
                 ContextMenu::build(window, cx, move |menu, _, cx| {
                     let this = entity.read(cx);
@@ -9579,18 +9431,18 @@ impl ThreadView {
                             })
                             .separator()
                         })
-                        .when_some(selected_text.clone(), |menu, _| {
+                        .when_some(selected_text.clone(), |menu, selected_text| {
+                            let composer = menu_editor.clone();
                             menu.item(
-                                ContextMenuEntry::new("Add Selection to Thread")
+                                ContextMenuEntry::new("Copy selection into composer")
                                     .action(
                                         zed_actions::agent::AddSelectionToThread.boxed_clone(),
                                     )
-                                    .handler(|window, cx| {
-                                        window.dispatch_action(
-                                            zed_actions::agent::AddSelectionToThread
-                                                .boxed_clone(),
-                                            cx,
-                                        );
+                                    .handler(move |window, cx| {
+                                        composer.update(cx, |editor, cx| {
+                                            editor.insert_text(&selected_text.to_string(), window, cx);
+                                        });
+                                        composer.read(cx).focus_handle(cx).focus(window, cx);
                                     }),
                             )
                         })
@@ -14564,59 +14416,6 @@ impl Render for ThreadView {
 
         let has_messages = self.has_visible_conversation(cx);
         let list_state = self.list_state.clone();
-        let resize_view = cx.entity();
-        let composer_resize_canvas = gpui::canvas(
-            |_, _, _| (),
-            move |_, _, window: &mut Window, cx: &mut App| {
-                if resize_view.read(cx).zepi_composer_drag.is_none() {
-                    return;
-                }
-                window.on_mouse_event({
-                    let view = resize_view.clone();
-                    move |event: &gpui::MouseMoveEvent, phase, _, cx: &mut App| {
-                        if phase != gpui::DispatchPhase::Bubble {
-                            return;
-                        }
-                        let _ = view.update(cx, |this, cx| {
-                            if let Some((start_y, start_px)) = this.zepi_composer_drag {
-                                let delta = start_y - f32::from(event.position.y);
-                                // the floor is the current auto height (wrapped lines
-                                // included): the drag never goes below what the
-                                // minimize button lands on
-                                let ed = this.message_editor.read(cx).editor();
-                                let line_h = zepi_line_height(cx);
-                                let rows = ed.read(cx).text(cx).lines().count().max(1);
-                                let min_l = AgentSettings::get_global(cx).message_editor_min_lines;
-                                let max_l =
-                                    (((this.zepi_composer_max_px - 2.0) / line_h) as usize).clamp(3, 40);
-                                let auto_box = (rows.clamp(min_l, max_l) as f32 * line_h).max(72.0);
-                                let h = (start_px + delta).clamp(auto_box, this.zepi_composer_max_px);
-                                if h <= auto_box + 1.0 {
-                                    this.zepi_composer_px = None;
-                                } else {
-                                    this.zepi_composer_px = Some(px(h));
-                                }
-                                cx.notify();
-                            }
-                        });
-                    }
-                });
-                window.on_mouse_event({
-                    let view = resize_view.clone();
-                    move |_event: &gpui::MouseUpEvent, phase, _, cx: &mut App| {
-                        if phase != gpui::DispatchPhase::Bubble {
-                            return;
-                        }
-                        let _ = view.update(cx, |this, cx| {
-                            this.zepi_composer_drag = None;
-                            save_zepi_composer_px(this.zepi_composer_px);
-                            cx.notify();
-                        });
-                    }
-                });
-            },
-        );
-
         let conversation = v_flex()
             .when(self.resumed_without_history, |this| {
                 this.child(Self::render_resume_notice(cx))
@@ -15010,7 +14809,6 @@ impl Render for ThreadView {
             )
             .children(self.render_token_limit_callout(cx))
             .children(self.render_request_elicitations(cx))
-            .child(composer_resize_canvas)
             .when(workspace::zepi_mode(), |this| {
                 this.child(self.render_message_editor(window, cx))
             })

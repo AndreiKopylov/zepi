@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { openSync } from "node:fs";
 import {runtimeSettings, mergeRuntimeSettings, modelSettings, mergeModelSettings, PiRuntimeSettingsError} from './runtime-settings.mjs';
 import {httpProxyStatus, mergeHttpProxy, PiHttpSettingsError} from './http-settings.mjs';
-import {refreshOpenRouterCatalog} from './model-catalog.mjs';
+import {refreshModelCatalogs} from './model-catalog.mjs';
 
 export class PiConfigError extends Error {}
 
@@ -89,7 +89,7 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
     await validateModels(modelsPath);
     const modelRuntime = await runtime();
     if (modelRuntime.getError()) throw new PiConfigError("Invalid pi model configuration. Fix models.json and try again.");
-    const modelCatalogNotice = refreshModels ? await refreshOpenRouterCatalog(modelRuntime) : '';
+    const modelCatalogNotice = refreshModels ? await refreshModelCatalogs(modelRuntime, true) : '';
     const credentials = await new ReadOnlyAuthStorage(authPath).list();
     const providers = modelRuntime.getProviders().map(provider => {
       const credential = credentials.find(entry => entry.providerId === provider.id);

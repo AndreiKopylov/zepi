@@ -430,7 +430,7 @@ impl Render for PiSettingsView {
                 .child(h_flex().gap_2()
                     .child(Button::new("pi-save-defaults", "Save Defaults").style(ButtonStyle::Filled).disabled(self.busy || self.model.is_empty())
                         .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"defaults", "provider":this.provider,"model":this.model,"thinking":this.thinking}), window, cx))))
-                    .child(Button::new("pi-refresh", "Reload").disabled(self.busy)
+                    .child(Button::new("pi-refresh", "Reload & update models").disabled(self.busy)
                         .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"status", "refreshModels":true}), window, cx))))))
             .child(self.model_settings_section(window, cx))
             .child(v_flex().gap_3().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)

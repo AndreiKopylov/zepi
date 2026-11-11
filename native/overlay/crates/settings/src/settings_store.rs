@@ -1312,6 +1312,18 @@ impl SettingsStore {
                     "maximum": 3.0,
                     "description": "Line spacing of agent thread markdown. Default: 1.5."
                 },
+                "composerMinLines": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Initial height of the agent composer, in lines. Default: 5."
+                },
+                "composerMaxLines": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Height the agent composer grows to while typing, in lines. Default: 12."
+                },
                 "officeViewer": {
                     "type": "object",
                     "description": "Knobs for the document viewers.",

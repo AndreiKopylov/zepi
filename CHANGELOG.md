@@ -4,6 +4,76 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.1-beta4] - 2026-11-09
+
+### Added
+
+- Zepi refreshes its model catalog from pi.dev on startup, in the background and at most once
+  every four hours. The catalog is cached in `ZEPI_PI_CONFIG_DIR/models-store.json`, so
+  offline launches still see the latest models, and `PI_OFFLINE` suppresses network access.
+  Picking up renamed or newly released models (such as `hy4`) no longer requires a
+  separately installed pi: Zepi owns its own config directory and bundled catalog.
+- The pi settings page button is now `Reload & update models`: it re-reads the settings
+  page and forces a catalog refresh regardless of the four-hour interval.
+- Selecting text in an agent message and choosing `Copy selection into composer` (or
+  pressing `Ctrl-Shift-.`) inserts that selection into the message composer and focuses it.
+  Both previously dispatched `AddSelectionToThread`, which only reads editor and terminal
+  selections, so they silently did nothing in message views.
+- Code spans with a line range (`path.cs:82-94`) and a trailing parenthesized note now resolve
+  to a file mention covering the whole range, matching the `:5-9` suffix Zepi emits for
+  selections. Previously those spans stayed plain text because the position parser only
+  understood a single `:row`.
+
+### Changed
+
+- `/reload` in the composer is a pure pi reload again: extensions, skills, templates,
+  themes and settings, followed by a republish of the command and config-option lists.
+  It no longer refreshes the model runtime, model scope or the available-model list.
+- Catalog refresh is shared by startup and the settings button. The OpenRouter-only
+  helper is gone; all built-in providers are refreshed from the same pi.dev catalog.
+- `Ctrl-Shift-.` still works for editor and terminal selections: when a message has no
+  markdown selection, the new handler propagates the action to the original Zed handler.
+- `write` and `read` now reach outside the workspace like pi: external paths go straight to
+  disk, while files inside the workspace keep the native editor buffers and review flow.
+  Private workspace storage (`.git`, `.local`, `.pi`, review temps) stays restricted.
+- `PRODUCT_VERSION` reports `0.0.1-beta4` in the About window.
+- The composer height belongs to Zed again: the pixel drag box that capped it is gone, so the
+  editor line-based auto height owns the box and the expand toggle switches to full mode.
+  `zepi.composerMinLines` (default 5) sets the initial height and `zepi.composerMaxLines`
+  (default 12) how many lines it grows to before scrolling inside. Lines survive font, theme
+  and line-spacing changes, the persisted pixel height did not.
+
+### Fixed
+
+- The composer no longer resizes itself. The drag box wrote one auto-height cap into the editor
+  while `sync_editor_mode` wrote another, so the box flipped between the two whenever entries
+  streamed in, the line-height knob changed or a drag released, and the thread scrollbar
+  resized with it.
+- The composer no longer measures its ceiling against the window (80% of the viewport minus a
+  fixed 220px), which ignored the title bar, the status bar and any open bottom dock and could
+  squeeze the thread below its minimum. Only the expand toggle sizes against the window now,
+  and it shrinks to keep the thread list visible.
+- The agent message context menu no longer advertises `Add Selection to Thread`, which
+  could not act on message selections.
+- Reopening a task no longer stays stuck on `This task is already open in another Zepi
+  window or process`. Each agent process records which Zepi instance spawned it, so a
+  connection the same instance replaces takes over its own abandoned lease instead of
+  being refused by a stale heartbeat forever.
+- The last turn tokens and duration survive reopening a task: they are stored with the task
+  state instead of living only in the view, so the footer no longer loses them on restore.
+- The composer expand toggle uses Zed full-height mode again (`EditorMode::Full` inside an
+  eighty-percent box that shrinks to the panel), so a long draft scrolls inside instead of
+  losing its last lines behind the window edge.
+- The context usage circle survives reopening a task: the agent publishes current usage when
+  it replays a session, and the last known value is also kept with the task state.
+
+### Tests
+
+- A unit test covers the offline, forced-refresh and provider-failure paths of the shared
+  catalog refresh.
+- ACP tests cover external writes and private-path rejection; gpui asserts cover line-range
+  file links.
+
 ## [0.0.1-beta3] - 2026-11-07
 
 ### Added
@@ -128,8 +198,8 @@ All notable changes to Zepi are documented here. The format follows
   and hot-reloads, including an already dragged composer height.
 - Reading a file outside the project no longer fails with `File is outside this workspace`:
   reads follow the product full-access rule, so screenshots and documents handed by path open
-  directly instead of being copied into the project. Writes and private workspace storage
-  (`.git`, `.pi`, review temps) stay restricted.
+  directly instead of being copied into the project. Private workspace storage
+  (`.git`, `.local`, `.pi`, review temps) stays restricted.
 - File links also resolve code spans written relative to a subfolder or nested repo: a unique
   suffix match against the project file index becomes a clickable link; ambiguous matches stay
   plain code.
