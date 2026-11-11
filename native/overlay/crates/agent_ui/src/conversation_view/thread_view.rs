@@ -33,6 +33,7 @@ use crate::unicode_confusables;
 
 use db::kvp::KeyValueStore;
 use gpui::List;
+use gpui::StyledImage;
 use gpui::Stateful;
 use gpui::TaskExt;
 use heapless::Vec as ArrayVec;
@@ -66,6 +67,52 @@ fn zepi_tool_duration_label(duration: std::time::Duration) -> String {
     } else {
         format!("Took {}", duration_alt_display(duration))
     }
+}
+
+fn zepi_image_size(image: &gpui::Image) -> Option<(f32, f32)> {
+    let b = image.bytes();
+    match image.format() {
+        gpui::ImageFormat::Png if b.len() >= 24 => {
+            let w = u32::from_be_bytes([b[16], b[17], b[18], b[19]]) as f32;
+            let h = u32::from_be_bytes([b[20], b[21], b[22], b[23]]) as f32;
+            (w > 0.0 && h > 0.0).then_some((w, h))
+        }
+        gpui::ImageFormat::Jpeg => {
+            let mut i = 2;
+            while i + 9 < b.len() {
+                if b[i] != 0xFF {
+                    i += 1;
+                    continue;
+                }
+                let marker = b[i + 1];
+                if (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC {
+                    let h = u16::from_be_bytes([b[i + 5], b[i + 6]]) as f32;
+                    let w = u16::from_be_bytes([b[i + 7], b[i + 8]]) as f32;
+                    return (w > 0.0 && h > 0.0).then_some((w, h));
+                }
+                i += 2 + u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn zepi_tool_input_summary(tool_call: &ToolCall) -> Option<String> {
+    let obj = tool_call.raw_input.as_ref()?.as_object()?;
+    let text = |key: &str| obj.get(key).and_then(|value| value.as_str()).map(|s| s.to_string());
+    if let Some(command) = text("command").or_else(|| text("cmd")).or_else(|| text("script")) {
+        return Some(text("description").unwrap_or(command));
+    }
+    if let Some(pattern) = text("pattern").or_else(|| text("query")) {
+        return Some(match text("path") {
+            Some(path) => format!("{pattern} · {path}"),
+            None => pattern,
+        });
+    }
+    text("path").or_else(|| text("file_path")).or_else(|| text("file"))
+        .map(|path| std::path::Path::new(&path).file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or(path))
+        .or_else(|| text("url"))
 }
 
 const DATA_RETENTION_LEARN_MORE_URL: &str = "https://support.claude.com/en/articles/15425996-data-retention-practices-for-mythos-class-models";
@@ -414,6 +461,7 @@ fn render_cat_numbered_code_block(
     language: Option<Arc<Language>>,
     markdown_style: MarkdownStyle,
     copy_button_id: String,
+    show_gutter: bool,
     cx: &App,
 ) -> AnyElement {
     use std::fmt::Write as _;
@@ -494,7 +542,7 @@ fn render_cat_numbered_code_block(
                 .items_start()
                 .min_w_0()
                 .w_full()
-                .child(div().flex_none().pr_3().child(gutter))
+                .children(show_gutter.then(|| div().flex_none().pr_3().child(gutter)))
                 .child(code_scroll),
         )
         .child(
@@ -742,6 +790,7 @@ pub struct ThreadView {
     zepi_ui_columns: usize,
     zepi_was_generating: bool,
     zepi_turn_stats_restored: bool,
+    zepi_read_language_loads: RefCell<HashSet<language::LanguageId>>,
     zepi_last_ui_columns: usize,
     zepi_last_ui_light: Option<bool>,
     pub add_context_menu_handle: PopoverMenuHandle<ContextMenu>,
@@ -1308,6 +1357,7 @@ impl ThreadView {
             zepi_ui_columns: 80,
             zepi_was_generating: false,
             zepi_turn_stats_restored: false,
+            zepi_read_language_loads: RefCell::new(HashSet::default()),
             zepi_last_ui_columns: 0,
             zepi_last_ui_light: None,
             add_context_menu_handle: PopoverMenuHandle::default(),
@@ -7714,7 +7764,11 @@ impl ThreadView {
                 AgentThreadEntry::ToolCall(tool) => {
                     first.get_or_insert(index);
                     count += 1;
-                    preview = tool.label.read(cx).source().to_string();
+                    let label = tool.label.read(cx).source().to_string();
+                    preview = match zepi_tool_input_summary(tool) {
+                        Some(summary) => format!("{label} · {summary}"),
+                        None => label,
+                    };
                 }
                 AgentThreadEntry::AssistantMessage(message) => {
                     for chunk in &message.chunks {
@@ -10080,7 +10134,19 @@ impl ThreadView {
 
         let should_show_raw_input = is_zepi || (!is_terminal_tool && !is_edit && !has_image_content);
 
-        let has_content = !tool_call.content().is_empty()
+        let visible_content: Vec<&ToolCallContent> = tool_call.content().iter().filter(|content| {
+            let placeholder = is_zepi
+                && tool_call.parent_tool_call_id.is_some()
+                && match content {
+                    ToolCallContent::ContentBlock { block, .. } => block.as_view().markdown().is_some_and(|markdown| {
+                        let source = markdown.read(cx).source().to_string();
+                        source.starts_with("Nested call completed.") || source.starts_with("Nested call was interrupted")
+                    }),
+                    _ => false,
+                };
+            !placeholder
+        }).collect();
+        let has_content = !visible_content.is_empty()
             || (should_show_raw_input && tool_call.raw_input.is_some());
 
         let is_collapsible = has_content && !needs_confirmation;
@@ -10102,7 +10168,7 @@ impl ThreadView {
                 ToolCallStatus::WaitingForConfirmation => {
                     let confirmation_content = v_flex()
                         .w_full()
-                        .children(tool_call.content().iter().enumerate().map(
+                        .children(visible_content.iter().enumerate().map(
                             |(content_ix, content)| {
                                 div()
                                     .child(self.render_tool_call_content(
@@ -10223,7 +10289,59 @@ impl ThreadView {
                 | ToolCallStatus::Completed
                 | ToolCallStatus::Failed
                 | ToolCallStatus::Canceled => v_flex()
-                    .when(should_show_raw_input, |this| {
+                    .when(should_show_raw_input && is_zepi, |this| {
+                        let is_raw_input_expanded =
+                            self.expanded_tool_call_raw_inputs.contains(&tool_call.id);
+                        this.mt_1p5().w_full().child(
+                            v_flex()
+                                .ml(rems(0.4))
+                                .px_3p5()
+                                .pb_1()
+                                .gap_1()
+                                .border_l_1()
+                                .border_color(self.tool_card_border_color(cx))
+                                .child(
+                                    h_flex()
+                                        .id(("zepi-raw-input-disclosure", entry_ix))
+                                        .gap_1()
+                                        .cursor_pointer()
+                                        .rounded_xs()
+                                        .hover(|s| s.bg(cx.theme().colors().element_hover))
+                                        .child(input_output_header("Raw input".into()))
+                                        .child(
+                                            Disclosure::new(
+                                                ("raw-input-disclosure", entry_ix),
+                                                is_raw_input_expanded,
+                                            )
+                                            .opened_icon(IconName::ChevronUp)
+                                            .closed_icon(IconName::ChevronDown),
+                                        )
+                                        .on_click(cx.listener({
+                                            let id = tool_call.id.clone();
+                                            move |this: &mut Self, _, _, cx| {
+                                                if this.expanded_tool_call_raw_inputs.contains(&id) {
+                                                    this.expanded_tool_call_raw_inputs.remove(&id);
+                                                } else {
+                                                    this.expanded_tool_call_raw_inputs.insert(id.clone());
+                                                }
+                                                cx.notify();
+                                            }
+                                        })),
+                                )
+                                .when(is_raw_input_expanded, |this| {
+                                    this.children(tool_call.raw_input_markdown.clone().map(|input| {
+                                        div().id(("tool-call-raw-input-markdown", entry_ix)).child(
+                                            self.render_markdown(
+                                                input,
+                                                crate::zepi_theme::style_markdown(MarkdownStyle::themed(MarkdownFont::Agent, window, cx), cx),
+                                                cx,
+                                            ),
+                                        )
+                                    }))
+                                }),
+                        )
+                    })
+                    .when(should_show_raw_input && !is_zepi, |this| {
                         this.mt_1p5().w_full().child(
                             v_flex()
                                 .ml(rems(0.4))
@@ -10245,7 +10363,7 @@ impl ThreadView {
                                 .child(input_output_header("Output:".into())),
                         )
                     })
-                    .children(tool_call.content().iter().enumerate().map(
+                    .children(visible_content.iter().enumerate().map(
                         |(content_ix, content)| {
                             let output_id = SharedString::from(format!(
                                 "tool-call-output-{entry_ix}-{content_ix}"
@@ -10326,7 +10444,17 @@ impl ThreadView {
 
         let body = v_flex()
             .when_some(tool_call.parent_tool_call_id.as_ref(), |this, parent| {
-                this.child(Label::new(format!("Nested tool · {}", parent)).size(LabelSize::XSmall).color(Color::Muted))
+                let caption = if is_zepi {
+                    let name = self.thread.read(cx).entries().iter().find_map(|entry| match entry {
+                        AgentThreadEntry::ToolCall(t) if t.id.0.as_ref() == parent.as_ref() =>
+                            t.tool_name.clone().or_else(|| t.name.clone()),
+                        _ => None,
+                    });
+                    format!("via {}", name.unwrap_or_else(|| "parent tool".into()))
+                } else {
+                    format!("Nested tool · {}", parent)
+                };
+                this.child(Label::new(caption).size(LabelSize::XSmall).color(Color::Muted))
             })
             .map(|this| {
                 if is_terminal_tool && !is_zepi {
@@ -10388,7 +10516,7 @@ impl ThreadView {
                                     // status icon on one vertical line across every row.
                                     .child(
                                         div().w(rems_from_px(20.)).flex().justify_end().children(
-                                            (is_zepi && has_location).then(|| {
+                                            (is_zepi && has_location && self.zepi_location_is_file(&tool_call.locations[0].path, cx)).then(|| {
                                                 IconButton::new(("open-tool-file", entry_ix), IconName::File)
                                                     .icon_size(IconSize::Small)
                                                     .tooltip(Tooltip::text("Open File"))
@@ -11921,13 +12049,14 @@ impl ThreadView {
         cx: &Context<Self>,
     ) -> Div {
         let is_zepi = self.agent_id.as_ref() == "zepi-pi";
+        let input_summary = if is_zepi { zepi_tool_input_summary(tool_call) } else { None };
         let has_location = tool_call.locations.len() == 1;
         let is_file = matches!(tool_call.kind(), acp_v2::ToolKind::Edit) && has_location;
         let is_subagent_tool_call = tool_call.is_subagent();
 
         let file_icon = if has_location {
             FileIcons::get_icon(&tool_call.locations[0].path, cx)
-                .map(|from_path| Icon::from_path(from_path).color(Color::Muted))
+                .map(|from_path| if is_zepi { Icon::from_path(from_path) } else { Icon::from_path(from_path).color(Color::Muted) })
                 .unwrap_or(Icon::new(IconName::ToolPencil).color(Color::Muted))
         } else {
             Icon::new(IconName::ToolPencil).color(Color::Muted)
@@ -12025,6 +12154,11 @@ impl ThreadView {
                             cx,
                         ),
                     )
+                    .when_some(input_summary.clone(), |row, summary| row.child(
+                        div().flex_1().min_w_0().child(
+                            Label::new(format!("· {summary}")).size(LabelSize::Small).color(Color::Muted).buffer_font(cx).truncate(),
+                        ),
+                    ))
                     .when(!is_zepi, |label| label
                         .tooltip(Tooltip::text("Go to File"))
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -12039,6 +12173,11 @@ impl ThreadView {
                         MarkdownStyle { prevent_mouse_interaction: is_zepi, ..crate::zepi_theme::style_markdown_muted(MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx), cx) },
                         cx,
                     ))
+                    .when_some(input_summary.clone(), |row, summary| row.child(
+                        div().flex_1().min_w_0().child(
+                            Label::new(format!("· {summary}")).size(LabelSize::Small).color(Color::Muted).buffer_font(cx).truncate(),
+                        ),
+                    ))
                     .into_any()
             })
     }
@@ -12050,12 +12189,14 @@ impl ThreadView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<()> {
-        let (tool_call_location, agent_location) = self
-            .thread
-            .read(cx)
-            .entries()
-            .get(entry_ix)?
-            .location(location_ix)?;
+        let (tool_call_location, agent_location) = {
+            let thread = self.thread.read(cx);
+            let entry = thread.entries().get(entry_ix)?;
+            let AgentThreadEntry::ToolCall(tool_call) = entry else { return None; };
+            let location = tool_call.locations.get(location_ix).cloned()?;
+            let resolved = entry.location(location_ix).map(|(_, resolved)| resolved);
+            (location, resolved)
+        };
 
         let project_path = self
             .project
@@ -12096,7 +12237,7 @@ impl ThreadView {
                 active_editor.update_in(cx, |editor, window, cx| {
                     let snapshot = editor.buffer().read(cx).snapshot(cx);
                     if snapshot.as_singleton().is_some()
-                        && let Some(anchor) = snapshot.anchor_in_excerpt(agent_location.position)
+                        && let Some(anchor) = agent_location.as_ref().and_then(|location| snapshot.anchor_in_excerpt(location.position))
                     {
                         editor.change_selections(Default::default(), window, cx, |selections| {
                             selections.select_anchor_ranges([anchor..anchor]);
@@ -12449,6 +12590,9 @@ impl ThreadView {
                 markdown_style.clone(),
                 cx,
             )
+            .or_else(|| {
+                self.render_zepi_plain_output(markdown.clone(), entry_ix, context_ix, tool_call, markdown_style.clone(), cx)
+            })
             .unwrap_or_else(|| {
                 self.render_markdown(markdown, markdown_style, cx)
                     .into_any()
@@ -12475,6 +12619,64 @@ impl ThreadView {
             .into_any_element()
     }
 
+    fn zepi_read_language(&self, tool_call: &ToolCall, cx: &Context<Self>) -> Option<Arc<Language>> {
+        let path = tool_call.raw_input.as_ref()
+            .and_then(|value| value.get("path").or_else(|| value.get("file_path")))
+            .and_then(|value| value.as_str())?;
+        let registry = self.project.upgrade()?.read(cx).languages().clone();
+        let id = registry.language_for_file_path(std::path::Path::new(path))?;
+        if let Some(language) = registry.to_vec().into_iter().find(|language| language.id() == id) {
+            return Some(language);
+        }
+        if self.zepi_read_language_loads.borrow_mut().insert(id) {
+            cx.spawn(async move |this, cx| {
+                let _ = registry.load_language(id).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.zepi_read_language_loads.borrow_mut().remove(&id);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        None
+    }
+
+    fn render_zepi_plain_output(
+        &self,
+        markdown: Entity<Markdown>,
+        entry_ix: usize,
+        context_ix: usize,
+        tool_call: &ToolCall,
+        markdown_style: MarkdownStyle,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        if self.agent_id.as_ref() != "zepi-pi" {
+            return None;
+        }
+        let source = markdown.read(cx).source().to_string();
+        let code = source.trim_end_matches('\n').to_string();
+        if code.is_empty() {
+            return None;
+        }
+        Some(render_cat_numbered_code_block(
+            ParsedCatNumberedCode { code, first_number: 1, line_count: 0 },
+            None,
+            markdown_style,
+            format!("copy-tool-output-{entry_ix}-{context_ix}"),
+            false,
+            cx,
+        ))
+    }
+
+    fn zepi_location_is_file(&self, path: &Path, cx: &App) -> bool {
+        if path.is_absolute() {
+            return path.is_file();
+        }
+        let Some(project) = self.project.upgrade() else { return false; };
+        let project = project.read(cx);
+        project.worktrees(cx).any(|worktree| worktree.read(cx).abs_path().join(path).is_file())
+    }
+
     fn render_numbered_read_file_output(
         &self,
         markdown: Entity<Markdown>,
@@ -12488,18 +12690,34 @@ impl ThreadView {
             .tool_name
             .as_ref()
             .is_some_and(|tool_name| tool_name.as_ref() == "read_file");
-        if !is_read_file {
+        let is_zepi_read = self.agent_id.as_ref() == "zepi-pi"
+            && (tool_call.tool_name.as_ref().is_some_and(|tool_name| tool_name.as_ref() == "read")
+                || matches!(tool_call.kind(), acp_v2::ToolKind::Read));
+        if !is_read_file && !is_zepi_read {
             return None;
         }
 
         let markdown = markdown.read(cx);
-        let parsed = parse_cat_numbered_markdown_code_block(markdown.source())?;
-        let language = markdown.first_code_block_language();
+        let copy_id = format!("copy-read-file-output-{entry_ix}-{context_ix}");
+        if let Some(parsed) = parse_cat_numbered_markdown_code_block(markdown.source()) {
+            let language = markdown.first_code_block_language();
+            return Some(render_cat_numbered_code_block(parsed, language, markdown_style, copy_id, true, cx));
+        }
+        if !is_zepi_read {
+            return None;
+        }
+        // pi sends read output as plain text; show it as a numbered code block.
+        let code = markdown.source().trim_end_matches('\n');
+        if code.is_empty() {
+            return None;
+        }
+        let line_count = code.split('\n').count();
         Some(render_cat_numbered_code_block(
-            parsed,
-            language,
+            ParsedCatNumberedCode { code: code.to_string(), first_number: 1, line_count },
+            self.zepi_read_language(tool_call, cx),
             markdown_style,
-            format!("copy-read-file-output-{entry_ix}-{context_ix}"),
+            copy_id,
+            true,
             cx,
         ))
     }
@@ -12537,10 +12755,19 @@ impl ThreadView {
                 )
             })
             .child(
-                img(image)
-                    .max_w_96()
-                    .max_h_96()
-                    .object_fit(ObjectFit::ScaleDown),
+                {
+                    let (w, h) = zepi_image_size(&image).unwrap_or((640.0, 360.0));
+                    let scale = (640.0 / w).min(1.0);
+                    img(image)
+                        .w(px(w * scale))
+                        .h(px(h * scale))
+                        .with_fallback(|| {
+                            div()
+                                .p_2()
+                                .child(Label::new("Image no longer available (temporary file was removed)").size(LabelSize::Small).color(Color::Muted))
+                                .into_any_element()
+                        })
+                },
             )
             .into_any_element()
     }

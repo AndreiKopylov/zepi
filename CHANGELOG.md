@@ -4,6 +4,35 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The agent is asked to point at lines, not just files: file links in its replies carry
+  `#L<line>` or `#L<first>-L<last>` (a `:<line>` suffix works too), and Zepi opens the file
+  right at that line. Both spellings were already resolved on click; the system prompt simply
+  never asked for them, so replies linked bare files.
+
+- Tool rows in the agent panel read like dsh: the header carries the tool's target - a model-written
+  `description` for shell commands (the adapter adds the parameter to the `bash`/`pwsh` schemas at
+  session creation, with dsh's wording), the file basename for `read`, the pattern for search tools.
+  The raw JSON input collapses behind a "Raw input" disclosure instead of an always-visible block,
+  and nested codemode calls are captioned "via <parent tool>" instead of the raw parent call id.
+- Tool text outputs render as tight monospace code blocks with a copy button; `read` output renders
+  as a numbered code block with pi-theme syntax highlighting, the language resolved from the file
+  path and the grammar loaded in the background when missing.
+- Screenshots in tool output keep their aspect ratio (PNG and JPEG dimensions parsed from the bytes)
+  capped at 640px wide, and show a note when the temporary file no longer exists; file-type icons on
+  read/edit rows keep their native colors.
+
+### Fixed
+
+- "Open File" on a tool row silently did nothing for pi sessions: it required a resolved editor
+  location that pi never provides. It now opens the raw location path (relative paths resolved
+  against the worktrees) and is hidden when the location is a directory, as for search roots.
+- The nested-call placeholder ("Nested call completed. Detailed output is recorded in the parent
+  tool result.") no longer renders as a nested tool's output.
+
 ## [0.0.1-beta4] - 2026-11-09
 
 ### Added

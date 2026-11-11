@@ -104,6 +104,14 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
             ...(subagents.enabled ? [subagents.tool(options.sessionManager.getSessionId(), client)] : [])],
         });
         liveSession=created.session;
+        // dsh-style tool rows: the model writes a short UI description for shell commands.
+        for (const toolName of ["bash", "pwsh"]) {
+          const params = created.session.getToolDefinition(toolName)?.parameters as { properties?: Record<string, unknown>; required?: string[] } | undefined;
+          if (params?.properties && !params.properties.description) {
+            params.properties.description = { type: "string", description: 'Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI). Examples: "ls" -> "List files in current directory"; "git status" -> "Show working tree status".' };
+            params.required = [...(params.required ?? []), "description"];
+          }
+        }
         const disposeImages = images.attach(created.session);
         // pi reads most runtime settings dynamically. These Agent properties
         // are copied at creation, so refresh them at the same reload boundary.
