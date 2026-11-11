@@ -145,7 +145,7 @@ export class PiAcpAgent {
             agentInfo: {
                 name: "zepi-pi",
                 title: "Zepi pi (ACP adapter 0.9.4)",
-                version: "1.5.0",
+                version: "1.5.2",
             },
             agentCapabilities: {
                 loadSession: true,

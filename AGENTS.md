@@ -1,7 +1,7 @@
 # AGENTS.md — zepi
 
 Windows port of zepi: an AI workspace on top of Zed v1.26.2 (pin in `native/zed.json`) with the
-pi 1.5.0 agent (ACP) and office document viewers (xlsx with editing, docx, pptx) on vendored
+pi 1.5.2 agent (ACP) and office document viewers (xlsx with editing, docx, pptx) on vendored
 crafts. Rust (gpui) + TypeScript (pi layer). See README.md for the human-readable intro.
 
 ## Repository layout

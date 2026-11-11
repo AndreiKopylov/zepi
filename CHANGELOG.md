@@ -33,6 +33,14 @@ All notable changes to Zepi are documented here. The format follows
 - The nested-call placeholder ("Nested call completed. Detailed output is recorded in the parent
   tool result.") no longer renders as a nested tool's output.
 
+- Dependency refresh: pi 1.5.0 -> 1.5.2 (coding-agent, ai, tui and the package overrides),
+  ACP SDK 1.5.0 -> 1.9.0, MCP SDK 1.32.2 in both manifests, typebox 1.4.6, undici 8.12.4,
+  jev-browser 0.2.1, @types/node 24.19.2. The ACP SDK 2.x line was evaluated and left out:
+  its handler-context API would require rewriting the adapter. pi 1.5.2 takes the MCP
+  refresh lock inside `signInMcpServer`, so the runtime passes the lock through the checked
+  credential store instead of wrapping it (the file lock is not reentrant). Version guards,
+  agent info and test expectations now say 1.5.2.
+
 ## [0.0.1-beta4] - 2026-11-09
 
 ### Added
