@@ -6,8 +6,31 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Legacy `.doc` (Word 97-2003) files open in the word viewer and the office CLI, read-only,
+  through the new wordcraft `docbin` reader; `.docx` behavior is unchanged. HTML-based `.doc`
+  exports (Confluence MHTML, plain HTML) are converted to the document model (headings, lists,
+  tables, bold/italic, code) and render like the binary ones.
+
+### Changed
+
+- wordcraft engine updated from rev 9c72ddf5 to 10e5bb8b; craft-i18n language data is vendored
+  and embedded via CRAFT_I18N_DIR so hyphenation (incl. Russian) survives the update.
+- Office viewers load system fonts and apply Word-style family substitutions (Liberation
+  Serif -> Times New Roman, Liberation Sans -> Arial, DejaVu -> Windows equivalents), so documents
+  referencing non-Windows fonts render with familiar metrics instead of the bundled fallback.
+- HTML-based .doc import now honors inline CSS like Word: body/heading fonts and colors,
+  dark code blocks with per-token syntax colors (spans preserved line by line), horizontal
+  rules; headings render black serif instead of the blue built-in style. HTML tables inside
+  thead/tbody/tfoot render, and code blocks are a single shaded paragraph (no per-line seams)
+  with inner padding taken from CSS padding/border. Office rasters account for the display scale factor (crisp on HiDPI).
+
 ### Fixed
 
+- Headings no longer show a stray bullet dot: a numbering level with numFmt none and an empty
+  label renders no marker (docx), and the binary .doc reader no longer invents a default bullet
+  for none-format levels; the hanging indent is kept.
 - PowerShell tool rows no longer render broken: multi-line commands are collapsed to a
   single-line summary (the row has a fixed height), a title that glues the command onto the
   tool name without a separator shows just the tool name, and multi-line Execute titles are

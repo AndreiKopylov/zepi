@@ -14,7 +14,7 @@ use crate::slides_viewer::{
 };
 use crate::slides_viewer::office_knob;
 use wordcraft_doc::Document;
-use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Placed};
+use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Placed, ViewMode};
 use wordcraft_render::{RenderOptions, render_page};
 use editor::{Editor, EditorEvent};
 use gpui::prelude::*;
@@ -45,6 +45,7 @@ const ZOOM_MIN: f64 = 0.25;
 const ZOOM_MAX: f64 = 4.0;
 
 pub fn init(cx: &mut App) {
+    wordcraft_fonts::FontDb::global().load_system_fonts();
     register_project_item::<WordView>(cx);
     register_serializable_item::<WordView>(cx);
     cx.bind_keys([
@@ -61,8 +62,8 @@ fn raster_for(zoom: f64) -> f64 {
     (((zoom * BASE_SUPERSAMPLE) * 2.0).round() / 2.0).clamp(0.5, 4.0)
 }
 
-fn raster_key(zoom: f64) -> u32 {
-    (raster_for(zoom) * 2.0) as u32
+fn raster_key(zoom: f64, scale: f32) -> u32 {
+    (raster_for(zoom) * scale.max(1.0) as f64 * 2.0).round() as u32
 }
 
 #[derive(Clone)]
@@ -194,7 +195,7 @@ impl project::ProjectItem for WordItem {
                     .absolute_path(path, cx)
                     .and_then(|abs| abs.extension().map(|ext| ext.to_string_lossy().to_ascii_lowercase()))
             })?;
-        if ext != "docx" {
+        if ext != "docx" && ext != "doc" {
             return None;
         }
         let abs_path = project.read(cx).absolute_path(path, cx)?;
@@ -314,6 +315,7 @@ pub struct WordView {
     image_tag: u32,
     // mtime+size of the bytes currently shown; the poll compares against it
     loaded_stamp: Option<(u64, u64)>,
+    scale: f32,
 }
 
 fn arm_timer(
@@ -390,6 +392,7 @@ impl WordView {
             raster_gen: 0,
             image_tag: next_image_tag(),
             loaded_stamp,
+            scale: 1.0,
         };
         this.ensure(0, cx);
         // Worktree events can be missed when a writer replaces the file (Office and
@@ -571,7 +574,7 @@ impl WordView {
     }
 
     fn region_image(&self, region: Region, _cx: &App) -> Option<gpui::Image> {
-        let key = raster_key(self.zoom);
+        let key = raster_key(self.zoom, self.scale);
         let raster = raster_for(self.zoom);
         let image = self.cache.get(&(region.slide, key))?;
         let decoded = image::load_from_memory(&image.bytes).ok()?;
@@ -928,7 +931,7 @@ impl WordView {
     }
 
     fn ensure(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let key = raster_key(self.zoom);
+        let key = raster_key(self.zoom, self.scale);
         let slot = (ix, key);
         if self.cache.contains_key(&slot) || self.pending.contains(&slot) {
             return;
@@ -1005,7 +1008,13 @@ fn next_image_tag() -> u32 {
 }
 
 fn import_doc(bytes: &[u8]) -> Result<(Arc<Document>, Arc<DocLayout>)> {
-    let doc = wordcraft_docx::read_with_password(bytes, None).map_err(|error| anyhow::anyhow!("docx import: {error:?}"))?;
+    let doc = if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        wordcraft_docbin::read_with_password(bytes, None).map_err(|error| anyhow::anyhow!("doc import: {error:?}"))?
+    } else if crate::html_doc::looks_like_html(bytes) {
+        crate::html_doc::read(bytes)?
+    } else {
+        wordcraft_docx::read_with_password(bytes, None).map_err(|error| anyhow::anyhow!("docx import: {error:?}"))?
+    };
     let mut cache = LayoutCache::new();
     let layout = wordcraft_layout::layout(&doc, &mut cache, &LayoutOptions::default());
     Ok((Arc::new(doc), Arc::new(layout)))
@@ -1022,11 +1031,12 @@ fn rasterize_page(
     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let page = &layout.pages[index];
         let mut scale = key as f64 / 2.0;
-        let max_pixels = office_knob("maxRasterPixels", 6_000_000) as f64;
+        let max_pixels = office_knob("maxRasterPixels", 16_000_000) as f64;
         let area = page.w as f64 * page.h as f64 * scale * scale;
         if area > max_pixels {
             scale *= (max_pixels / area).sqrt();
         }
+        scale = scale.min(16000.0 / page.h as f64).min(16000.0 / page.w as f64);
         render_page(&doc, page, scale as f32, &RenderOptions::default())
     }))
     .map_err(|_| anyhow::anyhow!("wordcraft panicked on page {}", index + 1))?;
@@ -1161,6 +1171,7 @@ impl workspace::item::SerializableItem for WordView {
 
 impl gpui::Render for WordView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.scale = window.scale_factor();
         if let Some(error) = self.item.read(cx).import_error.clone() {
             return div()
                 .size_full()
@@ -1207,15 +1218,18 @@ impl gpui::Render for WordView {
         let (slide_w, slide_h) = self.slide_size_px(cx);
         let zoom = self.zoom as f32;
         let border = cx.theme().colors().border;
-        let selection_bg = cx.theme().players().local().selection;
+        let mut selection_bg = cx.theme().players().local().selection;
+        // Themes may ship an opaque player selection; keep the overlay see-through.
+        selection_bg.a = selection_bg.a.min(0.25);
         let mut region_bubble: Option<gpui::Div> = None;
         let mut tape = ui::v_flex()
             .w(px(slide_w))
-            .mx_auto()
+            // explicit centering: auto margins overflow differently across taffy versions
+            .ml(px(((f32::from(self.scroll.bounds().size.width) - slide_w) / 2.0).max(0.0)))
             .gap(px(slide_gap()))
             .py(px(TAPE_PAD));
         for ix in 0..count {
-            let slot = (ix, raster_key(self.zoom));
+            let slot = (ix, raster_key(self.zoom, self.scale));
             let image = self
                 .cache
                 .get(&slot)

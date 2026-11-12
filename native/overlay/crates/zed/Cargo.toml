@@ -72,6 +72,8 @@ zepi_ui = { path = "../zepi_ui" }
 deckcraft-pptx = { path = "../../vendor/deckcraft/crates/pptx" }
 deckcraft-render = { path = "../../vendor/deckcraft/crates/render" }
 wordcraft-docx = { path = "../../vendor/wordcraft/crates/docx" }
+wordcraft-docbin = { path = "../../vendor/wordcraft/crates/docbin" }
+wordcraft-fonts = { path = "../../vendor/wordcraft/crates/fonts" }
 wordcraft-layout = { path = "../../vendor/wordcraft/crates/layout" }
 wordcraft-render = { path = "../../vendor/wordcraft/crates/render" }
 acp_thread.workspace = true

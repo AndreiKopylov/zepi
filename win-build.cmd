@@ -18,6 +18,7 @@ rem ZEPI_DEBUG=1 switches debug info to line-tables-only (smaller target, full r
 if "%ZEPI_DEBUG%"=="1" set CARGO_PROFILE_RELEASE_FAST_DEBUG=line-tables-only
 set ZED_COMMIT_SHA=e8bc16acee5ae1937600d571d441c4b5d7b0d288-zepi-local
 set LK_CUSTOM_WEBRTC=%REPO%\.local\upstream\zed\.webrtc-sys\webrtc-0001d84-4\win-x64-release
+set CRAFT_I18N_DIR=%REPO%\native\overlay\vendor\craft-i18n
 set INCLUDE=%MSVC%\include;%SDK%\Include\10.0.26100.0\ucrt;%SDK%\Include\10.0.26100.0\um;%SDK%\Include\10.0.26100.0\shared;%SDK%\Include\10.0.26100.0\winrt;%SDK%\Include\10.0.26100.0\cppwinrt;%REPO%\.local\msvc-shim
 set LIB=%MSVC%\lib\x64;%SDK%\Lib\10.0.26100.0\ucrt\x64;%SDK%\Lib\10.0.26100.0\um\x64
 if "%ZEPI_EXTRA_PATH%"=="" set ZEPI_EXTRA_PATH=%REPO%\..\tools\cmake-3.30.5-windows-x86_64\bin;%REPO%\..\tools\nasm-2.16.03

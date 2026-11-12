@@ -21,6 +21,7 @@ pub fn requested() -> Option<Vec<String>> {
 
 /// Runs the subcommand and returns the process exit code.
 pub fn run(args: &[String]) -> i32 {
+    wordcraft_fonts::FontDb::global().load_system_fonts();
     let (command, rest) = match args.split_first() {
         Some((command, rest)) => (command.as_str(), rest),
         None => {
@@ -88,7 +89,7 @@ fn render(args: &[String]) -> Result<Value> {
 
     let produced = match extension.as_str() {
         "pptx" | "potx" => render_pptx(&bytes, &out, scale, dpi, pages.as_deref())?,
-        "docx" | "docm" => render_docx(&bytes, &out, scale, pages.as_deref())?,
+        "docx" | "docm" | "doc" => render_docx(&bytes, &out, scale, pages.as_deref())?,
         "xlsx" | "xlsm" => {
             bail!("spreadsheets have no built-in renderer; export them with LibreOffice or Office")
         }
@@ -188,14 +189,16 @@ fn render_docx(
     scale: f64,
     pages: Option<&[usize]>,
 ) -> Result<Vec<String>> {
-    let document =
-        wordcraft_docx::read(bytes).map_err(|error| anyhow::anyhow!("docx import: {error:?}"))?;
+    let document = if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        wordcraft_docbin::read(bytes).map_err(|error| anyhow::anyhow!("doc import: {error:?}"))?
+    } else if zepi_ui::html_doc::looks_like_html(bytes) {
+        zepi_ui::html_doc::read(bytes)?
+    } else {
+        wordcraft_docx::read(bytes).map_err(|error| anyhow::anyhow!("docx import: {error:?}"))?
+    };
     let mut cache = wordcraft_layout::LayoutCache::new();
-    let layout = wordcraft_layout::layout(
-        &document,
-        &mut cache,
-        &wordcraft_layout::LayoutOptions::default(),
-    );
+    let opts = wordcraft_layout::LayoutOptions::default();
+    let layout = wordcraft_layout::layout(&document, &mut cache, &opts);
     let count = layout.pages.len();
     let mut files = Vec::new();
     for page in selected(count, pages) {

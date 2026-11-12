@@ -51,6 +51,7 @@ const ZOOM_MIN: f64 = 0.25;
 const ZOOM_MAX: f64 = 4.0;
 
 pub fn init(cx: &mut App) {
+    wordcraft_fonts::FontDb::global().load_system_fonts();
     register_project_item::<SlidesView>(cx);
     register_serializable_item::<SlidesView>(cx);
     cx.bind_keys([
@@ -1223,11 +1224,14 @@ impl gpui::Render for SlidesView {
         let (slide_w, slide_h) = self.slide_size_px(cx);
         let zoom = self.zoom as f32;
         let border = cx.theme().colors().border;
-        let selection_bg = cx.theme().players().local().selection;
+        let mut selection_bg = cx.theme().players().local().selection;
+        // Themes may ship an opaque player selection; keep the overlay see-through.
+        selection_bg.a = selection_bg.a.min(0.25);
         let mut region_bubble: Option<gpui::Div> = None;
         let mut tape = ui::v_flex()
             .w(px(slide_w))
-            .mx_auto()
+            // explicit centering: auto margins overflow differently across taffy versions
+            .ml(px(((f32::from(self.scroll.bounds().size.width) - slide_w) / 2.0).max(0.0)))
             .gap(px(slide_gap()))
             .py(px(TAPE_PAD));
         for ix in 0..count {
