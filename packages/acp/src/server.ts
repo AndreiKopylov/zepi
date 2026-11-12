@@ -105,7 +105,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         });
         liveSession=created.session;
         // dsh-style tool rows: the model writes a short UI description for shell commands.
-        for (const toolName of ["bash", "pwsh"]) {
+        for (const toolName of ["bash", "pwsh", "powershell"]) {
           const params = created.session.getToolDefinition(toolName)?.parameters as { properties?: Record<string, unknown>; required?: string[] } | undefined;
           if (params?.properties && !params.properties.description) {
             params.properties.description = { type: "string", description: 'Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI). Examples: "ls" -> "List files in current directory"; "git status" -> "Show working tree status".' };

@@ -6,6 +6,16 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- PowerShell tool rows no longer render broken: multi-line commands are collapsed to a
+  single-line summary (the row has a fixed height), a title that glues the command onto the
+  tool name without a separator shows just the tool name, and multi-line Execute titles are
+  cut to their first line.
+- The model-written shell description schema now also covers pi's `powershell` tool (it only
+  patched `bash`/`pwsh` before), so new sessions show a short description instead of the raw
+  command in the row.
+
 ## [0.0.1-beta5] - 2026-11-12
 
 ### Changed
