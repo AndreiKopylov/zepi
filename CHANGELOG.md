@@ -8,6 +8,14 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Changed
 
+- Zed base updated from v1.26.2 to v1.28.1 (same Rust 1.98.1): the overlay was ported with
+  the 3-way merge tooling (40 touched upstream files, 30 conflict hunks), adopting the
+  agent-client-protocol v5 module layout, the new keystroke parsing API and the upstream
+  subagent card / tool-call state, while keeping all zepi behavior.
+- The right-hand cluster of a tool row is packed instead of fixed columns: the duration
+  shows only for calls that took at least a second (compact, no "Took"), Open File appears
+  on hover, and the elements sit 3px apart with no reserved empty space.
+
 - The agent is asked to point at lines, not just files: file links in its replies carry
   `#L<line>` or `#L<first>-L<last>` (a `:<line>` suffix works too), and Zepi opens the file
   right at that line. Both spellings were already resolved on click; the system prompt simply

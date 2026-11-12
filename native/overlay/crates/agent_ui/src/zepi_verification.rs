@@ -1,5 +1,5 @@
 use acp_thread::{AcpThread, AgentThreadEntry, ToolCallStatus};
-use agent_client_protocol::schema::v2 as acp_v2;
+use agent_client_protocol::v2::schema as acp_v2;
 use chrono::{DateTime, Utc};
 use gpui::SharedString;
 use serde::Deserialize;

@@ -16,7 +16,7 @@ if "%ZEPI_JOBS%"=="" set ZEPI_JOBS=6
 set CARGO_BUILD_JOBS=%ZEPI_JOBS%
 rem ZEPI_DEBUG=1 switches debug info to line-tables-only (smaller target, full rebuild).
 if "%ZEPI_DEBUG%"=="1" set CARGO_PROFILE_RELEASE_FAST_DEBUG=line-tables-only
-set ZED_COMMIT_SHA=c4273271092b0287f7d181f616bd5171e0a2f70c-zepi-local
+set ZED_COMMIT_SHA=e8bc16acee5ae1937600d571d441c4b5d7b0d288-zepi-local
 set LK_CUSTOM_WEBRTC=%REPO%\.local\upstream\zed\.webrtc-sys\webrtc-0001d84-4\win-x64-release
 set INCLUDE=%MSVC%\include;%SDK%\Include\10.0.26100.0\ucrt;%SDK%\Include\10.0.26100.0\um;%SDK%\Include\10.0.26100.0\shared;%SDK%\Include\10.0.26100.0\winrt;%SDK%\Include\10.0.26100.0\cppwinrt;%REPO%\.local\msvc-shim
 set LIB=%MSVC%\lib\x64;%SDK%\Lib\10.0.26100.0\ucrt\x64;%SDK%\Lib\10.0.26100.0\um\x64

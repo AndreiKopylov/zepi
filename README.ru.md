@@ -8,7 +8,7 @@ Zepi соединяет редактор [Zed](https://github.com/zed-industries
 [pi](https://github.com/badlogic/pi-mono) через протокол ACP. В одном окне: код, терминал, git,
 чат с моделью и просмотр/правка `.pptx`, `.docx`, `.xlsx` без установленного Microsoft Office.
 
-> Статус: **бета (0.0.1)**. Собрано на Zed v1.26.2 и pi 1.5.0.
+> Статус: **бета (0.0.1)**. Собрано на Zed v1.28.1 и pi 1.5.2.
 
 ## Возможности
 
