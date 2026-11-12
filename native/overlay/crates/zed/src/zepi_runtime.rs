@@ -137,7 +137,7 @@ pub fn configure() -> Result<Option<PathBuf>> {
         return Ok(None);
     }
     let manifest: Value = serde_json::from_slice(&std::fs::read(root.join("zepi-runtime.json"))?)?;
-    ensure!(manifest["version"] == 1 && manifest["pi"] == "1.5.0", "Unsupported Zepi runtime manifest");
+    ensure!(manifest["version"] == 1 && manifest["pi"] == "1.5.2", "Unsupported Zepi runtime manifest");
     let helpers = contents.join("Helpers");
     let node = helpers.join("node");
     ensure!(node.is_file() && root.join("packages/acp/src/cli.js").is_file(), "Bundled agent runtime is incomplete");

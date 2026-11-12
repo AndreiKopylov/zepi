@@ -26,7 +26,7 @@ impl CaptureMetadata {
             summary,
         }
     }
-    pub fn from_meta(meta: Option<&agent_client_protocol::schema::v1::Meta>) -> Option<Self> {
+    pub fn from_meta(meta: Option<&agent_client_protocol::v1::schema::Meta>) -> Option<Self> {
         let value: Self = serde_json::from_value(meta?.get("zepiReference")?.clone()).ok()?;
         (value.version == 1).then_some(value)
     }

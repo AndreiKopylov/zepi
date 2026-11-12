@@ -4,6 +4,53 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.0.1-beta5] - 2026-11-12
+
+### Changed
+
+- Zed base updated from v1.26.2 to v1.28.1 (same Rust 1.98.1): the overlay was ported with
+  the 3-way merge tooling (40 touched upstream files, 30 conflict hunks), adopting the
+  agent-client-protocol v5 module layout, the new keystroke parsing API and the upstream
+  subagent card / tool-call state, while keeping all zepi behavior.
+- The right-hand cluster of a tool row is packed instead of fixed columns: the duration
+  shows only for calls that took at least a second (compact, no "Took"), Open File appears
+  on hover, and the elements sit 3px apart with no reserved empty space.
+
+- The agent is asked to point at lines, not just files: file links in its replies carry
+  `#L<line>` or `#L<first>-L<last>` (a `:<line>` suffix works too), and Zepi opens the file
+  right at that line. Both spellings were already resolved on click; the system prompt simply
+  never asked for them, so replies linked bare files.
+
+- Tool rows in the agent panel read like dsh: the header carries the tool's target - a model-written
+  `description` for shell commands (the adapter adds the parameter to the `bash`/`pwsh` schemas at
+  session creation, with dsh's wording), the file basename for `read`, the pattern for search tools.
+  The raw JSON input collapses behind a "Raw input" disclosure instead of an always-visible block,
+  and nested codemode calls are captioned "via <parent tool>" instead of the raw parent call id.
+- Tool text outputs render as tight monospace code blocks with a copy button; `read` output renders
+  as a numbered code block with pi-theme syntax highlighting, the language resolved from the file
+  path and the grammar loaded in the background when missing.
+- Screenshots in tool output keep their aspect ratio (PNG and JPEG dimensions parsed from the bytes)
+  capped at 640px wide, and show a note when the temporary file no longer exists; file-type icons on
+  read/edit rows keep their native colors.
+
+### Fixed
+
+- "Open File" on a tool row silently did nothing for pi sessions: it required a resolved editor
+  location that pi never provides. It now opens the raw location path (relative paths resolved
+  against the worktrees) and is hidden when the location is a directory, as for search roots.
+- The nested-call placeholder ("Nested call completed. Detailed output is recorded in the parent
+  tool result.") no longer renders as a nested tool's output.
+
+- Dependency refresh: pi 1.5.0 -> 1.5.2 (coding-agent, ai, tui and the package overrides),
+  ACP SDK 1.5.0 -> 1.9.0, MCP SDK 1.32.2 in both manifests, typebox 1.4.6, undici 8.12.4,
+  jev-browser 0.2.1, @types/node 24.19.2. The ACP SDK 2.x line was evaluated and left out:
+  its handler-context API would require rewriting the adapter. pi 1.5.2 takes the MCP
+  refresh lock inside `signInMcpServer`, so the runtime passes the lock through the checked
+  credential store instead of wrapping it (the file lock is not reentrant). Version guards,
+  agent info and test expectations now say 1.5.2.
+
 ## [0.0.1-beta4] - 2026-11-09
 
 ### Added

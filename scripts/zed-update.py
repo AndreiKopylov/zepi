@@ -133,6 +133,9 @@ def main():
     new_deps, overlay_deps = workspace_deps(new_root_toml), workspace_deps(overlay_root)
     missing_deps = [overlay_deps[key] for key in overlay_deps if key not in new_deps]
     merged = new_root_toml
+    exclude_match = re.search(r'^exclude = \[.*?\]', overlay_root, re.M)
+    if exclude_match and 'exclude =' not in merged:
+        merged = merged.replace('resolver = "2"', 'resolver = "2"' + NL + exclude_match.group(0), 1)
     if extra_members:
         merged = re.sub(r'members = \[', 'members = [' + NL + '    ' + (',' + NL + '    ').join('"' + m + '"' for m in extra_members) + ',', merged, count=1)
     if missing_deps:
@@ -150,12 +153,13 @@ def main():
     env['CARGO_TARGET_DIR'] = str(TARGET)
     env['CARGO_NET_OFFLINE'] = 'false'
     env['CARGO_NET_GIT_FETCH_WITH_CLI'] = 'true'
-    env['CARGO_BUILD_JOBS'] = '12'
+    env['CARGO_BUILD_JOBS'] = '4'
     env['ZED_COMMIT_SHA'] = ref + '-zepi-trial'
     env['LK_DEBUG_WEBRTC'] = 'false'
     env['INCLUDE'] = os.pathsep.join([MSVC + '/include', SDK + '/Include/' + SDKV + '/ucrt', SDK + '/Include/' + SDKV + '/um', SDK + '/Include/' + SDKV + '/shared', SDK + '/Include/' + SDKV + '/winrt', SDK + '/Include/' + SDKV + '/cppwinrt', str(LOCAL / 'msvc-shim')])
     env['LIB'] = os.pathsep.join([MSVC + '/lib/x64', SDK + '/Lib/' + SDKV + '/ucrt/x64', SDK + '/Lib/' + SDKV + '/um/x64'])
-    extra = [p for p in os.environ.get('ZEPI_EXTRA_PATH', '').split(os.pathsep) if p]
+    extra_default = str(WORK / 'tools' / 'cmake-3.30.5-windows-x86_64' / 'bin') + os.pathsep + str(WORK / 'tools' / 'nasm-2.16.03')
+    extra = [p for p in os.environ.get('ZEPI_EXTRA_PATH', extra_default).split(os.pathsep) if p]
     env['PATH'] = os.pathsep.join([MSVC + '/bin/Hostx64/x64'] + extra + [env['PATH']])
     webrtc = LOCAL / 'upstream' / 'zed' / '.webrtc-sys'
     current_version = lock_text_version(trial_lock, 'webrtc-sys')

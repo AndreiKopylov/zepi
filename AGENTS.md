@@ -1,7 +1,7 @@
 # AGENTS.md — zepi
 
-Windows port of zepi: an AI workspace on top of Zed v1.26.2 (pin in `native/zed.json`) with the
-pi 1.5.0 agent (ACP) and office document viewers (xlsx with editing, docx, pptx) on vendored
+Windows port of zepi: an AI workspace on top of Zed v1.28.1 (pin in `native/zed.json`) with the
+pi 1.5.2 agent (ACP) and office document viewers (xlsx with editing, docx, pptx) on vendored
 crafts. Rust (gpui) + TypeScript (pi layer). See README.md for the human-readable intro.
 
 ## Repository layout
@@ -34,7 +34,7 @@ zepi/
 
 ## Stack
 
-- Native: Rust 1.98.1, Zed v1.26.2 (tarball by pin, sha256 verified), gpui; `release-fast` cargo
+- Native: Rust 1.98.1, Zed v1.28.1 (tarball by pin, sha256 verified), gpui; `release-fast` cargo
   profile (debug is unusable: laggy UI); target dir outside the repo.
 - Agent: bundled Node (v24 LTS in the bundle), TypeScript, ACP; browser agent on Playwright Chromium.
 - Build tools: MSVC v143 + Windows SDK 10.0.26100 + Spectre-mitigated libs v143 (individual Build

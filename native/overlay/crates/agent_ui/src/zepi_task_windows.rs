@@ -1,5 +1,5 @@
 use crate::{AgentPanel, ConversationView, thread_metadata_store::ThreadId};
-use agent_client_protocol::schema::v2 as acp_v2;
+use agent_client_protocol::v2::schema as acp_v2;
 use gpui::{AnyWindowHandle, App, Entity, Global, WeakEntity};
 use workspace::Workspace;
 

@@ -55,7 +55,7 @@ export function createSubagents(agentDir: string, sessionDir: string) {
       if (count) activeCounts.set(rootId, count); else activeCounts.delete(rootId);
     };
   };
-  const context = <T>(params: T, client: AgentContext, signal = new AbortController().signal) => ({params, client, signal, requestId: randomUUID()});
+  const context = <T>(method: string, params: T, client: AgentContext, signal = new AbortController().signal) => ({method, params, client, signal, requestId: randomUUID()});
   const publish = (parent: Session, update: SessionUpdate) => {
     appendZepiEntry(parent.pi.sessionManager,SUBAGENT_EVENT, {update});
     parent.host?.enqueue(update);
@@ -71,7 +71,7 @@ export function createSubagents(agentDir: string, sessionDir: string) {
     });
   };
   const stopChildren = (parentId: string, client: AgentContext) => {
-    for (const relation of relations.values()) if (relation.parentSessionId === parentId) server.agent.cancel(context({sessionId: relation.childSessionId}, client));
+    for (const relation of relations.values()) if (relation.parentSessionId === parentId) server.agent.cancel(context("session/cancel", {sessionId: relation.childSessionId}, client));
   };
   const restore = async (id: string, client: AgentContext) => {
     if (sessions.get(id)?.host) return;
@@ -79,7 +79,7 @@ export function createSubagents(agentDir: string, sessionDir: string) {
     if (!relation) throw new Error("Unknown delegated session.");
     const parent = sessions.get(relation.parentSessionId);
     if (!parent) throw new Error("Open the main task before continuing this agent.");
-    await server.agent.loadSession(context({sessionId: id, cwd: parent.pi.sessionManager.getCwd(), mcpServers: mcpServers.get(relation.parentSessionId) ?? []}, client));
+    await server.agent.loadSession(context("session/load", {sessionId: id, cwd: parent.pi.sessionManager.getCwd(), mcpServers: mcpServers.get(relation.parentSessionId) ?? []}, client));
   };
 
   return {
@@ -145,7 +145,7 @@ export function createSubagents(agentDir: string, sessionDir: string) {
           const run = async (row: Row, previous?: string) => {
             let childId: string | undefined;
             let release: (() => void) | undefined, settled: (() => void) | undefined;
-            const cancel = () => {if (childId) server.agent.cancel(context({sessionId: childId}, client));};
+            const cancel = () => {if (childId) server.agent.cancel(context("session/cancel", {sessionId: childId}, client));};
             signal?.addEventListener("abort", cancel, {once: true});
             try {
               signal?.throwIfAborted();
@@ -153,7 +153,7 @@ export function createSubagents(agentDir: string, sessionDir: string) {
               row.state = "Running"; row.started = Date.now();
               const relation: Relation = {parentSessionId: parentId, childSessionId: "", toolCallId: row.id, title: row.job.title || row.role.name,
                 runId: randomUUID(), rootSessionId: rootId, groupId, depth, role: row.role, attempt: 1};
-              const created = await opening.run(relation, () => server.agent.newSession(context({cwd: parent.pi.sessionManager.getCwd(), mcpServers: mcpServers.get(parentId) ?? [],
+              const created = await opening.run(relation, () => server.agent.newSession(context("session/new", {cwd: parent.pi.sessionManager.getCwd(), mcpServers: mcpServers.get(parentId) ?? [],
                 _meta: {systemPrompt: {append: `${row.role.systemPrompt}\nYou are a delegated ${row.role.name} agent in Zepi. Work only on the assigned task. Use native tools; never claim verification without evidence. Your result returns to the parent. Parent session: ${parentId}.`}}}, client, signal)));
               childId = created.sessionId;
               completions.set(childId, new Promise<void>(resolve => {settled = resolve;}));
@@ -302,7 +302,7 @@ export function createSubagents(agentDir: string, sessionDir: string) {
         awaitingPrompts.delete(ctx.params.sessionId);
         stopChildren(ctx.params.sessionId, ctx.client);
         for (const relation of relations.values()) if (relation.parentSessionId === ctx.params.sessionId) {
-          await server.agent.closeSession(context({sessionId: relation.childSessionId}, ctx.client));
+          await server.agent.closeSession(context("session/close", {sessionId: relation.childSessionId}, ctx.client));
         }
         const result = await close(ctx);
         sessions.delete(ctx.params.sessionId);

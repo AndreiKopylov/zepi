@@ -8,7 +8,7 @@ Zepi wires the [Zed](https://github.com/zed-industries/zed) editor to the
 [pi](https://github.com/badlogic/pi-mono) agent over ACP. One window holds code, terminal, git and a
 chat with your model plus viewing and editing `.pptx`, `.docx` and `.xlsx` without Microsoft Office.
 
-> Status: **beta (0.0.1)**. Built on Zed v1.26.2 and pi 1.5.0.
+> Status: **beta (0.0.1)**. Built on Zed v1.28.1 and pi 1.5.2.
 
 ## What it does
 
