@@ -6,6 +6,8 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.1-beta5] - 2026-11-12
+
 ### Changed
 
 - Zed base updated from v1.26.2 to v1.28.1 (same Rust 1.98.1): the overlay was ported with
