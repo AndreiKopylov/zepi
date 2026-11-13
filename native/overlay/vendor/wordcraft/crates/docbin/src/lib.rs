@@ -267,6 +267,10 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         doc.core = core;
     }
     doc.body.clear();
+    let table_style_margins = table::style_cell_margins_of(&raw_styles);
+    // Word adds the paragraphs' spaces in the binary format (its default doNotUseHTMLParagraphAutoSpacing
+    // settings for Word 97-2003 files); taking the larger one would drop a heading's space before.
+    doc.settings.sum_paragraph_spacing = true;
     doc.styles = Arc::new(fmt::stylesheet(&raw_styles, &fonts, standard_fonts));
     doc.numbering = Arc::new(list::parse(&table, &fib, &fonts));
     let sheet: StyleSheet = StyleSheet::clone(&doc.styles);
@@ -416,7 +420,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         return Err(paragraph_limit(max_paragraphs));
     }
     doc.media.extend(pics.media);
-    doc.body = table::assemble(paras);
+    doc.body = table::assemble(paras, table_style_margins);
     doc.ensure_nonempty();
     work.log();
     Ok(doc)
@@ -433,7 +437,7 @@ fn story_blocks(ctx: &WalkCtx<'_>, a: u32, b: u32, pics: &mut media::Pictures, m
     if ctx.paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
     }
-    Ok(table::assemble(paras))
+    Ok(table::assemble(paras, table::style_cell_margins_of(ctx.raw_styles)))
 }
 
 /// A header or footer story's blocks without its guard paragraph mark. [MS-DOC] 2.3.3: a
@@ -463,7 +467,7 @@ fn header_story_blocks(
             paras.pop();
         }
     }
-    Ok(table::assemble(paras))
+    Ok(table::assemble(paras, table::style_cell_margins_of(ctx.raw_styles)))
 }
 
 /// A story's CP range `[a, b)`, relative to a subdocument starting at `base` with `len`

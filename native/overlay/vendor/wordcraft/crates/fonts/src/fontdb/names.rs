@@ -232,7 +232,11 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
         let root = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
         dirs.push(root.join("Fonts"));
         if let Some(l) = std::env::var_os("LOCALAPPDATA") {
-            dirs.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
+            let local = std::path::PathBuf::from(l);
+            dirs.push(local.join("Microsoft\\Windows\\Fonts"));
+            // Office's cloud fonts (Aptos, Open Sans, Lato…): Word uses them for the families it
+            // knows, so a document naming one must not fall back to a substitute here.
+            dirs.push(local.join("Microsoft\\FontCache\\4\\CloudFonts"));
         }
     } else {
         dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts"].map(Into::into));

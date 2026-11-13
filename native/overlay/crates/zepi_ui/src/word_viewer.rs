@@ -515,18 +515,44 @@ impl WordView {
         self.item.read(cx).layout.as_ref().map_or(0, |layout| layout.pages.len())
     }
 
-    fn slide_size_px(&self, cx: &App) -> (f32, f32) {
+    // Sections may be landscape, so every page keeps its own size on the tape.
+    fn page_size_px(&self, ix: usize, cx: &App) -> (f32, f32) {
+        let item = self.item.read(cx);
+        let Some(page) = item.layout.as_ref().and_then(|layout| layout.pages.get(ix)) else {
+            return (0.0, 0.0);
+        };
+        (page.w * self.zoom as f32, page.h * self.zoom as f32)
+    }
+
+    fn tape_width_px(&self, cx: &App) -> f32 {
+        let item = self.item.read(cx);
+        let zoom = self.zoom as f32;
+        item.layout
+            .as_ref()
+            .map_or(0.0, |layout| layout.pages.iter().map(|page| page.w).fold(0.0, f32::max) * zoom)
+    }
+
+    // Tape top of page ix: page heights differ per section, so the offsets accumulate.
+    fn page_top(&self, ix: usize, cx: &App) -> f32 {
         let item = self.item.read(cx);
         let Some(layout) = item.layout.as_ref() else {
-            return (0.0, 0.0);
+            return TAPE_PAD;
         };
-        let Some(page) = layout.pages.first() else {
-            return (0.0, 0.0);
-        };
-        (
-            page.w * self.zoom as f32,
-            page.h * self.zoom as f32,
-        )
+        let zoom = self.zoom as f32;
+        layout
+            .pages
+            .iter()
+            .take(ix)
+            .fold(TAPE_PAD, |top, page| top + page.h * zoom + slide_gap())
+    }
+
+    fn index_at(&self, y: f32, cx: &App) -> usize {
+        let count = self.slide_count(cx);
+        let mut ix = 0;
+        while ix + 1 < count && y >= self.page_top(ix + 1, cx) {
+            ix += 1;
+        }
+        ix
     }
 
     fn blocks_for(&mut self, ix: usize, cx: &App) -> Arc<Vec<TextBlock>> {
@@ -543,11 +569,13 @@ impl WordView {
     }
 
     fn slide_origin(&self, ix: usize, cx: &App) -> Point<Pixels> {
-        let (slide_w, slide_h) = self.slide_size_px(cx);
+        let (slide_w, _) = self.page_size_px(ix, cx);
         let bounds = self.scroll.bounds();
         let offset = self.scroll.offset();
-        let content_x = ((f32::from(bounds.size.width) - slide_w) / 2.0).max(0.0);
-        let content_y = TAPE_PAD + ix as f32 * (slide_h + slide_gap());
+        let tape_w = self.tape_width_px(cx);
+        let content_x =
+            ((f32::from(bounds.size.width) - tape_w) / 2.0).max(0.0) + (tape_w - slide_w) / 2.0;
+        let content_y = self.page_top(ix, cx);
         gpui::point(
             bounds.origin.x + px(content_x) + offset.x,
             bounds.origin.y + px(content_y) + offset.y,
@@ -676,13 +704,7 @@ impl WordView {
         if count == 0 {
             return 0;
         }
-        let (_, h) = self.slide_size_px(cx);
-        let step = h + slide_gap();
-        if step <= 0.0 {
-            return 0;
-        }
-        let pos = -f32::from(self.scroll.offset().y) - TAPE_PAD;
-        ((pos / step).round() as isize).clamp(0, count as isize - 1) as usize
+        self.index_at(-f32::from(self.scroll.offset().y), cx)
     }
 
     fn create_page_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Editor> {
@@ -709,8 +731,7 @@ impl WordView {
         editor
     }
     fn scroll_to_slide(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let (_, slide_h) = self.slide_size_px(cx);
-        let top = TAPE_PAD + ix as f32 * (slide_h + slide_gap());
+        let top = self.page_top(ix, cx);
         self.scroll.set_offset(gpui::point(px(0.), -px(top)));
         self.ensure(ix, cx);
         cx.notify();
@@ -922,12 +943,9 @@ impl WordView {
     }
 
     fn center_slide(&self, cx: &App) -> usize {
-        let (_, slide_h) = self.slide_size_px(cx);
-        let step = slide_h + slide_gap();
         let viewport = self.scroll.bounds().size.height;
         let y = -f32::from(self.scroll.offset().y) + f32::from(viewport) / 2.0;
-        let ix = (y / step).floor() as isize;
-        ix.clamp(0, self.slide_count(cx) as isize - 1) as usize
+        self.index_at(y, cx)
     }
 
     fn ensure(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -984,16 +1002,15 @@ impl WordView {
         if count == 0 {
             return;
         }
-        let (_, slide_h) = self.slide_size_px(cx);
-        let step = slide_h + slide_gap();
         let viewport = self.scroll.bounds().size.height;
-        let offset = -self.scroll.offset().y;
-        let first = (f32::from(offset) / step).floor() as isize - 1;
-        let visible = (f32::from(viewport) / step).ceil() as isize + 2;
-        for ix in first..first + visible {
-            if ix >= 0 && (ix as usize) < count {
-                self.ensure(ix as usize, cx);
+        let offset = f32::from(-self.scroll.offset().y);
+        let first = self.index_at(offset, cx).saturating_sub(1);
+        let bottom = offset + f32::from(viewport) + slide_gap();
+        for ix in first..count {
+            if self.page_top(ix, cx) > bottom {
+                break;
             }
+            self.ensure(ix, cx);
         }
     }
 }
@@ -1215,7 +1232,7 @@ impl gpui::Render for WordView {
             });
         }
         let count = self.slide_count(cx);
-        let (slide_w, slide_h) = self.slide_size_px(cx);
+        let tape_w = self.tape_width_px(cx);
         let zoom = self.zoom as f32;
         let border = cx.theme().colors().border;
         let mut selection_bg = cx.theme().players().local().selection;
@@ -1223,9 +1240,9 @@ impl gpui::Render for WordView {
         selection_bg.a = selection_bg.a.min(0.25);
         let mut region_bubble: Option<gpui::Div> = None;
         let mut tape = ui::v_flex()
-            .w(px(slide_w))
+            .w(px(tape_w))
             // explicit centering: auto margins overflow differently across taffy versions
-            .ml(px(((f32::from(self.scroll.bounds().size.width) - slide_w) / 2.0).max(0.0)))
+            .ml(px(((f32::from(self.scroll.bounds().size.width) - tape_w) / 2.0).max(0.0)))
             .gap(px(slide_gap()))
             .py(px(TAPE_PAD));
         for ix in 0..count {
@@ -1235,9 +1252,11 @@ impl gpui::Render for WordView {
                 .get(&slot)
                 .or_else(|| self.stale.get(&slot))
                 .cloned();
+            let (slide_w, slide_h) = self.page_size_px(ix, cx);
             let mut slide = div()
                 .w(px(slide_w))
                 .h(px(slide_h))
+                .ml(px((tape_w - slide_w) / 2.0))
                 .flex_none()
                 .relative()
                 .shadow_lg()

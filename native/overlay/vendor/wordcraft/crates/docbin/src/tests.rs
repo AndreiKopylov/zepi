@@ -2067,6 +2067,33 @@ fn rejected_inline_pictures_are_not_read_again() {
 }
 
 #[test]
+fn cell_padding_sprms_set_the_side_margins_in_both_itc_forms() {
+    // sprmTCellPaddingDefault (spra 6, so the operand opens with its size byte): the spec's
+    // two-byte itc pair, then the packed one-byte form LibreOffice writes. 55 twips = 2.75 pt on
+    // the top and left sides.
+    let spec = grpprl(&[(0xD634, &[0x06, 0x00, 0x01, 0x03, 0x03, 0x37, 0x00])]);
+    let packed = grpprl(&[(0xD634, &[0x05, 0x01, 0x03, 0x03, 0x37, 0x00])]);
+    for papx in [spec, packed] {
+        let row = crate::table::decode(&papx);
+        assert_eq!(row.padding_default(), Some([Some(2.75), Some(2.75), None, None]), "{papx:02x?}");
+    }
+}
+
+#[test]
+fn table_style_cell_margins_need_all_four_sides() {
+    // Four single-side records make the full set; one alone stays partial and is ignored.
+    let full = grpprl(&[
+        (0xD634, &[0x06, 0x00, 0x01, 0x01, 0x03, 0x37, 0x00]),
+        (0xD634, &[0x06, 0x00, 0x01, 0x02, 0x03, 0x37, 0x00]),
+        (0xD634, &[0x06, 0x00, 0x01, 0x04, 0x03, 0x37, 0x00]),
+        (0xD634, &[0x06, 0x00, 0x01, 0x08, 0x03, 0x37, 0x00]),
+    ]);
+    assert_eq!(crate::table::style_cell_margins(&full), Some([2.75; 4]));
+    let one = grpprl(&[(0xD634, &[0x06, 0x00, 0x01, 0x01, 0x03, 0x37, 0x00])]);
+    assert_eq!(crate::table::style_cell_margins(&one), None);
+}
+
+#[test]
 fn row_height_of_i16_min_does_not_overflow() {
     // sprmTDyaRowHeight = -32768: negating the i16 overflowed (a debug-build panic).
     let papx = grpprl(&[(0x9407, &i16::MIN.to_le_bytes())]);

@@ -445,10 +445,28 @@ fn is_hebrew(f: &str) -> bool {
     NAMES.contains(&f) || f.contains("hebrew")
 }
 
+/// Families Word itself replaces with a specific face, measured from Word's PDF exports: it never
+/// walks a `;` list, and its own pick for these names is not the generic substitute list's
+/// (Open Sans paginates as Segoe UI in Word, not as the list's Arial).
+const WORD_SUBSTITUTES: &[(&str, &[&str])] = &[("open sans", &["Segoe UI", "Selawik"])];
+
+/// The installed face Word would use for `family` ([`WORD_SUBSTITUTES`]), if any is installed.
+fn word_substitute(db: &FontDb, family: &str) -> Option<&'static str> {
+    let f = family.trim().to_ascii_lowercase();
+    WORD_SUBSTITUTES
+        .iter()
+        .find(|(name, _)| *name == f)
+        .and_then(|&(_, subs)| subs.iter().copied().find(|s| db.has_family(s)))
+}
+
 /// The first installed substitute for a missing `family`. For a Thai font, the first with Latin
 /// letters and digits as well as Thai ones (a Thai face without Latin would leave a mixed run in
 /// two fonts, #1549), else the first with Thai letters, else the first installed.
 fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
+    // Word's own pick for the name beats twins and the generic lists.
+    if let Some(sub) = word_substitute(db, family) {
+        return Some(sub);
+    }
     // A twin draws the text as the font would: Carlito for Calibri, Helvetica for Arial on a Mac.
     if let Some(twin) = metric_twins(family).find(|t| db.has_family(t)) {
         return Some(twin);
@@ -601,6 +619,15 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     }
 
     let mut direct_probes = MAX_DIRECT_CANDIDATE_PROBES;
+    // Word never reads past the first name of a list: it does not know the list, so the name goes
+    // through its own substitution even when the family is installed (Open Sans;Arial -> Segoe UI,
+    // while a bare Open Sans keeps the cloud font). Only a list with no such pick walks on.
+    if let Some(&first) = candidates.first() {
+        let base = charset_base_family(first);
+        if let Some(sub) = word_substitute(db, base) {
+            return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
+        }
+    }
 
     // 1. First installed family in the list:
     for &cand in &candidates {
@@ -778,6 +805,18 @@ mod tests {
         // Only those two: the Windows fonts themselves, and other Mac fonts, keep their own.
         for family in ["Times New Roman", "Courier New", "Helvetica", "Hoefler Text", "Palatino", ""] {
             assert_eq!(borrowed_line(family, 2048.0), None, "{family}");
+        }
+    }
+
+    #[test]
+    fn word_own_substitutes_are_consulted_by_name() {
+        // The table holds only families whose Word pick was measured; generic names stay out.
+        assert_eq!(WORD_SUBSTITUTES.iter().find(|(n, _)| *n == "open sans").map(|&(_, s)| s), Some(&["Segoe UI", "Selawik"][..]));
+        assert!(!WORD_SUBSTITUTES.iter().any(|(n, _)| *n == "arial" || *n == "roboto" || *n == "noto sans"));
+        // Without any of its faces installed the table defers to the usual substitution.
+        let db = FontDb::with_font_dirs(Vec::new());
+        if word_substitute(&db, "Open Sans").is_some() {
+            assert!(db.has_family("Segoe UI") || db.has_family("Selawik"));
         }
     }
 

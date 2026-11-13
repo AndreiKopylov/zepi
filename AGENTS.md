@@ -88,6 +88,9 @@ scripts\win-run.py                 :: run with seeded configs
 - The gridcraft streaming parser must not charge nodes inside split (streamed) elements against
   its kept-node budget, or big sheets get flagged damaged and lose `<cols>`.
 - xlsx font sizes are points: render at pt * 4/3 px, else text fits differently than in Excel.
+- wordcraft vendor carries a local patch (scripts/wordcraft-local-patches/wordcraft-local.patch):
+  reapply it after any vendor update; rationale and Word measurements live in the team wiki
+  (7-zepi/патчи-wordcraft).
 
 ## Documentation
 

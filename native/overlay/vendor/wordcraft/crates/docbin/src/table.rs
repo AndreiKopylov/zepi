@@ -44,6 +44,8 @@ const T_VERT_ALIGN: u16 = 0xD62C;
 const T_SET_SHD: u16 = 0xD62D;
 const T_CANT_SPLIT: u16 = 0x3466;
 const T_CELL_WIDTH: u16 = 0xD635;
+const T_CELL_PADDING: u16 = 0xD632;
+const T_CELL_PADDING_DEFAULT: u16 = 0xD634;
 
 /// Most grid columns we build from a `sprmTDefTable` (the model's own cap is 63; one more
 /// edge is fine but merged rows can sum spans slightly over, so clamp when assembling).
@@ -64,6 +66,10 @@ pub(crate) struct RowInfo {
     pub(crate) edges: Vec<f32>,
     height: Option<f32>,
     height_rule: HeightRule,
+    /// Cell margins (top, left, bottom, right) for the cell this mark ends (`sprmTCellPadding`).
+    pad: Option<[Option<f32>; 4]>,
+    /// Row-wide cell margins (`sprmTCellPaddingDefault`), for cells without their own.
+    pad_default: Option<[Option<f32>; 4]>,
     header: bool,
     cant_split: bool,
     align: Option<Align>,
@@ -92,6 +98,12 @@ impl RowInfo {
     #[cfg(test)]
     pub(crate) fn height(&self) -> Option<f32> {
         self.height
+    }
+
+    /// The row-wide cell margins, for tests.
+    #[cfg(test)]
+    pub(crate) fn padding_default(&self) -> Option<[Option<f32>; 4]> {
+        self.pad_default
     }
 
     /// The fill cell `i` ends up with (the last shading entry for it wins), for tests.
@@ -129,6 +141,10 @@ fn set<T>(slots: &mut Vec<(u8, T)>, c: u8, v: T) {
 }
 
 pub(crate) fn decode(papx: &[u8]) -> RowInfo {
+    if std::env::var("WC_DEBUG_PAPX").is_ok() {
+        let ops: Vec<String> = sprm::iter(papx).map(|p| format!("{:04X}:{}", p.op, p.operand.len())).collect();
+        eprintln!("papx len={} ops={}", papx.len(), ops.join(" "));
+    }
     let mut r = RowInfo::default();
     let mut gap_half: Option<i16> = None;
     let mut dxa_left: Option<i16> = None;
@@ -142,6 +158,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             T_DEF_TABLE => r.edges = def_table_edges(prl.operand),
             T_TABLE_HEADER => r.header = prl.operand.first().copied().unwrap_or(0) != 0,
             T_CANT_SPLIT | T_CANT_SPLIT_90 => r.cant_split = prl.operand.first().copied().unwrap_or(0) != 0,
+            T_CELL_PADDING => merge_margins(&mut r.pad, cssa_margins(&prl)),
+            T_CELL_PADDING_DEFAULT => merge_margins(&mut r.pad_default, cssa_margins(&prl)),
             T_ROW_HEIGHT => {
                 if let Some(v) = s16(&prl) {
                     if v < 0 {
@@ -275,7 +293,7 @@ pub(crate) struct ParaOut {
 /// Group consecutive in-table paragraphs into [`Table`] blocks; the rest pass through.
 /// Rows that never close (or tables nested deeper than we model) degrade to paragraphs so
 /// no text is lost.
-pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
+pub(crate) fn assemble(paras: Vec<ParaOut>, style_margins: Option<[f32; 4]>) -> Blocks {
     let mut out: Blocks = Vec::new();
     let mut rows: Vec<Row> = Vec::new();
     let mut cells: Vec<Cell> = Vec::new();
@@ -293,6 +311,13 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         cells.push(Cell { props: CellProps { span: 1, ..Default::default() }, blocks, controls: Default::default() });
     }
     fn build_row(mut cells: Vec<Cell>, info: &RowInfo) -> Row {
+        if let Some(pad) = info.pad_default {
+            for c in cells.iter_mut() {
+                if c.props.margins.is_none() && c.props.partial_margins.is_none() {
+                    c.props.partial_margins = Some(pad);
+                }
+            }
+        }
         // Per-cell overrides first (sprm cell indices count pre-merge cells), then merges.
         for (i, c) in cells.iter_mut().enumerate() {
             let i = i as u8;
@@ -340,7 +365,16 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             controls: Default::default(),
         }
     }
-    fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
+    fn flush_table(
+        out: &mut Blocks,
+        rows: &mut Vec<Row>,
+        cells: &mut Vec<Cell>,
+        cell: &mut Blocks,
+        grid: &[f32],
+        props: &TableProps,
+        nested: bool,
+        style_margins: Option<[f32; 4]>,
+    ) {
         if !cells.is_empty() || !cell.is_empty() {
             flush_cell(cells, cell);
             // A stray trailing row (no TTP of its own): size its cells from the grid.
@@ -363,8 +397,12 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 }
             }
         } else {
+            let mut tprops = props.clone();
+            if tprops.cell_margins.is_none() {
+                tprops.cell_margins = style_margins;
+            }
             out.push(Arc::new(Block::Table(Table {
-                props: props.clone(),
+                props: tprops,
                 grid: grid.to_vec(),
                 rows: std::mem::take(rows),
                 controls: Default::default(),
@@ -376,7 +414,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     for p in paras {
         let Some(info) = p.row else {
             if open {
-                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1, style_margins);
                 grid.clear();
                 // Table props are per-table (first row carrying the sprm wins within the
                 // table): reset the accumulator so one table's borders, align, indent and
@@ -426,6 +464,11 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             }
             if !row_end_only {
                 flush_cell(&mut cells, &mut cell);
+                if let Some(pad) = info.pad {
+                    if let Some(last) = cells.last_mut().filter(|c| c.props.margins.is_none() && c.props.partial_margins.is_none()) {
+                        last.props.partial_margins = Some(pad);
+                    }
+                }
             }
             if info.ttp {
                 let row = build_row(std::mem::take(&mut cells), &info);
@@ -436,7 +479,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         }
     }
     if open {
-        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1, style_margins);
     }
     out
 }
@@ -444,6 +487,64 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
 /// Cell-edge positions (points) from a `sprmTDefTable` operand: cb u16, itcMac u8, then
 /// itcMac+1 twip boundaries followed by the TC80s (skipped). Edges are returned as stored:
 /// per-row, in operand order; sorting and capping happen when the table grid is assembled.
+/// Sides of `add` win over what earlier sprms of the same mark set.
+fn merge_margins(into: &mut Option<[Option<f32>; 4]>, add: Option<[Option<f32>; 4]>) {
+    let Some(add) = add else { return };
+    let slot = into.get_or_insert([None; 4]);
+    for i in 0..4 {
+        if add[i].is_some() {
+            slot[i] = add[i];
+        }
+    }
+}
+
+/// Cell margins from a `sprmTCellPadding`/`Default` CSSA operand: itc pair, side bits, unit and
+/// width in twips. Sides absent from `grfbrc` stay `None` to inherit the table's defaults.
+fn cssa_margins(prl: &Prl) -> Option<[Option<f32>; 4]> {
+    // spra 6 leaves the operand's size byte in front of the CSSA.
+    let o = match prl.operand.split_first() {
+        Some((cb, rest)) if usize::from(*cb) + 1 == prl.operand.len() => rest,
+        _ => prl.operand,
+    };
+    // The spec's CSSA carries a two-byte itc pair; writers also emit a packed one-byte itc,
+    // so the unit byte sits at 3 or at 2.
+    let is_width = |f: &u8| *f == 0x03 || *f == 0x13;
+    let (grfbrc, w) = if o.get(3).is_some_and(is_width) {
+        (*o.get(2)?, i16::from_le_bytes([*o.get(4)?, *o.get(5)?]))
+    } else if o.get(2).is_some_and(is_width) {
+        (*o.get(1)?, i16::from_le_bytes([*o.get(3)?, *o.get(4)?]))
+    } else {
+        return None;
+    };
+    let v = (w.max(0) as f32) / 20.0;
+    let mut m = [None; 4];
+    for (bit, slot) in [(0x01, 0), (0x02, 1), (0x04, 2), (0x08, 3)] {
+        if grfbrc & bit != 0 {
+            m[slot] = Some(v);
+        }
+    }
+    m.iter().any(Option::is_some).then_some(m)
+}
+
+/// Cell margins a table-style grpprl (TAPX) sets on all four sides, for tables whose own rows
+/// carry no `sprmTCellPaddingDefault`.
+pub(crate) fn style_cell_margins(grpprl: &[u8]) -> Option<[f32; 4]> {
+    let mut m = None;
+    for prl in sprm::iter(grpprl) {
+        if prl.op == T_CELL_PADDING_DEFAULT || prl.op == T_CELL_PADDING {
+            merge_margins(&mut m, cssa_margins(&prl));
+        }
+    }
+    // A partial set would silently zero the other sides against Word's defaults.
+    let m = m?;
+    m.iter().all(Option::is_some).then(|| m.map(|v| v.unwrap_or(0.0)))
+}
+
+/// The margins of the stylesheet's first table style (the default table style), if it sets any.
+pub(crate) fn style_cell_margins_of(raw: &[crate::stsh::RawStyle]) -> Option<[f32; 4]> {
+    raw.iter().find(|s| s.stk == 3).and_then(|s| style_cell_margins(&s.tapx))
+}
+
 fn def_table_edges(operand: &[u8]) -> Vec<f32> {
     let itc = operand.get(2).copied().unwrap_or(0) as usize;
     if itc == 0 {

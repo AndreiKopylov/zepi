@@ -8,6 +8,10 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Added
 
+- Local wordcraft patch, reapplied after vendor updates from
+  `scripts/wordcraft-local-patches/wordcraft-local.patch`: Office cloud fonts
+  (`%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts`) join the scanned font folders, so a
+  document naming a cloud family (Open Sans, Aptos, Lato) draws with it like Word does.
 - Legacy `.doc` (Word 97-2003) files open in the word viewer and the office CLI, read-only,
   through the new wordcraft `docbin` reader; `.docx` behavior is unchanged. HTML-based `.doc`
   exports (Confluence MHTML, plain HTML) are converted to the document model (headings, lists,
@@ -15,6 +19,16 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Changed
 
+- Word-family lists (`w:rFonts="Open Sans;Arial"`) go through Word's own substitution table before
+  the list walk: Word never parses a `;` list and substitutes Segoe UI for it, while a bare
+  `Open Sans` keeps the cloud font. Line pitch and page breaks of such documents now match Word
+  (`.docx` page 4 no longer swallows two extra lines).
+- Binary `.doc`: paragraph spacing is summed (`space_after` + `space_before`) as Word does for
+  Word 97-2003 files, and table cell margins come from `sprmTCellPadding`/`sprmTCellPaddingDefault`
+  (plus the table style's TAPX). Text after a table no longer drifts up by 5.65 pt per row.
+- Word viewer tape sizes every page from its own section instead of the first page's: landscape
+  pages (an A4 wide table, page 22 of the deployment guide) keep their box, and paging, scroll and
+  prefetch are computed from the real page heights.
 - wordcraft engine updated from rev 9c72ddf5 to 10e5bb8b; craft-i18n language data is vendored
   and embedded via CRAFT_I18N_DIR so hyphenation (incl. Russian) survives the update.
 - Office viewers load system fonts and apply Word-style family substitutions (Liberation

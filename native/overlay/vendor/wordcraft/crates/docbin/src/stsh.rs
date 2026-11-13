@@ -18,6 +18,8 @@ pub(crate) struct RawStyle {
     pub(crate) papx: Vec<u8>,
     /// Character-formatting UPX grpprl (paragraph and character styles).
     pub(crate) chpx: Vec<u8>,
+    /// Table-formatting UPX grpprl (table styles).
+    pub(crate) tapx: Vec<u8>,
 }
 
 /// The stylesheet's standard fonts, the ones text takes when neither its style nor its own
@@ -123,6 +125,7 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
         // character sprms; character styles: UPX0 is the character grpprl.
         let mut papx = Vec::new();
         let mut chpx = Vec::new();
+        let mut tapx = Vec::new();
         if stk == 1 {
             if let Some(u) = upxs.first() {
                 papx = u.get(2..).unwrap_or(&[]).to_vec(); // skip the istd of GrpPrlAndIstd
@@ -134,8 +137,12 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
             && let Some(u) = upxs.first()
         {
             chpx = u.clone();
+        } else if stk == 3
+            && let Some(u) = upxs.first()
+        {
+            tapx = u.clone();
         }
-        out.push(RawStyle { stk, istd_base, name, papx, chpx });
+        out.push(RawStyle { stk, istd_base, name, papx, chpx, tapx });
     }
     Ok(out)
 }
