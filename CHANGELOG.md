@@ -8,6 +8,9 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Added
 
+- `ui` scrollbar gains a `thumb_color` override (overlay patch on upstream
+  `crates/ui/src/components/scrollbar.rs`): a view can set the thumb color directly, without
+  track blending, while keeping the native autohide/drag behavior.
 - Local wordcraft patch, reapplied after vendor updates from
   `scripts/wordcraft-local-patches/wordcraft-local.patch`: Office cloud fonts
   (`%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts`) join the scanned font folders, so a
@@ -39,7 +42,12 @@ All notable changes to Zepi are documented here. The format follows
   rules; headings render black serif instead of the blue built-in style. HTML tables inside
   thead/tbody/tfoot render, and code blocks are a single shaded paragraph (no per-line seams)
   with inner padding taken from CSS padding/border. Office rasters account for the display scale factor (crisp on HiDPI).
-
+- Office viewers (Excel, Word, PowerPoint) share one editor-style scrollbar: a mid-gray thumb
+  (`#808080`) that reads on both light pages/slides and the dark tape, autohiding like the code
+  editor instead of staying on screen. Excel uses the native Zed scrollbar (Editor style) with
+  the new `thumb_color` override, so the thumb shows without a full-length track and appears on
+  hover/scroll; Word/PowerPoint thumbs are widened to 15px flush with the edge, and the
+  PowerPoint scrollbar uses an arrow cursor instead of the slide crosshair.
 ### Fixed
 
 - Headings no longer show a stray bullet dot: a numbering level with numFmt none and an empty

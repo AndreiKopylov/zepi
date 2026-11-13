@@ -996,6 +996,11 @@ pub(crate) fn office_knob_f(key: &str, default: f64) -> f64 {
     office_value(key).and_then(|value| value.as_f64()).unwrap_or(default)
 }
 
+// mid-gray reads on both light slides and the dark tape
+pub(crate) fn office_thumb_color() -> gpui::Hsla {
+    gpui::rgb(0x808080).opacity(0.9).into()
+}
+
 // knobs are read on hot paths (wheel, render): cache the parsed settings by mtime
 fn office_value(key: &str) -> Option<serde_json_lenient::Value> {
     use std::sync::Mutex;
@@ -1373,12 +1378,12 @@ impl gpui::Render for SlidesView {
                     div()
                         .id("slides-thumb")
                         .absolute()
-                        .right(px(2.))
+                        .right(px(0.))
                         .top(px(top))
-                        .w(px(6.))
+                        .w(px(15.))
                         .h(px(thumb_h))
-                        .rounded_full()
-                        .bg(cx.theme().colors().scrollbar_thumb_background)
+                        .cursor_default()
+                        .bg(office_thumb_color())
                         .when(!reveal, |this| this.visible_on_hover("slides-thumb-zone"))
                         .on_mouse_down(MouseButton::Left, {
                             let view = view.clone();
@@ -1924,7 +1929,8 @@ impl gpui::Render for SlidesView {
                             .right_0()
                             .top_0()
                             .bottom_0()
-                            .w(px(12.))
+                            .w(px(15.))
+                            .cursor_default()
                             .group("slides-thumb-zone")
                             .on_mouse_move({
                                 let view = view.clone();

@@ -12,7 +12,7 @@ use crate::slides_viewer::{
     office_knob_f, scan_char_matches, ClearSelection, CopyRegionImage, PageNext, PagePrev, CopySelection, SearchNext, SearchPrev,
     SendRegionImage, SendSlideText, ToggleSearch,
 };
-use crate::slides_viewer::office_knob;
+use crate::slides_viewer::{office_knob, office_thumb_color};
 use wordcraft_doc::Document;
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Placed, ViewMode};
 use wordcraft_render::{RenderOptions, render_page};
@@ -1386,12 +1386,11 @@ impl gpui::Render for WordView {
                     div()
                         .id("slides-thumb")
                         .absolute()
-                        .right(px(2.))
+                        .right(px(0.))
                         .top(px(top))
-                        .w(px(6.))
+                        .w(px(15.))
                         .h(px(thumb_h))
-                        .rounded_full()
-                        .bg(cx.theme().colors().scrollbar_thumb_background)
+                        .bg(office_thumb_color())
                         .when(!reveal, |this| this.visible_on_hover("slides-thumb-zone"))
                         .on_mouse_down(MouseButton::Left, {
                             let view = view.clone();

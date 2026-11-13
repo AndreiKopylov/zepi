@@ -356,9 +356,13 @@ impl gpui::Render for SheetView {
                             move |bounds: gpui::Bounds<gpui::Pixels>, _window, cx: &mut App| {
                                 let origin = bounds.origin;
                                 let size = bounds.size;
-                                view.update(cx, |this, _cx| {
-                                    this.grid_origin = origin;
-                                    this.grid_size = Point::new(size.width, size.height);
+                                view.update(cx, |this, cx| {
+                                    let new_size = Point::new(size.width, size.height);
+                                    if this.grid_origin != origin || this.grid_size != new_size {
+                                        this.grid_origin = origin;
+                                        this.grid_size = new_size;
+                                        cx.notify();
+                                    }
                                 });
                             }
                         },
@@ -946,8 +950,9 @@ impl gpui::Render for SheetView {
             .child(formula_bar)
             .child(grid.custom_scrollbars(
                 Scrollbars::new(ScrollAxes::Both)
+                    .style(ScrollbarStyle::Editor)
+                    .thumb_color(office_thumb_color())
                     .tracked_scroll_handle(&self.scroll)
-                    .with_track_along(ScrollAxes::Both, header_bg)
                     .notify_content(),
                 window,
                 cx,
@@ -956,4 +961,3 @@ impl gpui::Render for SheetView {
             .into_any_element()
     }
 }
-

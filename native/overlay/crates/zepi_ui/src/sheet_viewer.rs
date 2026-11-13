@@ -26,7 +26,7 @@ use theme::ActiveTheme;
 use ui::{
     ButtonCommon, Clickable, Color as UiColor, Icon, IconButton, IconName, Label, LabelCommon,
     LabelSize, ScrollAxes,
-    ScrollableHandle, Scrollbars, Tooltip, WithScrollbar,
+    ScrollableHandle, ScrollbarStyle, Scrollbars, Tooltip, WithScrollbar,
 };
 use workspace::item::{ItemBufferKind, Item, ProjectItem, SerializableItem, TabContentParams};
 use workspace::notifications::{DetachAndPromptErr, NotificationId};
@@ -35,7 +35,7 @@ use workspace::{
     register_serializable_item,
 };
 
-use crate::slides_viewer::{office_knob, office_knob_f};
+use crate::slides_viewer::{office_knob, office_knob_f, office_thumb_color};
 
 mod sheet_render;
 
