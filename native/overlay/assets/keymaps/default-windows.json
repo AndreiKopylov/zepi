@@ -1676,6 +1676,7 @@
     "context": "SheetSearch",
     "bindings": {
       "enter": "sheet_viewer::SheetSearchNext",
+      "shift-enter": "sheet_viewer::SheetSearchPrev",
       "escape": "sheet_viewer::SheetSearch"
     }
   },

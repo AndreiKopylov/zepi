@@ -105,19 +105,6 @@ impl gpui::Render for SheetView {
                     .color(UiColor::Muted),
             )
             .child(div().flex_1());
-        if self.search_open {
-            if let Some(editor) = self.search_editor.clone() {
-                header = header.child(
-                    div()
-                        .w(px(240.))
-                        .h(px(24.))
-                        .key_context("SheetSearch")
-                        .on_action(cx.listener(|this, _: &SheetSearchNext, _window, cx| this.search_next(cx)))
-                        .on_action(cx.listener(|this, _: &SheetSearch, window, cx| this.toggle_search(window, cx)))
-                        .child(editor),
-                );
-            }
-        }
         let view_for_header = cx.entity();
         header = header
             .child(
@@ -169,6 +156,33 @@ impl gpui::Render for SheetView {
                         }
                     }),
             );
+
+        let search_bar = self.search_open.then(|| {
+            let n = self.search_matches.len();
+            let label = if n == 0 { "No results".to_string() } else { format!("{}/{}", self.search_current + 1, n) };
+            let view = cx.entity();
+            let search_focus = self.search_editor.as_ref().map(|e| e.focus_handle(cx)).unwrap_or_else(|| self.focus_handle.clone());
+            let mut bar = ui::h_flex()
+                .key_context("SheetSearch")
+                .flex_none()
+                .h(px(32.))
+                .px_2()
+                .gap_2()
+                .items_center()
+                .border_b_1()
+                .border_color(colors.border_variant)
+                .bg(colors.panel_background)
+                .on_action(cx.listener(|this, _: &SheetSearchNext, _w, cx| this.search_next(cx)))
+                .on_action(cx.listener(|this, _: &SheetSearchPrev, _w, cx| this.search_prev(cx)))
+                .on_action(cx.listener(|this, _: &SheetSearch, w, cx| this.toggle_search(w, cx)));
+            if let Some(editor) = self.search_editor.clone() {
+                bar = bar.child(div().flex_1().min_w_0().h(px(22.)).on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(editor));
+            }
+            bar.child(Label::new(SharedString::from(label)).size(LabelSize::XSmall).color(UiColor::Muted))
+                .child(IconButton::new("sheet-search-prev", IconName::ChevronUp).icon_size(ui::IconSize::XSmall).tooltip({ let f = search_focus.clone(); move |_w, cx| Tooltip::for_action_in("Previous match", &SheetSearchPrev, &f, cx) }).on_click({ let v = view.clone(); move |_, _, cx| { let _ = v.update(cx, |this, cx| this.search_prev(cx)); } }))
+                .child(IconButton::new("sheet-search-next", IconName::ChevronDown).icon_size(ui::IconSize::XSmall).tooltip({ let f = search_focus.clone(); move |_w, cx| Tooltip::for_action_in("Next match", &SheetSearchNext, &f, cx) }).on_click({ let v = view.clone(); move |_, _, cx| { let _ = v.update(cx, |this, cx| this.search_next(cx)); } }))
+                .child(IconButton::new("sheet-search-close", IconName::Close).icon_size(ui::IconSize::XSmall).on_click({ let v = view; move |_, w, cx| { let _ = v.update(cx, |this, cx| this.toggle_search(w, cx)); } }))
+        });
 
         // formula bar
         let bar_text = self.bar_text(cx);
@@ -606,6 +620,7 @@ impl gpui::Render for SheetView {
                         }
                         let mut rich_total: Option<f32> = None;
                         if let Some(rs) = wb.rich.iter().find(|r| r.text == formatted.text) {
+
                             let knob = office_knob_f("sheet.fontScale", 4.0 / 3.0) as f32;
                             let family = SharedString::from(style.font.name.clone());
                             let base_color = color;
@@ -914,6 +929,7 @@ impl gpui::Render for SheetView {
             .on_action(cx.listener(|this, _: &MoveLeft, window, cx| this.move_sel(0, -1, window, cx)))
             .on_action(cx.listener(|this, _: &MoveRight, window, cx| this.move_sel(0, 1, window, cx)))
             .child(header)
+            .children(search_bar)
             .child(formula_bar)
             .child(grid.custom_scrollbars(
                 Scrollbars::new(ScrollAxes::Both)
@@ -928,3 +944,4 @@ impl gpui::Render for SheetView {
             .into_any_element()
     }
 }
+

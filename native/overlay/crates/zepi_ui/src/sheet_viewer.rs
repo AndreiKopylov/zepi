@@ -54,6 +54,7 @@ actions!(
         MoveRight,
         SheetSearch,
         SheetSearchNext,
+        SheetSearchPrev,
         SheetCopy,
         SheetCut,
         SheetPaste,
@@ -371,6 +372,9 @@ pub struct SheetView {
     search_editor: Option<Entity<Editor>>,
     cell_editor: Option<Entity<Editor>>,
     focus_search_on_render: bool,
+    search_matches: Vec<(u32, u32, usize, usize)>,
+    search_current: usize,
+    search_query: String,
     grid_origin: Point<gpui::Pixels>,
     grid_size: Point<gpui::Pixels>,
     self_write: Option<Instant>,
@@ -421,6 +425,9 @@ impl SheetView {
             search_editor: None,
             cell_editor: None,
             focus_search_on_render: false,
+            search_matches: Vec::new(),
+            search_current: 0,
+            search_query: String::new(),
             grid_origin: Point::default(),
             grid_size: Point::default(),
             self_write: None,
@@ -1006,77 +1013,80 @@ impl SheetView {
         if self.search_open {
             if self.search_editor.is_none() {
                 let editor = cx.new(|cx| Editor::single_line(window, cx));
+                cx.subscribe(&editor, |this, _ed, ev, cx| {
+                    if matches!(ev, editor::EditorEvent::BufferEdited) {
+                        this.recompute_search(cx);
+                    }
+                }).detach();
                 self.search_editor = Some(editor);
             }
             self.focus_search_on_render = true;
+            self.recompute_search(cx);
         } else {
             self.search_editor = None;
+            self.search_matches.clear();
+            self.search_query.clear();
             window.focus(&self.focus_handle, cx);
         }
         cx.notify();
     }
 
-    fn search_next(&mut self, cx: &mut Context<Self>) {
-        let query = self
-            .search_editor
-            .as_ref()
-            .map(|editor| editor.read(cx).text(cx))
-            .unwrap_or_default();
-        let query = query.trim().to_lowercase();
-        if query.is_empty() {
-            return;
-        }
-        let (last_row, last_col) = self.used_bounds(cx);
-        let cols = last_col + 1;
-        let total = (last_row + 1) * cols;
-        let start = self.sel_row * cols + self.sel_col + 1;
-        let sheet_cells = self
-            .item
-            .read(cx)
-            .wb
-            .as_ref()
-            .and_then(|wb| wb.sheets.get(self.sheet).cloned());
-        let Some(sheet_cells) = sheet_cells else { return };
-        for step in 0..total {
-            let idx = (start + step) % total;
-            let row = idx / cols;
-            let col = idx % cols;
-            let text = sheet_cells
-                .cell(CellRef::new(row, col))
-                .map(|cell| cell.bar_text().to_lowercase())
-                .unwrap_or_default();
-            if !text.contains(&query) {
-                continue;
-            }
-            self.sel_row = row;
-            self.sel_col = col;
-            let item = self.item.read(cx);
-            if let Some(wb) = item.wb.as_ref() {
-                if let Some(sheet) = wb.sheets.get(self.sheet) {
-                    let (sx, sy) = self.scroll.pos();
-                    let view_w = (f32::from(self.grid_size.x) - LEFT_W).max(50.0) / self.zoom;
-                    let view_h = (f32::from(self.grid_size.y) - TOP_H).max(50.0) / self.zoom;
-                    let cl = sheet.col_left(col) as f32;
-                    let cw = sheet.col_width(col);
-                    let rt = sheet.row_top(row) as f32;
-                    let rh = sheet.row_height(row);
-                    let mut nx = sx;
-                    let mut ny = sy;
-                    if cl < nx {
-                        nx = cl;
-                    } else if cl + cw > nx + view_w {
-                        nx = cl + cw - view_w;
+    fn recompute_search(&mut self, cx: &mut Context<Self>) {
+        let q = self.search_editor.as_ref().map(|e| e.read(cx).text(cx)).unwrap_or_default().trim().to_lowercase();
+        self.search_query = q.clone();
+        self.search_matches.clear();
+        self.search_current = 0;
+        if !q.is_empty() {
+            let (last_row, last_col) = self.used_bounds(cx);
+            if let Some(sheet) = self.item.read(cx).wb.as_ref().and_then(|wb| wb.sheets.get(self.sheet).cloned()) {
+                for row in 0..=last_row {
+                    for col in 0..=last_col {
+                        let text = sheet.cell(CellRef::new(row, col)).map(|c| c.bar_text()).unwrap_or_default();
+                        for (ms, me) in crate::slides_viewer::scan_char_matches(&text, &q) {
+                            self.search_matches.push((row, col, ms, me));
+                        }
                     }
-                    if rt < ny {
-                        ny = rt;
-                    } else if rt + rh > ny + view_h {
-                        ny = rt + rh - view_h;
-                    }
-                    self.scroll.set_pos(nx, ny);
                 }
             }
-            cx.notify();
-            return;
+        }
+        if !self.search_matches.is_empty() {
+            self.jump_to_match(cx);
+        }
+        cx.notify();
+    }
+
+    fn step_match(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let n = self.search_matches.len();
+        if n == 0 { return; }
+        self.search_current = (self.search_current as isize + delta).rem_euclid(n as isize) as usize;
+        self.jump_to_match(cx);
+        cx.notify();
+    }
+
+    fn search_next(&mut self, cx: &mut Context<Self>) { self.step_match(1, cx); }
+    fn search_prev(&mut self, cx: &mut Context<Self>) { self.step_match(-1, cx); }
+
+    fn jump_to_match(&mut self, cx: &mut Context<Self>) {
+        let Some(&(row, col, _, _)) = self.search_matches.get(self.search_current) else { return };
+        self.anchor = None;
+        self.sel_row = row;
+        self.sel_col = col;
+        let item = self.item.read(cx);
+        if let Some(wb) = item.wb.as_ref() {
+            if let Some(sheet) = wb.sheets.get(self.sheet) {
+                let (sx, sy) = self.scroll.pos();
+                let view_w = (f32::from(self.grid_size.x) - LEFT_W).max(50.0) / self.zoom;
+                let view_h = (f32::from(self.grid_size.y) - TOP_H).max(50.0) / self.zoom;
+                let cl = sheet.col_left(col) as f32;
+                let cw = sheet.col_width(col);
+                let rt = sheet.row_top(row) as f32;
+                let rh = sheet.row_height(row);
+                let mut nx = sx;
+                let mut ny = sy;
+                if cl < nx { nx = cl; } else if cl + cw > nx + view_w { nx = cl + cw - view_w; }
+                if rt < ny { ny = rt; } else if rt + rh > ny + view_h { ny = rt + rh - view_h; }
+                self.scroll.set_pos(nx, ny);
+            }
         }
     }
 
@@ -1103,29 +1113,12 @@ impl SheetView {
                 }
             }
         }
-        self.caret_task = Some(cx.spawn(async move |this, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(530))
-                .await;
-            let cont = this
-                .update(cx, |this, cx| {
-                    if !this.editing {
-                        return false;
-                    }
-                    this.caret_on = !this.caret_on;
-                    cx.notify();
-                    true
-                })
-                .unwrap_or(false);
-            if !cont {
-                break;
-            }
-        }));
         let editor = cx.new(|cx| Editor::auto_height_unbounded(1, window, cx));
         let t = self.edit_buffer.clone();
         editor.update(cx, |ed, cx| {
             ed.set_text(t, window, cx);
             ed.set_cursor_shape(language::CursorShape::Bar, cx);
+            ed.set_use_selection_highlight(false);
             ed.move_to_end(&editor::actions::MoveToEnd, window, cx);
         });
         let fh = editor.focus_handle(cx);

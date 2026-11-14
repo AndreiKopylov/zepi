@@ -8,6 +8,9 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Added
 
+- Excel search redesigned like Word: a dedicated bar with a match counter and prev/next/close
+  buttons (tooltips show hotkeys), occurrence search across cells, Enter/Shift+Enter to step,
+  Esc to close; stepping selects and scrolls to the matched cell.
 - Local gridcraft patch, reapplied after vendor updates from
   `scripts/gridcraft-local-patches/gridcraft-local.patch`: rich-text runs (per-run color, bold,
   italic and size) are preserved on read and written back on save, so formatted cell text
@@ -26,6 +29,8 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Changed
 
+- Fixed black artifacts over cell text when selecting a letter in the cell editor: the gpui
+  editor's selection-occurrence highlight is now disabled for the in-cell editor.
 - Excel viewer metric parity with Excel: respect stored row heights, render blank lines
   (black/red paragraph gap), pt-to-px 4/3, hyphen wrap, column text padding and GDI-style
   integer glyph advances so long lines wrap like Excel.
