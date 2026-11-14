@@ -1,0 +1,218 @@
+diff --git a/native/overlay/vendor/gridcraft/crates/model/src/lib.rs b/native/overlay/vendor/gridcraft/crates/model/src/lib.rs
+index 46ca86b..4b3af5d 100644
+--- a/native/overlay/vendor/gridcraft/crates/model/src/lib.rs
++++ b/native/overlay/vendor/gridcraft/crates/model/src/lib.rs
+@@ -27,7 +27,7 @@ pub use style::{
+     Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, StyleId, StyleTable, Theme, Underline,
+     VAlign, VertAlign,
+ };
+-pub use workbook::{CalcMode, CalcSettings, DefinedName, DocProps, PhoneticProps, PhoneticRun, PhoneticString, ShowObjects, Workbook, WorkbookView};
++pub use workbook::{CalcMode, CalcSettings, DefinedName, DocProps, PhoneticProps, PhoneticRun, PhoneticString, RichRun, RichString, ShowObjects, Workbook, WorkbookView};
+ 
+ /// Font used for new workbooks. Only a name: renderers substitute an available open font
+ /// (e.g. the metric-compatible Carlito) when it isn't installed.
+diff --git a/native/overlay/vendor/gridcraft/crates/model/src/workbook.rs b/native/overlay/vendor/gridcraft/crates/model/src/workbook.rs
+index c1a7f29..d7e7be7 100644
+--- a/native/overlay/vendor/gridcraft/crates/model/src/workbook.rs
++++ b/native/overlay/vendor/gridcraft/crates/model/src/workbook.rs
+@@ -183,6 +183,26 @@ pub struct PhoneticString {
+     pub props: Option<PhoneticProps>,
+ }
+ 
++/// One rich-text run (`<r>`) of a shared string: text plus the font overrides it carries.
++#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
++pub struct RichRun {
++    pub text: String,
++    #[serde(default)] pub bold: bool,
++    #[serde(default)] pub italic: bool,
++    #[serde(default)] pub underline: bool,
++    #[serde(default)] pub strike: bool,
++    #[serde(default, skip_serializing_if = "Option::is_none")] pub color: Option<u32>,
++    #[serde(default, skip_serializing_if = "Option::is_none")] pub size: Option<f32>,
++    #[serde(default, skip_serializing_if = "Option::is_none")] pub font: Option<String>,
++}
++
++/// Rich-text runs of a shared string, kept next to its base text so open+save preserves them.
++#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
++pub struct RichString {
++    pub text: String,
++    pub runs: Vec<RichRun>,
++}
++
+ #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+ pub struct Workbook {
+     pub sheets: Vec<Arc<Sheet>>,
+@@ -219,6 +239,9 @@ pub struct Workbook {
+     /// which holds unmodelled parts), so it is saved to JSON as well as to XLSX.
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub phonetics: Vec<PhoneticString>,
++    /// Rich-text runs per base text, preserved like phonetics so saving keeps colors/bold/italic.
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub rich: Vec<RichString>,
+     /// VBA project (`xl/vbaProject.bin`) carried through unchanged. GridCraft does not run
+     /// macros; the blob is preserved so that saving a macro-enabled workbook never destroys the
+     /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros. Shared, so a
+@@ -339,6 +362,7 @@ impl Workbook {
+             custom_lists: vec![],
+             cell_styles: vec![],
+             phonetics: vec![],
++            rich: vec![],
+             vba_project: None,
+             csv_delimiter: None,
+             macros: crate::macros::Macros::default(),
+diff --git a/native/overlay/vendor/gridcraft/crates/xlsx/src/read.rs b/native/overlay/vendor/gridcraft/crates/xlsx/src/read.rs
+index e6ba1ce..d2c4307 100644
+--- a/native/overlay/vendor/gridcraft/crates/xlsx/src/read.rs
++++ b/native/overlay/vendor/gridcraft/crates/xlsx/src/read.rs
+@@ -4,7 +4,7 @@ use std::sync::Arc;
+ 
+ use gridcraft_core::{DateSystem, RangeRef};
+ use gridcraft_model::{
+-    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
++    CalcMode, CellPicture, DefinedName, PhoneticString, RichString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+ };
+ 
+ use crate::package::{Package, Rel};
+@@ -19,6 +19,7 @@ pub struct Ctx<'a> {
+     pub sst: Vec<Arc<str>>,
+     /// Phonetic (furigana) data of the shared strings, one entry per base text.
+     pub phonetics: Vec<PhoneticString>,
++    pub rich: Vec<RichString>,
+     /// Cell format index → model style.
+     pub xf_map: Vec<StyleId>,
+     pub dxfs: Vec<Style>,
+@@ -109,9 +110,12 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
+             Some(b) => {
+                 let mut sst = Vec::new();
+                 let mut phonetics = Vec::new();
++                let mut rich = Vec::new();
+                 let mut dropped = 0usize;
+                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
+                     let text = xml::rich_text(&si);
++                    let rruns = xml::rich_runs(&si);
++                    if !rruns.is_empty() { rich.push(RichString { text: text.clone(), runs: rruns }); }
+                     let raw = si.kids("rPh").count();
+                     let (runs, props) = xml::phonetic_data(&si, &text);
+                     dropped += raw.saturating_sub(runs.len());
+@@ -129,6 +133,7 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
+                 }
+                 cx.sst = sst;
+                 cx.keep_phonetics(phonetics);
++                cx.rich = rich;
+             }
+             None => cx.warn(format!("missing part {}", r.target)),
+         }
+@@ -240,6 +245,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
+         report: ReadReport::default(),
+         sst: vec![],
+         phonetics: vec![],
++        rich: vec![],
+         xf_map: vec![],
+         dxfs: vec![],
+         palette: crate::tables::INDEXED.to_vec(),
+@@ -444,6 +450,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
+     wb.apply_name_call_case();
+     wb.styles = cx.styles;
+     wb.phonetics = cx.phonetics;
++    wb.rich = cx.rich;
+     Ok((wb, cx.report))
+ }
+ 
+diff --git a/native/overlay/vendor/gridcraft/crates/xlsx/src/write.rs b/native/overlay/vendor/gridcraft/crates/xlsx/src/write.rs
+index eb755c0..b99cb4d 100644
+--- a/native/overlay/vendor/gridcraft/crates/xlsx/src/write.rs
++++ b/native/overlay/vendor/gridcraft/crates/xlsx/src/write.rs
+@@ -5,7 +5,7 @@ use std::fmt::Write as _;
+ 
+ use gridcraft_core::RangeRef;
+ use gridcraft_formula::quote_sheet;
+-use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
++use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, RichString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
+ 
+ use crate::package::ZipOut;
+ use crate::xml::{esc, esc_attr};
+@@ -353,9 +353,10 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>)
+     // Phonetic (furigana) data is kept per string text: the table below holds each text once, so
+     // the runs of the entry with that text are written next to it (`Workbook::phonetics`).
+     let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
++    let rich: HashMap<&str, &RichString> = wb.rich.iter().map(|r| (r.text.as_str(), r)).collect();
+     let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
+     for t in &out.sst.list {
+-        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body(t, phonetics.get(t.as_str()).copied()));
++        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body_full(t, phonetics.get(t.as_str()).copied(), rich.get(t.as_str()).copied()));
+     }
+     sst.push_str("</sst>");
+     out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());
+diff --git a/native/overlay/vendor/gridcraft/crates/xlsx/src/xml.rs b/native/overlay/vendor/gridcraft/crates/xlsx/src/xml.rs
+index 7c2f91a..98746a8 100644
+--- a/native/overlay/vendor/gridcraft/crates/xlsx/src/xml.rs
++++ b/native/overlay/vendor/gridcraft/crates/xlsx/src/xml.rs
+@@ -3,7 +3,7 @@
+ 
+ use std::fmt::Write as _;
+ 
+-use gridcraft_model::{PhoneticProps, PhoneticRun, PhoneticString};
++use gridcraft_model::{PhoneticProps, PhoneticRun, PhoneticString, RichRun, RichString};
+ use quick_xml::Reader;
+ use quick_xml::XmlVersion;
+ use quick_xml::events::{BytesStart, Event};
+@@ -498,7 +498,58 @@ pub fn t_el(s: &str) -> String {
+ /// own (§18.4.8's `CT_SharedStringItem` allows it without any `rPh`), so a string whose runs were
+ /// all dropped still keeps its settings.
+ pub fn si_body(text: &str, phonetic: Option<&PhoneticString>) -> String {
+-    let mut s = t_el(text);
++    si_body_full(text, phonetic, None)
++}
++
++/// Rich-text runs (`<r><rPr>`) of a string item; empty when the item is plain text.
++pub fn rich_runs(e: &El) -> Vec<RichRun> {
++    let mut out = Vec::new();
++    for c in &e.children {
++        if c.name != "r" { continue; }
++        let text: String = c.kids("t").map(|t| t.text.clone()).collect();
++        if text.is_empty() { continue; }
++        let mut run = RichRun { text, ..Default::default() };
++        if let Some(pr) = c.child("rPr") {
++            let flag = |el: Option<&El>| el.is_some_and(|b| b.attr("val").map(|v| v != "0" && v != "false").unwrap_or(true));
++            run.bold = flag(pr.child("b"));
++            run.italic = flag(pr.child("i"));
++            run.strike = pr.child("strike").is_some();
++            run.underline = pr.child("u").is_some();
++            run.size = pr.child("sz").and_then(|x| x.attr("val").and_then(|v| v.parse().ok()));
++            run.font = pr.child("rFont").and_then(|f| f.attr("val").map(|v| v.to_string()));
++            run.color = pr.child("color").and_then(|x| x.attr("rgb"))
++                .and_then(|rgb| u32::from_str_radix(rgb.trim_start_matches('#'), 16).ok())
++                .map(|v| v & 0xFFFFFF);
++        }
++        out.push(run);
++    }
++    out
++}
++
++fn rich_body(r: &RichString) -> String {
++    let mut s = String::new();
++    for run in &r.runs {
++        s.push_str("<r>");
++        let mut pr = String::new();
++        if run.bold { pr.push_str("<b/>"); }
++        if run.italic { pr.push_str("<i/>"); }
++        if run.strike { pr.push_str("<strike/>"); }
++        if run.underline { pr.push_str("<u/>"); }
++        if let Some(sz) = run.size { let _ = write!(pr, "<sz val=\"{sz}\"/>"); }
++        if let Some(f) = &run.font { let _ = write!(pr, "<rFont val=\"{}\"/>", esc_attr(f)); }
++        if let Some(col) = run.color { let _ = write!(pr, "<color rgb=\"FF{col:06X}\"/>"); }
++        if !pr.is_empty() { let _ = write!(s, "<rPr>{pr}</rPr>"); }
++        s.push_str(&t_el(&run.text));
++        s.push_str("</r>");
++    }
++    s
++}
++
++pub fn si_body_full(text: &str, phonetic: Option<&PhoneticString>, rich: Option<&RichString>) -> String {
++    let mut s = match rich {
++        Some(r) if !r.runs.is_empty() => rich_body(r),
++        _ => t_el(text),
++    };
+     let Some(p) = phonetic else { return s };
+     // The model is public and restored from GridCraft JSON too, so the reader's checks are not the
+     // only way data gets here: validate again and write only what the schema allows (§18.4.6: an

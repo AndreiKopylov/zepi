@@ -954,7 +954,7 @@ impl SlidesView {
                     if let Ok(image) = rendered {
                         this.cache.insert(slot, Arc::new(image));
                         this.order.push(slot);
-                        let cap = office_knob("rasterCacheCap", CACHE_CAP as u64) as usize;
+                        let cap = office_knob("raster.cacheCap", CACHE_CAP as u64) as usize;
                         while this.order.len() > cap {
                             let oldest = this.order.remove(0);
                             this.cache.remove(&oldest);
@@ -1021,11 +1021,15 @@ fn office_value(key: &str) -> Option<serde_json_lenient::Value> {
         *guard = Some((mtime, value));
     }
     let (_, root) = guard.as_ref()?;
-    Some(root["zepi"]["officeViewer"][key].clone())
+    let mut cur = root.get("zepi")?.get("office")?;
+    for part in key.split('.') {
+        cur = cur.get(part)?;
+    }
+    Some(cur.clone())
 }
 
 fn slide_gap() -> f32 {
-    office_knob_f("slideGap", 14.0) as f32
+    office_knob_f("pageGap", 14.0) as f32
 }
 
 static RASTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1040,7 +1044,7 @@ fn rasterize_slide(pres: Arc<Presentation>, index: usize, key: u32, id_upper: u6
     let _guard = RASTER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scale = key as f64 / 2.0;
-        let max_pixels = office_knob("maxRasterPixels", 6_000_000) as f64;
+        let max_pixels = office_knob("raster.maxPixels", 6_000_000) as f64;
         let area = pres.slide_size.width * pres.slide_size.height * scale * scale;
         if area > max_pixels {
             scale *= (max_pixels / area).sqrt();

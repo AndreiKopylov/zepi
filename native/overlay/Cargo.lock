@@ -23689,6 +23689,7 @@ dependencies = [
  "gridcraft-xlsx",
  "html5ever 0.39.0",
  "image",
+ "language",
  "log",
  "markup5ever_rcdom",
  "paths",

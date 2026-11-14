@@ -188,7 +188,13 @@ fn zed_knob_f(key: &str) -> Option<f32> {
     guard
         .as_ref()
         .and_then(|(_, knobs)| knobs.as_ref())
-        .and_then(|knobs| knobs[key].as_f64())
+        .and_then(|knobs| {
+            let mut cur = knobs.get("agent")?;
+            for part in key.split('.') {
+                cur = cur.get(part)?;
+            }
+            cur.as_f64()
+        })
         .map(|v| v as f32)
 }
 
@@ -199,12 +205,12 @@ pub fn thread_line_height() -> f32 {
 
 /// Composer auto-height cap in lines; override via "zepi": {"composerMaxLines": ...}.
 pub fn composer_max_lines() -> usize {
-    (zed_knob_f("composerMaxLines").unwrap_or(12.0) as usize).clamp(1, 100)
+    (zed_knob_f("composer.maxLines").unwrap_or(12.0) as usize).clamp(1, 100)
 }
 
 /// Initial composer height in lines; override via "zepi": {"composerMinLines": ...}.
 pub fn composer_min_lines() -> usize {
-    (zed_knob_f("composerMinLines").unwrap_or(5.0) as usize).clamp(1, 100)
+    (zed_knob_f("composer.minLines").unwrap_or(5.0) as usize).clamp(1, 100)
 }
 
 fn pi_style_for(p: &PiPalette, name: &str) -> Option<HighlightStyle> {

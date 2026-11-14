@@ -1701,6 +1701,13 @@
     }
   },
   {
+    "context": "SheetEditing && Editor",
+    "bindings": {
+      "enter": "sheet_viewer::CommitEdit",
+      "escape": "sheet_viewer::CancelEdit"
+    }
+  },
+  {
     "context": "OfficeSearch",
     "bindings": {
       "escape": "office_viewer::ToggleSearch",

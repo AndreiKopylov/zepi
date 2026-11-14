@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use gridcraft_model::{PhoneticProps, PhoneticRun, PhoneticString};
+use gridcraft_model::{PhoneticProps, PhoneticRun, PhoneticString, RichRun, RichString};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
@@ -498,7 +498,58 @@ pub fn t_el(s: &str) -> String {
 /// own (§18.4.8's `CT_SharedStringItem` allows it without any `rPh`), so a string whose runs were
 /// all dropped still keeps its settings.
 pub fn si_body(text: &str, phonetic: Option<&PhoneticString>) -> String {
-    let mut s = t_el(text);
+    si_body_full(text, phonetic, None)
+}
+
+/// Rich-text runs (`<r><rPr>`) of a string item; empty when the item is plain text.
+pub fn rich_runs(e: &El) -> Vec<RichRun> {
+    let mut out = Vec::new();
+    for c in &e.children {
+        if c.name != "r" { continue; }
+        let text: String = c.kids("t").map(|t| t.text.clone()).collect();
+        if text.is_empty() { continue; }
+        let mut run = RichRun { text, ..Default::default() };
+        if let Some(pr) = c.child("rPr") {
+            let flag = |el: Option<&El>| el.is_some_and(|b| b.attr("val").map(|v| v != "0" && v != "false").unwrap_or(true));
+            run.bold = flag(pr.child("b"));
+            run.italic = flag(pr.child("i"));
+            run.strike = pr.child("strike").is_some();
+            run.underline = pr.child("u").is_some();
+            run.size = pr.child("sz").and_then(|x| x.attr("val").and_then(|v| v.parse().ok()));
+            run.font = pr.child("rFont").and_then(|f| f.attr("val").map(|v| v.to_string()));
+            run.color = pr.child("color").and_then(|x| x.attr("rgb"))
+                .and_then(|rgb| u32::from_str_radix(rgb.trim_start_matches('#'), 16).ok())
+                .map(|v| v & 0xFFFFFF);
+        }
+        out.push(run);
+    }
+    out
+}
+
+fn rich_body(r: &RichString) -> String {
+    let mut s = String::new();
+    for run in &r.runs {
+        s.push_str("<r>");
+        let mut pr = String::new();
+        if run.bold { pr.push_str("<b/>"); }
+        if run.italic { pr.push_str("<i/>"); }
+        if run.strike { pr.push_str("<strike/>"); }
+        if run.underline { pr.push_str("<u/>"); }
+        if let Some(sz) = run.size { let _ = write!(pr, "<sz val=\"{sz}\"/>"); }
+        if let Some(f) = &run.font { let _ = write!(pr, "<rFont val=\"{}\"/>", esc_attr(f)); }
+        if let Some(col) = run.color { let _ = write!(pr, "<color rgb=\"FF{col:06X}\"/>"); }
+        if !pr.is_empty() { let _ = write!(s, "<rPr>{pr}</rPr>"); }
+        s.push_str(&t_el(&run.text));
+        s.push_str("</r>");
+    }
+    s
+}
+
+pub fn si_body_full(text: &str, phonetic: Option<&PhoneticString>, rich: Option<&RichString>) -> String {
+    let mut s = match rich {
+        Some(r) if !r.runs.is_empty() => rich_body(r),
+        _ => t_el(text),
+    };
     let Some(p) = phonetic else { return s };
     // The model is public and restored from GridCraft JSON too, so the reader's checks are not the
     // only way data gets here: validate again and write only what the schema allows (§18.4.6: an

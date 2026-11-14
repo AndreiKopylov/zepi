@@ -226,9 +226,38 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
     merge(&mut settings, &defaults);
     merge(&mut settings, &json!({"telemetry":{"metrics":false,"diagnostics":false},"auto_update":false,
         "disable_ai":false,"auto_install_extensions":{"html":false}}));
+    // migrate legacy flat zepi knobs to the grouped agent/office layout (keep user values)
+    if let Some(z) = settings.get_mut("zepi").and_then(|v| v.as_object_mut()) {
+        if let Some(ov) = z.remove("officeViewer").and_then(|v| v.as_object().cloned()) {
+            let o = z.entry("office").or_insert_with(|| json!({})).as_object_mut().unwrap();
+            for (k, v) in ov {
+                match k.as_str() {
+                    "rasterCacheCap" => { o.entry("raster").or_insert_with(|| json!({})).as_object_mut().unwrap().entry("cacheCap").or_insert(v); }
+                    "maxRasterPixels" => { o.entry("raster").or_insert_with(|| json!({})).as_object_mut().unwrap().entry("maxPixels").or_insert(v); }
+                    "slideGap" => { o.entry("pageGap").or_insert(v); }
+                    "sheetFontScale" => { o.entry("sheet").or_insert_with(|| json!({})).as_object_mut().unwrap().entry("fontScale").or_insert(v); }
+                    _ => { o.entry(k).or_insert(v); }
+                }
+            }
+        }
+        let mut moved = Vec::new();
+        for old in ["threadLineHeight", "composerMinLines", "composerMaxLines"] {
+            if let Some(v) = z.remove(old) { moved.push((old, v)); }
+        }
+        if !moved.is_empty() {
+            let a = z.entry("agent").or_insert_with(|| json!({})).as_object_mut().unwrap();
+            for (old, v) in moved {
+                match old {
+                    "composerMinLines" => { a.entry("composer").or_insert_with(|| json!({})).as_object_mut().unwrap().entry("minLines").or_insert(v); }
+                    "composerMaxLines" => { a.entry("composer").or_insert_with(|| json!({})).as_object_mut().unwrap().entry("maxLines").or_insert(v); }
+                    _ => { a.entry(old).or_insert(v); }
+                }
+            }
+        }
+    }
     // zepi knobs: composer height and the office viewers
-    merge(&mut settings, &json!({"zepi":{"threadLineHeight":1.5,"composerMinLines":5,"composerMaxLines":12,
-        "officeViewer":{"reloadDebounceMs":600,"rasterCacheCap":12,"maxRasterPixels":6000000,"slideGap":14,"zoomStep":10}}}));
+    merge(&mut settings, &json!({"zepi":{"agent":{"threadLineHeight":1.5,"composer":{"minLines":5,"maxLines":12}},
+        "office":{"reloadDebounceMs":600,"raster":{"cacheCap":12,"maxPixels":6000000},"pageGap":14,"zoomStep":10,"sheet":{"fontScale":1.25}}}}));
     settings["node"] = json!({"path":node,"ignore_system_version":false});
     settings["agent_servers"]["zepi-pi"] = json!({"type":"custom","command":node,
         "args":[root.join("packages/acp/src/cli.js")],"env":{"ZEPI_ROOT":root,"PI_CODING_AGENT_DIR":env::var("ZEPI_PI_CONFIG_DIR")?}});

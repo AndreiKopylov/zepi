@@ -1306,25 +1306,39 @@ impl SettingsStore {
             "type": "object",
             "description": "Zepi-specific settings.",
             "properties": {
-                "threadLineHeight": {
-                    "type": "number",
-                    "minimum": 0.5,
-                    "maximum": 3.0,
-                    "description": "Line spacing of agent thread markdown. Default: 1.5."
+                "agent": {
+                    "type": "object",
+                    "description": "Agent panel and composer.",
+                    "properties": {
+                        "threadLineHeight": {
+                            "type": "number",
+                            "minimum": 0.5,
+                            "maximum": 3.0,
+                            "description": "Line spacing of agent thread markdown. Default: 1.5."
+                        },
+                        "composer": {
+                            "type": "object",
+                            "description": "Auto-height of the agent composer, in lines.",
+                            "properties": {
+                                "minLines": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 100,
+                                    "description": "Initial height of the agent composer, in lines. Default: 5."
+                                },
+                                "maxLines": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 100,
+                                    "description": "Height the agent composer grows to while typing, in lines. Default: 12."
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
                 },
-                "composerMinLines": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "description": "Initial height of the agent composer, in lines. Default: 5."
-                },
-                "composerMaxLines": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "description": "Height the agent composer grows to while typing, in lines. Default: 12."
-                },
-                "officeViewer": {
+                "office": {
                     "type": "object",
                     "description": "Knobs for the document viewers.",
                     "properties": {
@@ -1333,26 +1347,47 @@ impl SettingsStore {
                             "minimum": 0,
                             "description": "Delay before reloading a changed office file, in milliseconds. Default: 600."
                         },
-                        "rasterCacheCap": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Rasterised pages kept in memory. Default: 12."
+                        "raster": {
+                            "type": "object",
+                            "description": "Raster cache for the page-based viewers (Word/PowerPoint).",
+                            "properties": {
+                                "cacheCap": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "description": "Rasterised pages kept in memory. Default: 12."
+                                },
+                                "maxPixels": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "description": "Upper bound for a rasterised page, in pixels. Default: 6000000."
+                                }
+                            },
+                            "additionalProperties": false
                         },
-                        "maxRasterPixels": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Upper bound for a rasterised page, in pixels. Default: 6000000."
-                        },
-                        "slideGap": {
+                        "pageGap": {
                             "type": "number",
                             "minimum": 0,
-                            "description": "Gap between slides in the slide strip, in pixels. Default: 14."
+                            "description": "Gap between pages/slides in the strip, in pixels. Default: 14."
                         },
                         "zoomStep": {
                             "type": "integer",
                             "minimum": 1,
-                            "description": "Zoom step percentage in the slide viewer. Default: 10."
-                        }
+                            "description": "Zoom step percentage for wheel zoom. Default: 10."
+                        },
+                        "sheet": {
+                            "type": "object",
+                            "description": "Excel viewer knobs.",
+                            "properties": {
+                                "fontScale": {
+                                    "type": "number",
+                                    "minimum": 0.5,
+                                    "description": "Spreadsheet font scale (pt-to-px calibration vs Excel). Default: 1.25."
+                                }
+                            },
+                            "additionalProperties": false
+                        },
+                        "slides": { "type": "object", "description": "PowerPoint viewer knobs.", "additionalProperties": false },
+                        "word": { "type": "object", "description": "Word viewer knobs.", "additionalProperties": false }
                     },
                     "additionalProperties": false
                 }

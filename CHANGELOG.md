@@ -8,6 +8,10 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Added
 
+- Local gridcraft patch, reapplied after vendor updates from
+  `scripts/gridcraft-local-patches/gridcraft-local.patch`: rich-text runs (per-run color, bold,
+  italic and size) are preserved on read and written back on save, so formatted cell text
+  survives a round-trip.
 - `ui` scrollbar gains a `thumb_color` override (overlay patch on upstream
   `crates/ui/src/components/scrollbar.rs`): a view can set the thumb color directly, without
   track blending, while keeping the native autohide/drag behavior.
@@ -22,6 +26,13 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Changed
 
+- Excel viewer renders merged cells, wrapped text, per-run rich text (color/size/italic) and cell
+  borders like Excel, and auto-fits row heights to wrapped text. The in-cell editor is a real text
+  editor (caret, mouse/shift selection, Ctrl+A/Z/C/X/V, auto-grow) instead of the hand-rolled one.
+- Zepi settings are grouped into `zepi.agent` and `zepi.office` (see README); the spreadsheet font
+  calibration is exposed as `zepi.office.sheet.fontScale`. Old flat keys are migrated on startup.
+- Resizing a row/column no longer auto-saves: it marks the sheet dirty (blue dot) and persists only
+  on explicit save.
 - Word-family lists (`w:rFonts="Open Sans;Arial"`) go through Word's own substitution table before
   the list walk: Word never parses a `;` list and substitutes Segoe UI for it, while a bare
   `Open Sans` keeps the cloud font. Line pitch and page breaks of such documents now match Word

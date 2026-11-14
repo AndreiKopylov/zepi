@@ -37,7 +37,7 @@ use workspace::{Pane, Workspace, register_project_item, register_serializable_it
 
 const BASE_SUPERSAMPLE: f64 = 2.0;
 fn slide_gap() -> f32 {
-    office_knob_f("slideGap", 14.0) as f32
+    office_knob_f("pageGap", 14.0) as f32
 }
 const TAPE_PAD: f32 = 24.0;
 const CACHE_CAP: usize = 12;
@@ -984,7 +984,7 @@ impl WordView {
                     if let Ok(image) = rendered {
                         this.cache.insert(slot, Arc::new(image));
                         this.order.push(slot);
-                        let cap = office_knob("rasterCacheCap", CACHE_CAP as u64) as usize;
+                        let cap = office_knob("raster.cacheCap", CACHE_CAP as u64) as usize;
                         while this.order.len() > cap {
                             let oldest = this.order.remove(0);
                             this.cache.remove(&oldest);
@@ -1048,7 +1048,7 @@ fn rasterize_page(
     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let page = &layout.pages[index];
         let mut scale = key as f64 / 2.0;
-        let max_pixels = office_knob("maxRasterPixels", 16_000_000) as f64;
+        let max_pixels = office_knob("raster.maxPixels", 16_000_000) as f64;
         let area = page.w as f64 * page.h as f64 * scale * scale;
         if area > max_pixels {
             scale *= (max_pixels / area).sqrt();

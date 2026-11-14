@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
 use gridcraft_model::{
-    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+    CalcMode, CellPicture, DefinedName, PhoneticString, RichString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
 };
 
 use crate::package::{Package, Rel};
@@ -19,6 +19,7 @@ pub struct Ctx<'a> {
     pub sst: Vec<Arc<str>>,
     /// Phonetic (furigana) data of the shared strings, one entry per base text.
     pub phonetics: Vec<PhoneticString>,
+    pub rich: Vec<RichString>,
     /// Cell format index → model style.
     pub xf_map: Vec<StyleId>,
     pub dxfs: Vec<Style>,
@@ -109,9 +110,12 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
             Some(b) => {
                 let mut sst = Vec::new();
                 let mut phonetics = Vec::new();
+                let mut rich = Vec::new();
                 let mut dropped = 0usize;
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
                     let text = xml::rich_text(&si);
+                    let rruns = xml::rich_runs(&si);
+                    if !rruns.is_empty() { rich.push(RichString { text: text.clone(), runs: rruns }); }
                     let raw = si.kids("rPh").count();
                     let (runs, props) = xml::phonetic_data(&si, &text);
                     dropped += raw.saturating_sub(runs.len());
@@ -129,6 +133,7 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
                 }
                 cx.sst = sst;
                 cx.keep_phonetics(phonetics);
+                cx.rich = rich;
             }
             None => cx.warn(format!("missing part {}", r.target)),
         }
@@ -240,6 +245,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         report: ReadReport::default(),
         sst: vec![],
         phonetics: vec![],
+        rich: vec![],
         xf_map: vec![],
         dxfs: vec![],
         palette: crate::tables::INDEXED.to_vec(),
@@ -444,6 +450,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     wb.apply_name_call_case();
     wb.styles = cx.styles;
     wb.phonetics = cx.phonetics;
+    wb.rich = cx.rich;
     Ok((wb, cx.report))
 }
 

@@ -11,7 +11,7 @@ impl gpui::Render for SheetView {
                 window.focus(&handle, cx);
             }
         }
-        let colors = cx.theme().colors();
+        let colors = cx.theme().colors().clone();
         let item = self.item.read(cx);
         if let Some(error) = item.import_error.as_ref() {
             let message = error.clone();
@@ -183,7 +183,7 @@ impl gpui::Render for SheetView {
                         } else {
                             SharedString::from(self.edit_buffer.clone())
                         })
-                        .size(LabelSize::Small)
+                        .size(LabelSize::Default)
                         .color(UiColor::Custom(text_color)),
                     )
             }
@@ -202,8 +202,8 @@ impl gpui::Render for SheetView {
                     } else {
                         SharedString::from(bar_text.clone())
                     })
-                    .size(LabelSize::Small)
-                    .color(if bar_text.is_empty() { UiColor::Muted } else { UiColor::Default }),
+                    .size(LabelSize::Default)
+                    .color(if bar_text.is_empty() { UiColor::Muted } else { UiColor::Custom(text_color) }),
                 )
         };
         let formula_bar = div()
@@ -212,7 +212,7 @@ impl gpui::Render for SheetView {
             .items_center()
             .gap_2()
             .px_2()
-            .h(px(30.))
+            .h(px(32.))
             .bg(cell_bg)
             .border_b_1()
             .border_color(grid_line)
@@ -279,19 +279,7 @@ impl gpui::Render for SheetView {
                     if this.editing {
                         // a click inside the edited cell moves the caret, like Excel
                         if let Some((l, t, w, h)) = this.edit_rect_cache {
-                            if gx >= l && gx <= l + w && gy >= t && gy <= t + h {
-                                let click_caret =
-                                    this.click_caret(gx - l, gy - t, w, window, cx);
-                                if window.modifiers().shift {
-                                    this.edit_sel_anchor.get_or_insert(this.edit_caret);
-                                } else {
-                                    this.edit_sel_anchor = Some(click_caret);
-                                }
-                                this.edit_caret = click_caret;
-                                this.edit_drag = true;
-                                cx.notify();
-                                return;
-                            }
+                            if gx >= l && gx <= l + w && gy >= t && gy <= t + h { return; }
                         }
                         this.commit_edit(cx);
                     }
@@ -308,11 +296,6 @@ impl gpui::Render for SheetView {
                     this.drag_select = true;
                     if event.click_count == 2 {
                         this.start_edit(window, cx);
-                        if let Some((l, t, w, _h)) = this.edit_cell_rect(cx) {
-                            let at = this.click_caret(gx - l, gy - t, w, window, cx);
-                            this.edit_caret = at;
-                            this.edit_sel_anchor = Some(at);
-                        }
                     } else {
                         window.focus(&this.focus_handle, cx);
                     }
@@ -489,34 +472,58 @@ impl gpui::Render for SheetView {
             );
         }
 
-        // cells
-        for row in first_row..=last_visible_row {
-            let height = sheet.row_height(row) * zoom;
+        // cells (extend to merge anchors intersecting the viewport so merged text survives scroll)
+        let mut draw_row0 = first_row;
+        let mut draw_col0 = first_col;
+        for m in &sheet.merges {
+            if m.end.row >= first_row
+                && m.start.row <= last_visible_row
+                && m.end.col >= first_col
+                && m.start.col <= last_visible_col
+            {
+                draw_row0 = draw_row0.min(m.start.row);
+                draw_col0 = draw_col0.min(m.start.col);
+            }
+        }
+        for row in draw_row0..=last_visible_row {
+            let mut height = sheet.row_height(row) * zoom;
             if height <= 0.0 {
                 continue;
             }
             let top = TOP_H + (sheet.row_top(row) as f32 - scroll_y) * zoom;
-            for col in first_col..=last_visible_col {
-                let width = sheet.col_width(col) * zoom;
+            for col in draw_col0..=last_visible_col {
+                let mut width = sheet.col_width(col) * zoom;
                 if width <= 0.0 {
                     continue;
                 }
                 let left = LEFT_W + (sheet.col_left(col) as f32 - scroll_x) * zoom;
                 let at = CellRef::new(row, col);
+                // merged range: draw the anchor across the whole span, skip covered cells
+                if let Some(m) = sheet.merge_at(at) {
+                    if at != m.start {
+                        continue;
+                    }
+                    width = (sheet.col_left(m.end.col + 1) - sheet.col_left(m.start.col)) as f32 * zoom;
+                    height = (sheet.row_top(m.end.row + 1) - sheet.row_top(m.start.row)) as f32 * zoom;
+                }
                 let cell = sheet.cell(at);
                 let style_id = sheet.style_id(at);
                 let style = styles.get(style_id);
+                let has_border = !style.borders.top.is_none()
+                    || !style.borders.right.is_none()
+                    || !style.borders.bottom.is_none()
+                    || !style.borders.left.is_none();
                 let mut cell_div = div()
                     .absolute()
                     .left(px(left))
                     .top(px(top))
                     .w(px(width))
                     .h(px(height))
-                    .border_r_1()
-                    .border_b_1()
-                    .border_color(grid_line)
                     .bg(cell_bg)
                     .overflow_hidden();
+                if !has_border {
+                    cell_div = cell_div.border_r_1().border_b_1().border_color(grid_line);
+                }
                 let fill_hsla: Option<Hsla> = match style.fill.pattern {
                     PatternType::Solid => Some(model_color_hsla(&style.fill.fg, header_bg, &wb.theme.colors)),
                     _ => None,
@@ -525,12 +532,21 @@ impl gpui::Render for SheetView {
                     cell_div = cell_div.bg(fill);
                 }
                 let b = &style.borders;
+                // shared edges drawn once: right/bottom yield to the neighbor's left/top
+                let nb_right_left = !styles.get(sheet.style_id(CellRef::new(row, col + 1))).borders.left.is_none();
+                let nb_below_top = !styles.get(sheet.style_id(CellRef::new(row + 1, col))).borders.top.is_none();
                 for (side, line) in [(0usize, b.top), (1, b.right), (2, b.bottom), (3, b.left)] {
                     let w = line.style.width();
                     if line.is_none() || w <= 0.0 {
                         continue;
                     }
-                    let color = model_color_hsla(&line.color, grid_line, &wb.theme.colors);
+                    if side == 1 && nb_right_left {
+                        continue;
+                    }
+                    if side == 2 && nb_below_top {
+                        continue;
+                    }
+                    let color = model_color_hsla(&line.color, gpui::rgb(0x000000).into(), &wb.theme.colors);
                     let edge = div().absolute().bg(color);
                     let edge = match side {
                         0 => edge.left_0().top_0().right_0().h(px(w)),
@@ -540,44 +556,41 @@ impl gpui::Render for SheetView {
                     };
                     cell_div = cell_div.child(edge);
                 }
-                if let Some(cell) = cell {
+                let is_edited = self.editing && row == self.edit_row && col == self.edit_col;
+                if let Some(cell) = cell.filter(|_| !is_edited) {
                     let fmt = NumberFormat::parse_cached(&style.num_fmt.0);
                     let formatted = format_value(&cell.value, &fmt, date_system);
                     if !formatted.text.is_empty() {
-                        let font_size = (style.font.size * 4.0 / 3.0 * zoom).clamp(8.0, 40.0);
+                        let font_size = (style.font.size * office_knob_f("sheet.fontScale", 1.25) as f32 * zoom).clamp(1.0, 40.0);
                         let color = model_color_hsla(&style.font.color, text_color, &wb.theme.colors);
                         let numeric = formatted.numeric;
                         let mut text_div = div()
-                            .size_full()
-                            .flex()
+                            .w_full()
+                            .line_height(px(font_size * 1.2))
                             .text_size(px(font_size))
                             .text_color(color)
-                            .font_family(SharedString::from(style.font.name.clone()))
-                            .child(SharedString::from(formatted.text.clone()));
-                        text_div = match style.align.v {
-                            gridcraft_model::style::VAlign::Top => text_div.items_start(),
-                            gridcraft_model::style::VAlign::Center => text_div.items_center(),
-                            _ => text_div.items_end(),
-                        };
+                            .font_family(SharedString::from(style.font.name.clone()));
                         match style.align.h {
                             gridcraft_model::style::HAlign::Center
                             | gridcraft_model::style::HAlign::CenterAcross => {
-                                text_div = text_div.justify_center();
+                                text_div = text_div.text_center();
                             }
                             gridcraft_model::style::HAlign::Right
                             | gridcraft_model::style::HAlign::Fill
                             | gridcraft_model::style::HAlign::Justify => {
-                                text_div = text_div.justify_end().pr(px(2.));
+                                text_div = text_div.text_right().pr(px(2.));
                             }
                             gridcraft_model::style::HAlign::General if numeric => {
-                                text_div = text_div.justify_end().pr_1();
+                                text_div = text_div.text_right().pr_1();
                             }
                             _ => {
-                                text_div = text_div.pl(px(2.));
+                                text_div = text_div.text_left().pl(px(2.));
                             }
                         }
                         if style.align.wrap {
-                            text_div = text_div.whitespace_normal().overflow_hidden();
+                            text_div = text_div.whitespace_normal();
+                        } else {
+                            text_div = text_div.whitespace_nowrap().overflow_hidden();
                         }
                         if style.font.bold {
                             text_div = text_div.font_weight(gpui::FontWeight::BOLD);
@@ -591,7 +604,86 @@ impl gpui::Render for SheetView {
                         if style.font.underline != gridcraft_model::style::Underline::None {
                             text_div = text_div.underline();
                         }
-                        cell_div = cell_div.child(text_div);
+                        if let Some(rs) = wb.rich.iter().find(|r| r.text == formatted.text) {
+                            let knob = office_knob_f("sheet.fontScale", 1.25) as f32;
+                            let family = SharedString::from(style.font.name.clone());
+                            let base_color = color;
+                            let mut runs: Vec<(String, f32, Hsla, bool, bool, bool, bool)> = Vec::new();
+                            for run in &rs.runs {
+                                runs.push((
+                                    run.text.clone(),
+                                    (run.size.unwrap_or(style.font.size) * knob * zoom).clamp(1.0, 40.0),
+                                    run.color.map(|cc| gpui::rgb(cc).into()).unwrap_or(base_color),
+                                    run.bold || style.font.bold,
+                                    run.italic || style.font.italic,
+                                    run.underline,
+                                    run.strike,
+                                ));
+                            }
+                            let inner_w = (width - 6.0).max(10.0);
+                            let line_h = font_size * 1.1;
+                            let center = matches!(style.align.h, gridcraft_model::style::HAlign::Center | gridcraft_model::style::HAlign::CenterAcross);
+                            let vcenter = matches!(style.align.v, gridcraft_model::style::VAlign::Center);
+                            let painter = gpui::canvas(
+                                |_, _, _| {},
+                                move |bounds, _, window, cx| {
+                                    let mut lines: Vec<Vec<(String, f32, Hsla, bool, bool, bool, bool, f32, f32)>> = vec![Vec::new()];
+                                    let mut cur_w = 0.0f32;
+                                    for (text, sz, col, b, i, u, st) in &runs {
+                                        let mut first_seg = true;
+                                        for seg in text.split('\n') {
+                                            if !first_seg { lines.push(Vec::new()); cur_w = 0.0; }
+                                            first_seg = false;
+                                            for word in seg.split_inclusive(' ') {
+                                                if word.is_empty() { continue; }
+                                                let font = gpui::Font { family: family.clone(), weight: if *b { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if *i { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
+                                                let run = gpui::TextRun { len: word.len(), font, color: *col, background_color: None, underline: if *u { Some(Default::default()) } else { None }, strikethrough: if *st { Some(Default::default()) } else { None } };
+                                                let shaped = window.text_system().shape_line(SharedString::from(word.to_string()), px(*sz), &[run], None);
+                                                let w = f32::from(shaped.width);
+                                                let h = f32::from(shaped.ascent + shaped.descent);
+                                                if cur_w + w > inner_w && cur_w > 0.0 { lines.push(Vec::new()); cur_w = 0.0; }
+                                                lines.last_mut().unwrap().push((word.to_string(), *sz, *col, *b, *i, *u, *st, w, h));
+                                                cur_w += w;
+                                            }
+                                        }
+                                    }
+                                    let line_hs: Vec<f32> = lines.iter().map(|l| l.iter().map(|w| w.8).fold(0.0f32, f32::max)).collect();
+                                    let total_h: f32 = line_hs.iter().sum();
+                                    let mut y = if vcenter { ((f32::from(bounds.size.height) - total_h) / 2.0).max(0.0) } else { 0.0 };
+                                    for (li, line) in lines.iter().enumerate() {
+                                        let lh = line_hs[li];
+                                        if line.is_empty() { continue; }
+                                        let lw: f32 = line.iter().map(|w| w.7).sum();
+                                        let mut x = if center { ((inner_w - lw) / 2.0).max(0.0) } else { 0.0 };
+                                        for (word, sz, col, b, i, u, st, w, _h) in line {
+                                            let font = gpui::Font { family: family.clone(), weight: if *b { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if *i { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
+                                            let run = gpui::TextRun { len: word.len(), font, color: *col, background_color: None, underline: if *u { Some(Default::default()) } else { None }, strikethrough: if *st { Some(Default::default()) } else { None } };
+                                            let shaped = window.text_system().shape_line(SharedString::from(word.clone()), px(*sz), &[run], None);
+                                            let _ = shaped.paint(gpui::point(bounds.origin.x + px(3.0 + x), bounds.origin.y + px(y)), px(lh), gpui::TextAlign::Left, None, window, cx);
+                                            x += w;
+                                        }
+                                        y += lh;
+                                    }
+                                },
+                            );
+                            text_div = div().size_full().child(painter);
+                        } else {
+                            text_div = text_div.child(SharedString::from(formatted.text.clone()));
+                        }
+                        // Excel clips overflow at the bottom (shows the start), so top-align when wrapped text is taller than the cell
+                        let est_lines = ((formatted.text.chars().count() as f32 * font_size * 0.5) / width.max(1.0)).ceil().max(1.0);
+                        let overflow = style.align.wrap && est_lines * font_size * 1.2 > height;
+                        let mut v_div = div().size_full().flex().flex_col();
+                        v_div = if overflow {
+                            v_div.justify_start()
+                        } else {
+                            match style.align.v {
+                                gridcraft_model::style::VAlign::Top => v_div.justify_start(),
+                                gridcraft_model::style::VAlign::Center => v_div.justify_center(),
+                                _ => v_div.justify_end(),
+                            }
+                        };
+                        cell_div = cell_div.child(v_div.child(text_div));
                     }
                 }
                 grid = grid.child(cell_div);
@@ -638,102 +730,23 @@ impl gpui::Render for SheetView {
 
         if self.editing {
             if let Some((left, top, width, height)) = edit_rect {
-                // the caret is a separate 1px bar: a glyph in the text flow would
-                // shift every character after it and reflow the wraps
-                let bytes_up_to = |i: usize| -> usize {
-                    self.edit_buffer.chars().take(i).map(|c| c.len_utf8()).sum()
-                };
-                let mut highlights = Vec::new();
-                if let Some(a) = self.edit_sel_anchor {
-                    if a != self.edit_caret {
-                        let (s0, s1) = (a.min(self.edit_caret), a.max(self.edit_caret));
-                        highlights.push((
-                            bytes_up_to(s0)..bytes_up_to(s1),
-                            HighlightStyle {
-                                background_color: Some(gpui::hsla(0.6, 0.8, 0.5, 0.35)),
-                                ..Default::default()
-                            },
-                        ));
-                    }
-                }
-                let styled = StyledText::new(SharedString::from(self.edit_buffer.clone()))
-                    .with_highlights(highlights);
-                // mirror the cell own text style so entering edit does not jump
-                let estyle = styles.get(sheet.style_id(CellRef::new(self.edit_row, self.edit_col)));
-                let font_size = (estyle.font.size * 4.0 / 3.0 * zoom).clamp(8.0, 40.0);
-                self.edit_rect_cache = Some((left, top, width, height));
-                self.edit_font_px = font_size;
-                let edit_color = model_color_hsla(&estyle.font.color, text_color, &wb.theme.colors);
-                let mut edit_text = div()
-                    .size_full()
-                    .flex()
-                    .whitespace_normal()
-                    .overflow_hidden()
-                    .text_size(px(font_size))
-                    .text_color(edit_color)
-                    .font_family(SharedString::from(estyle.font.name.clone()))
-                    .child(styled);
-                edit_text = match estyle.align.v {
-                    gridcraft_model::style::VAlign::Top => edit_text.items_start(),
-                    gridcraft_model::style::VAlign::Center => edit_text.items_center(),
-                    _ => edit_text.items_end(),
-                };
-                match estyle.align.h {
-                    gridcraft_model::style::HAlign::Center
-                    | gridcraft_model::style::HAlign::CenterAcross => {
-                        edit_text = edit_text.justify_center();
-                    }
-                    gridcraft_model::style::HAlign::Right
-                    | gridcraft_model::style::HAlign::Fill
-                    | gridcraft_model::style::HAlign::Justify => {
-                        edit_text = edit_text.justify_end().pr(px(3.));
-                    }
-                    _ => {
-                        edit_text = edit_text.pl(px(3.));
-                    }
-                }
-                if estyle.font.bold {
-                    edit_text = edit_text.font_weight(gpui::FontWeight::BOLD);
-                }
-                if estyle.font.italic {
-                    edit_text = edit_text.italic();
-                }
-                let efont = edit_font(&estyle.font.name, estyle.font.bold, estyle.font.italic);
-                self.edit_font_cur = efont.clone();
-                let (caret_x, caret_y) = self.caret_pos(left, top, width, font_size, window);
-                let mut overlay = div()
-                    .absolute()
-                    .left(px(left))
-                    .top(px(top))
-                    .w(px(width))
-                    .h(px(height))
-                    .bg(cell_bg)
-                    .cursor_text()
-                    .overflow_hidden()
-                    .pt(px(1.))
-                    .pb(px(1.))
-                    .child(edit_text);
-                if self.caret_on {
-                    overlay = overlay.child(
-                        div()
-                            .absolute()
-                            .left(px(caret_x - left))
-                            .top(px(caret_y - top))
-                            .w(px(1.0))
-                            .h(px((font_size * 1.1).max(8.0)))
-                            .bg(text_color),
+                if let Some(editor) = self.cell_editor.clone() {
+                    let estyle = styles.get(sheet.style_id(CellRef::new(self.edit_row, self.edit_col)));
+                    let font_size = (estyle.font.size * office_knob_f("sheet.fontScale", 1.25) as f32 * zoom).clamp(1.0, 40.0);
+                    self.edit_rect_cache = Some((left, top, width, height));
+                    self.edit_font_px = font_size;
+                    self.edit_font_cur = edit_font(&estyle.font.name, estyle.font.bold, estyle.font.italic);
+                    self.edit_buffer = editor.read(cx).text(cx);
+                    let mut style = editor::EditorStyle::default();
+                    style.background = gpui::Hsla::transparent_black();
+                    style.scrollbar_width = px(0.);
+                    style.local_player.cursor = gpui::black();
+                    style.local_player.selection = gpui::hsla(0.6, 0.8, 0.5, 0.35);
+                    style.text = gpui::TextStyle { color: model_color_hsla(&estyle.font.color, text_color, &wb.theme.colors), font_family: SharedString::from(estyle.font.name.clone()), font_size: gpui::AbsoluteLength::Pixels(px(font_size)), ..Default::default() };
+                    grid = grid.child(
+                        div().absolute().left(px(left)).top(px(top)).w(px(width)).min_h(px(height)).bg(cell_bg).border_2().border_color(select_border).cursor_text().child(editor::EditorElement::new(&editor, style)),
                     );
                 }
-                grid = grid.child(overlay).child(
-                    div()
-                        .absolute()
-                        .left(px(left))
-                        .top(px(top))
-                        .w(px(width))
-                        .h(px(height))
-                        .border_2()
-                        .border_color(select_border),
-                );
             }
         }
 
@@ -803,61 +816,11 @@ impl gpui::Render for SheetView {
             .bg(colors.panel_background)
             .track_focus(&self.focus_handle)
             .key_context(if self.editing { "SheetEditing" } else { "SheetView" })
+            
             .on_action(cx.listener(|this, _: &Save, window, cx| this.save(window, cx)))
             .on_action(cx.listener(|this, _: &ZoomIn, _window, cx| this.set_zoom(this.zoom + 0.1, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _window, cx| this.set_zoom(this.zoom - 0.1, cx)))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if !this.editing {
-                    return;
-                }
-                let ks = &event.keystroke;
-                if ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform {
-                    return;
-                }
-                let mut chars: Vec<char> = this.edit_buffer.chars().collect();
-                let caret = this.edit_caret.min(chars.len());
-                match ks.key.as_str() {
-                    "backspace" => {
-                        if caret > 0 {
-                            chars.remove(caret - 1);
-                            this.edit_caret = caret - 1;
-                            this.edit_sel_anchor = Some(this.edit_caret);
-                        }
-                    }
-                    "delete" => {
-                        if caret < chars.len() {
-                            chars.remove(caret);
-                        }
-                    }
-                    "left" | "right" | "home" | "end" => {
-                        let new_caret = match ks.key.as_str() {
-                            "left" => caret.saturating_sub(1),
-                            "right" => (caret + 1).min(chars.len()),
-                            "home" => 0,
-                            _ => chars.len(),
-                        };
-                        if window.modifiers().shift {
-                            this.edit_sel_anchor.get_or_insert(caret);
-                        } else {
-                            this.edit_sel_anchor = Some(new_caret);
-                        }
-                        this.edit_caret = new_caret;
-                    }
-                    _ => {
-                        let Some(ch) = ks.key_char.as_ref() else { return };
-                        let mut it = ch.chars();
-                        let (Some(c), None) = (it.next(), it.next()) else { return };
-                        if c.is_control() {
-                            return;
-                        }
-                        chars.insert(caret, c);
-                        this.edit_caret = caret + 1;
-                        this.edit_sel_anchor = Some(this.edit_caret);
-                    }
-                }
-                this.edit_buffer = chars.into_iter().collect();
-                cx.notify();
-            }))
+            
             .on_action(cx.listener(|this, _: &SheetEditNewline, _window, cx| this.edit_newline(cx)))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 let Some((axis, idx, start, start_size)) = this.resize else {
@@ -872,7 +835,7 @@ impl gpui::Render for SheetView {
                 this.apply_resize(axis, idx, size, cx);
                 cx.notify();
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, window, cx| {
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
                 this.drag_select = false;
                 this.edit_drag = false;
                 if let Some((axis, idx, _start, start_size)) = this.resize.take() {
@@ -883,7 +846,6 @@ impl gpui::Render for SheetView {
                         } else {
                             SheetOp::Row(idx, Some(start_size), new)
                         });
-                        this.save(window, cx);
                     }
                 }
             }))

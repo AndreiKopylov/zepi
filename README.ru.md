@@ -72,6 +72,40 @@ python scripts\win-run.py          # запуск собранного exe
 
 Нужны MSVC v143 + Windows SDK, Rust 1.98.1, Node >= 22, Python 3.10+, cmake и nasm.
 
+## Настройки
+
+Zepi читает собственные параметры из секции `zepi` файла Zed `settings.json`
+(`%LOCALAPPDATA%\Zepi\zed\config\settings.json`), сгруппированные по областям:
+
+```json
+{
+  "zepi": {
+    "agent": {
+      "threadLineHeight": 1.5,
+      "composer": { "minLines": 5, "maxLines": 12 }
+    },
+    "office": {
+      "reloadDebounceMs": 600,
+      "raster": { "cacheCap": 12, "maxPixels": 6000000 },
+      "pageGap": 14,
+      "zoomStep": 10,
+      "sheet": { "fontScale": 1.25 }
+    }
+  }
+}
+```
+
+- `agent.threadLineHeight` — межстрочный интервал markdown в треде агента.
+- `agent.composer.minLines` / `maxLines` — начальная / максимальная авто-высота композера.
+- `office.reloadDebounceMs` — задержка перед перечитыванием изменённого office-файла.
+- `office.raster.cacheCap` / `maxPixels` — размер кэша растра / бюджет пикселей на страницу (Word/PPTX).
+- `office.pageGap` — зазор между страницами/слайдами в ленте.
+- `office.zoomStep` — шаг zoom колесом, проценты.
+- `office.sheet.fontScale` — калибровка шрифта таблиц относительно Excel (pt в px); подстройте,
+  если текст выглядит крупнее или мельче, чем в Excel.
+
+Значения перечитываются при изменении файла; перезапуск не нужен.
+
 ## Ограничения беты
 
 - Установщик не подписан — SmartScreen предупредит о «неизвестном издателе».

@@ -72,6 +72,40 @@ python scripts\win-run.py          # run the freshly built exe
 
 You need MSVC v143 + Windows SDK, Rust 1.98.1, Node >= 22, Python 3.10+, cmake and nasm.
 
+## Settings
+
+Zepi reads its own knobs from the `zepi` section of the Zed `settings.json`
+(`%LOCALAPPDATA%\Zepi\zed\config\settings.json`), grouped by area:
+
+```json
+{
+  "zepi": {
+    "agent": {
+      "threadLineHeight": 1.5,
+      "composer": { "minLines": 5, "maxLines": 12 }
+    },
+    "office": {
+      "reloadDebounceMs": 600,
+      "raster": { "cacheCap": 12, "maxPixels": 6000000 },
+      "pageGap": 14,
+      "zoomStep": 10,
+      "sheet": { "fontScale": 1.25 }
+    }
+  }
+}
+```
+
+- `agent.threadLineHeight` — line spacing of the agent thread markdown.
+- `agent.composer.minLines` / `maxLines` — initial / maximum auto-height of the composer.
+- `office.reloadDebounceMs` — delay before reloading a changed office file.
+- `office.raster.cacheCap` / `maxPixels` — raster cache size / per-page pixel budget (Word/PPTX).
+- `office.pageGap` — gap between pages/slides in the strip.
+- `office.zoomStep` — wheel-zoom step, percent.
+- `office.sheet.fontScale` — spreadsheet font calibration vs Excel (pt to px); tune it if text
+  looks larger or smaller than in Excel.
+
+Values are re-read when the file changes; no restart is needed.
+
 ## Beta limitations
 
 - The installer is unsigned, so SmartScreen warns about an unknown publisher.

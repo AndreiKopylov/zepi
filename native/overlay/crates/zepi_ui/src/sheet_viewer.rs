@@ -309,7 +309,8 @@ impl project::ProjectItem for SheetItem {
                 .background_executor()
                 .spawn(async move {
                     let bytes = std::fs::read(&abs_path)?;
-                    let (wb, _report) = read_xlsx(&bytes)?;
+                    let (mut wb, _report) = read_xlsx(&bytes)?;
+                    SheetView::autofit_display_rows(&mut wb);
                     anyhow::Ok((wb, abs_path))
                 })
                 .await;
@@ -368,6 +369,7 @@ pub struct SheetView {
     edit_sel_anchor: Option<usize>,
     search_open: bool,
     search_editor: Option<Entity<Editor>>,
+    cell_editor: Option<Entity<Editor>>,
     focus_search_on_render: bool,
     grid_origin: Point<gpui::Pixels>,
     grid_size: Point<gpui::Pixels>,
@@ -417,6 +419,7 @@ impl SheetView {
             edit_sel_anchor: None,
             search_open: false,
             search_editor: None,
+            cell_editor: None,
             focus_search_on_render: false,
             grid_origin: Point::default(),
             grid_size: Point::default(),
@@ -513,7 +516,8 @@ impl SheetView {
                     .background_executor()
                     .spawn(async move {
                         let bytes = std::fs::read(&abs_try)?;
-                        let (wb, _report) = read_xlsx(&bytes)?;
+                        let (mut wb, _report) = read_xlsx(&bytes)?;
+                    SheetView::autofit_display_rows(&mut wb);
                         anyhow::Ok(wb)
                     })
                     .await;
@@ -833,74 +837,75 @@ impl SheetView {
     }
 
     /// Caret bar position inside the edit overlay, measured by text shaping.
+    fn edit_lines(&self, inner_w: f32, window: &Window) -> Vec<gpui::WrappedLine> {
+        let ts = window.text_system();
+        let run = gpui::TextRun {
+            len: self.edit_buffer.len(),
+            font: self.edit_font_cur.clone(),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        ts.shape_text(
+            SharedString::from(self.edit_buffer.clone()),
+            px(self.edit_font_px.max(6.0)),
+            &[run],
+            Some(px(inner_w.max(10.0))),
+            None,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+    }
+
     fn caret_pos(&self, left: f32, top: f32, width: f32, font_size: f32, window: &Window) -> (f32, f32) {
         let ts = window.text_system();
         let font = &self.edit_font_cur;
         let size = px(font_size);
-        let inner_w = (width - 8.0).max(10.0);
-        let before_all: String = self.edit_buffer.chars().take(self.edit_caret).collect();
-        let line_idx = before_all.matches(NLCH).count();
-        let line_prefix = before_all.rsplit(NLCH).next().unwrap_or("");
-        let pw = shape_width(ts, line_prefix, font, size);
-        let wraps = (pw / inner_w).floor() as usize;
-        let mut y_lines = wraps;
-        for prev in self.edit_buffer.split(NLCH).take(line_idx) {
-            let w = shape_width(ts, prev, font, size);
-            y_lines += (w / inner_w).ceil().max(1.0) as usize;
+        let inner_w = (width - 6.0).max(10.0);
+        let line_h = font_size * 1.25;
+        let lines = self.edit_lines(inner_w, window);
+        let mut pos = 0usize;
+        for (idx, line) in lines.iter().enumerate() {
+            let lc = line.text.chars().count();
+            if self.edit_caret <= pos + lc {
+                let prefix: String = self.edit_buffer.chars().skip(pos).take(self.edit_caret - pos).collect();
+                let w = shape_width(ts, &prefix, font, size);
+                return (left + 3.0 + w, top + 1.0 + idx as f32 * line_h);
+            }
+            pos += lc;
+            if self.edit_buffer.chars().nth(pos) == Some('\n') { pos += 1; }
         }
-        (
-            left + 3.0 + (pw - wraps as f32 * inner_w),
-            top + 2.0 + y_lines as f32 * font_size * 1.25,
-        )
+        (left + 3.0, top + 1.0 + lines.len().saturating_sub(1) as f32 * line_h)
     }
 
-    /// Map a click inside the edit overlay to a caret offset, measured by shaping.
-    fn click_caret(&self, x: f32, y: f32, width: f32, window: &Window, cx: &App) -> usize {
+    /// Map a click inside the edit overlay to a caret offset using the same wrapped layout as the render.
+    fn click_caret(&self, x: f32, y: f32, width: f32, window: &Window, _cx: &App) -> usize {
         let font_px = self.edit_font_px.max(6.0);
-        let efont = self
-            .item
-            .read(cx)
-            .wb
-            .as_ref()
-            .and_then(|wb| {
-                let sh = wb.sheets.get(self.sheet)?;
-                let st = wb
-                    .styles
-                    .get(sh.style_id(CellRef::new(self.edit_row, self.edit_col)));
-                Some(edit_font(&st.font.name, st.font.bold, st.font.italic))
-            })
-            .unwrap_or_else(|| self.edit_font_cur.clone());
         let ts = window.text_system();
-        let inner_w = (width - 8.0).max(10.0);
+        let inner_w = (width - 6.0).max(10.0);
         let line_h = font_px * 1.25;
-        let clicked_line = (((y - 2.0) / line_h).floor() as i32).max(0) as usize;
-        let mut acc = 0usize;
-        let mut consumed = 0usize;
-        let mut caret = self.edit_buffer.chars().count();
-        for seg in self.edit_buffer.split(NLCH) {
-            let seg_w = shape_width(ts, seg, &efont, px(font_px));
-            let slots = (seg_w / inner_w).ceil().max(1.0) as usize;
-            if clicked_line < acc + slots {
-                let slot = clicked_line.saturating_sub(acc);
-                let target = (x - 3.0) + slot as f32 * inner_w;
+        let clicked = (((y - 1.0) / line_h).floor() as i32).max(0) as usize;
+        let lines = self.edit_lines(inner_w, window);
+        let mut pos = 0usize;
+        for (idx, line) in lines.iter().enumerate() {
+            let lc = line.text.chars().count();
+            if idx == clicked {
+                let target = (x - 3.0).max(0.0);
                 let mut lo = 0usize;
-                let mut hi = seg.chars().count();
+                let mut hi = lc;
                 while lo < hi {
                     let mid = (lo + hi) / 2;
-                    let pref: String = seg.chars().take(mid).collect();
-                    if shape_width(ts, &pref, &efont, px(font_px)) < target {
-                        lo = mid + 1;
-                    } else {
-                        hi = mid;
-                    }
+                    let pref: String = line.text.chars().take(mid).collect();
+                    if shape_width(ts, &pref, &self.edit_font_cur, px(font_px)) < target { lo = mid + 1; } else { hi = mid; }
                 }
-                caret = consumed + lo;
-                break;
+                return pos + lo;
             }
-            acc += slots;
-            consumed += seg.chars().count() + 1;
+            pos += lc;
+            if self.edit_buffer.chars().nth(pos) == Some('\n') { pos += 1; }
         }
-        caret
+        self.edit_buffer.chars().count()
     }
 
     fn zoom_reset(&mut self, cx: &mut Context<Self>) {
@@ -1075,7 +1080,7 @@ impl SheetView {
         }
     }
 
-    fn start_edit(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn start_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.item.read(cx).wb.is_none() || self.editing {
             return;
         }
@@ -1116,6 +1121,16 @@ impl SheetView {
                 break;
             }
         }));
+        let editor = cx.new(|cx| Editor::auto_height_unbounded(1, window, cx));
+        let t = self.edit_buffer.clone();
+        editor.update(cx, |ed, cx| {
+            ed.set_text(t, window, cx);
+            ed.set_cursor_shape(language::CursorShape::Bar, cx);
+            ed.move_to_end(&editor::actions::MoveToEnd, window, cx);
+        });
+        let fh = editor.focus_handle(cx);
+        window.on_next_frame(move |window, cx| { window.focus(&fh, cx); });
+        self.cell_editor = Some(editor);
         self.editing = true;
         cx.notify();
     }
@@ -1125,7 +1140,8 @@ impl SheetView {
             cx.notify();
             return;
         }
-        let text = self.edit_buffer.clone();
+        let text = self.cell_editor.as_ref().map(|e| e.read(cx).text(cx)).unwrap_or_else(|| self.edit_buffer.clone());
+        self.cell_editor = None;
         self.editing = false;
         self.caret_task = None;
         self.edit_drag = false;
@@ -1162,6 +1178,7 @@ impl SheetView {
         if !self.editing {
             return;
         }
+        self.cell_editor = None;
         self.edit_buffer.clear();
         self.edit_caret = 0;
         self.edit_sel_anchor = None;
@@ -1240,6 +1257,64 @@ impl SheetView {
             written
         })
         .detach_and_prompt_err("Failed to save", window, cx, |err, _, _| Some(format!("{err}")));
+    }
+
+    /// Excel auto-fits rows to wrapped text when no explicit height is stored; mirror that (spread-style estimate).
+    fn autofit_display_rows(wb: &mut Workbook) {
+        for arc_sheet in wb.sheets.iter_mut() {
+            let sheet = Arc::make_mut(arc_sheet);
+            let Some(range) = sheet.used_range() else { continue };
+            let (last_row, last_col) = (range.end.row, range.end.col);
+            let mut computed: Vec<(u32, f32)> = Vec::new();
+            for row in 0..=last_row {
+                if sheet.rows.get(&row).is_some_and(|i| i.custom) {
+                    continue;
+                }
+                let mut max_h = 0.0f32;
+                for col in 0..=last_col {
+                    let at = CellRef::new(row, col);
+                    let merge = sheet.merge_at(at);
+                    if merge.is_some_and(|m| m.start != at) {
+                        continue;
+                    }
+                    let Some(cell) = sheet.cell(at) else { continue };
+                    let text = cell.bar_text();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let style = wb.styles.get(sheet.style_id(at));
+                    if !style.align.wrap && !text.contains('\n') {
+                        continue;
+                    }
+                    let width = match merge {
+                        Some(m) => (sheet.col_left(m.end.col + 1) - sheet.col_left(m.start.col)) as f32,
+                        None => sheet.col_width(col),
+                    };
+                    let fs = style.font.size * office_knob_f("sheet.fontScale", 1.25) as f32;
+                    let cw = (fs * 0.5).max(4.0);
+                    let avail = (width - 8.0).max(cw);
+                    let mut lines = 0usize;
+                    for seg in text.split('\n') {
+                        let (mut cur, mut n) = (0.0f32, 1usize);
+                        for _ in seg.chars() {
+                            if cur > 0.0 && cur + cw > avail {
+                                n += 1;
+                                cur = 0.0;
+                            }
+                            cur += cw;
+                        }
+                        lines += n;
+                    }
+                    max_h = max_h.max(lines as f32 * fs * 1.2 + 4.0);
+                }
+                if max_h > sheet.default_row_height {
+                    computed.push((row, max_h));
+                }
+            }
+            for (row, h) in computed {
+                sheet.rows.entry(row).or_default().size = Some(h);
+            }
+        }
     }
 
     fn content_size(&self, cx: &App) -> (f32, f32) {
