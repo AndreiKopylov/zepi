@@ -1381,7 +1381,7 @@ impl SettingsStore {
                                 "fontScale": {
                                     "type": "number",
                                     "minimum": 0.5,
-                                    "description": "Spreadsheet font scale (pt-to-px calibration vs Excel). Default: 1.25."
+                                    "description": "Spreadsheet font scale (pt-to-px at 96 dpi = 4/3). Default: 1.3333."
                                 }
                             },
                             "additionalProperties": false

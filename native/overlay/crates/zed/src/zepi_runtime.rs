@@ -257,7 +257,7 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
     }
     // zepi knobs: composer height and the office viewers
     merge(&mut settings, &json!({"zepi":{"agent":{"threadLineHeight":1.5,"composer":{"minLines":5,"maxLines":12}},
-        "office":{"reloadDebounceMs":600,"raster":{"cacheCap":12,"maxPixels":6000000},"pageGap":14,"zoomStep":10,"sheet":{"fontScale":1.25}}}}));
+        "office":{"reloadDebounceMs":600,"raster":{"cacheCap":12,"maxPixels":6000000},"pageGap":14,"zoomStep":10,"sheet":{"fontScale":1.3333}}}}));
     settings["node"] = json!({"path":node,"ignore_system_version":false});
     settings["agent_servers"]["zepi-pi"] = json!({"type":"custom","command":node,
         "args":[root.join("packages/acp/src/cli.js")],"env":{"ZEPI_ROOT":root,"PI_CODING_AGENT_DIR":env::var("ZEPI_PI_CONFIG_DIR")?}});

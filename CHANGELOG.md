@@ -26,6 +26,9 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Changed
 
+- Excel viewer metric parity with Excel: respect stored row heights, render blank lines
+  (black/red paragraph gap), pt-to-px 4/3, hyphen wrap, column text padding and GDI-style
+  integer glyph advances so long lines wrap like Excel.
 - Excel viewer renders merged cells, wrapped text, per-run rich text (color/size/italic) and cell
   borders like Excel, and auto-fits row heights to wrapped text. The in-cell editor is a real text
   editor (caret, mouse/shift selection, Ctrl+A/Z/C/X/V, auto-grow) instead of the hand-rolled one.

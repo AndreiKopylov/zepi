@@ -1267,7 +1267,7 @@ impl SheetView {
             let (last_row, last_col) = (range.end.row, range.end.col);
             let mut computed: Vec<(u32, f32)> = Vec::new();
             for row in 0..=last_row {
-                if sheet.rows.get(&row).is_some_and(|i| i.custom) {
+                if sheet.rows.get(&row).is_some_and(|i| i.custom || i.size.is_some()) {
                     continue;
                 }
                 let mut max_h = 0.0f32;

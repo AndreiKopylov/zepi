@@ -561,7 +561,7 @@ impl gpui::Render for SheetView {
                     let fmt = NumberFormat::parse_cached(&style.num_fmt.0);
                     let formatted = format_value(&cell.value, &fmt, date_system);
                     if !formatted.text.is_empty() {
-                        let font_size = (style.font.size * office_knob_f("sheet.fontScale", 1.25) as f32 * zoom).clamp(1.0, 40.0);
+                        let font_size = (style.font.size * office_knob_f("sheet.fontScale", 4.0 / 3.0) as f32 * zoom).clamp(1.0, 40.0);
                         let color = model_color_hsla(&style.font.color, text_color, &wb.theme.colors);
                         let numeric = formatted.numeric;
                         let mut text_div = div()
@@ -604,8 +604,9 @@ impl gpui::Render for SheetView {
                         if style.font.underline != gridcraft_model::style::Underline::None {
                             text_div = text_div.underline();
                         }
+                        let mut rich_total: Option<f32> = None;
                         if let Some(rs) = wb.rich.iter().find(|r| r.text == formatted.text) {
-                            let knob = office_knob_f("sheet.fontScale", 1.25) as f32;
+                            let knob = office_knob_f("sheet.fontScale", 4.0 / 3.0) as f32;
                             let family = SharedString::from(style.font.name.clone());
                             let base_color = color;
                             let mut runs: Vec<(String, f32, Hsla, bool, bool, bool, bool)> = Vec::new();
@@ -620,59 +621,63 @@ impl gpui::Render for SheetView {
                                     run.strike,
                                 ));
                             }
-                            let inner_w = (width - 6.0).max(10.0);
-                            let line_h = font_size * 1.1;
+                            let inner_w = (width + 2.0).max(10.0);
                             let center = matches!(style.align.h, gridcraft_model::style::HAlign::Center | gridcraft_model::style::HAlign::CenterAcross);
-                            let vcenter = matches!(style.align.v, gridcraft_model::style::VAlign::Center);
+                            let mut lines: Vec<Vec<(String, f32, Hsla, bool, bool, bool, bool, f32, f32)>> = vec![Vec::new()];
+                            let mut cur_w = 0.0f32;
+                            for (text, sz, col, b, i, u, st) in &runs {
+                                let mut first_seg = true;
+                                for seg in text.split('\n') {
+                                    if !first_seg { lines.push(Vec::new()); cur_w = 0.0; }
+                                    first_seg = false;
+                                    for word in seg.split_inclusive(' ').flat_map(|w| w.split_inclusive('-')) {
+                                        if word.is_empty() { continue; }
+                                        let font = gpui::Font { family: family.clone(), weight: if *b { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if *i { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
+                                        let run = gpui::TextRun { len: word.len(), font, color: *col, background_color: None, underline: if *u { Some(Default::default()) } else { None }, strikethrough: if *st { Some(Default::default()) } else { None } };
+                                        let shaped = window.text_system().shape_line(SharedString::from(word.to_string()), px(*sz), &[run], None);
+                                        let w = f32::from(shaped.width).round();
+                                        let h = f32::from(shaped.ascent + shaped.descent);
+                                        if cur_w + w > inner_w && cur_w > 0.0 { lines.push(Vec::new()); cur_w = 0.0; }
+                                        lines.last_mut().unwrap().push((word.to_string(), *sz, *col, *b, *i, *u, *st, w, h));
+                                        cur_w += w;
+                                    }
+                                }
+                            }
+                            let base_h = {
+                                let f = gpui::Font { family: family.clone(), weight: if style.font.bold { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if style.font.italic { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
+                                let r = gpui::TextRun { len: 1, font: f, color: base_color, background_color: None, underline: None, strikethrough: None };
+                                let sh = window.text_system().shape_line(SharedString::from(" "), px(font_size), &[r], None);
+                                f32::from(sh.ascent + sh.descent)
+                            };
+                            let line_hs: Vec<f32> = lines.iter().map(|l| if l.is_empty() { base_h } else { l.iter().map(|w| w.8).fold(0.0f32, f32::max) }).collect();
+                            let total_h: f32 = line_hs.iter().sum();
+                            rich_total = Some(total_h);
                             let painter = gpui::canvas(
                                 |_, _, _| {},
                                 move |bounds, _, window, cx| {
-                                    let mut lines: Vec<Vec<(String, f32, Hsla, bool, bool, bool, bool, f32, f32)>> = vec![Vec::new()];
-                                    let mut cur_w = 0.0f32;
-                                    for (text, sz, col, b, i, u, st) in &runs {
-                                        let mut first_seg = true;
-                                        for seg in text.split('\n') {
-                                            if !first_seg { lines.push(Vec::new()); cur_w = 0.0; }
-                                            first_seg = false;
-                                            for word in seg.split_inclusive(' ') {
-                                                if word.is_empty() { continue; }
-                                                let font = gpui::Font { family: family.clone(), weight: if *b { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if *i { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
-                                                let run = gpui::TextRun { len: word.len(), font, color: *col, background_color: None, underline: if *u { Some(Default::default()) } else { None }, strikethrough: if *st { Some(Default::default()) } else { None } };
-                                                let shaped = window.text_system().shape_line(SharedString::from(word.to_string()), px(*sz), &[run], None);
-                                                let w = f32::from(shaped.width);
-                                                let h = f32::from(shaped.ascent + shaped.descent);
-                                                if cur_w + w > inner_w && cur_w > 0.0 { lines.push(Vec::new()); cur_w = 0.0; }
-                                                lines.last_mut().unwrap().push((word.to_string(), *sz, *col, *b, *i, *u, *st, w, h));
-                                                cur_w += w;
-                                            }
-                                        }
-                                    }
-                                    let line_hs: Vec<f32> = lines.iter().map(|l| l.iter().map(|w| w.8).fold(0.0f32, f32::max)).collect();
-                                    let total_h: f32 = line_hs.iter().sum();
-                                    let mut y = if vcenter { ((f32::from(bounds.size.height) - total_h) / 2.0).max(0.0) } else { 0.0 };
+                                    let mut y = 0.0f32;
                                     for (li, line) in lines.iter().enumerate() {
                                         let lh = line_hs[li];
-                                        if line.is_empty() { continue; }
                                         let lw: f32 = line.iter().map(|w| w.7).sum();
                                         let mut x = if center { ((inner_w - lw) / 2.0).max(0.0) } else { 0.0 };
                                         for (word, sz, col, b, i, u, st, w, _h) in line {
                                             let font = gpui::Font { family: family.clone(), weight: if *b { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if *i { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
                                             let run = gpui::TextRun { len: word.len(), font, color: *col, background_color: None, underline: if *u { Some(Default::default()) } else { None }, strikethrough: if *st { Some(Default::default()) } else { None } };
                                             let shaped = window.text_system().shape_line(SharedString::from(word.clone()), px(*sz), &[run], None);
-                                            let _ = shaped.paint(gpui::point(bounds.origin.x + px(3.0 + x), bounds.origin.y + px(y)), px(lh), gpui::TextAlign::Left, None, window, cx);
+                                            let _ = shaped.paint(gpui::point(bounds.origin.x + px(2.0 + x), bounds.origin.y + px(y)), px(lh), gpui::TextAlign::Left, None, window, cx);
                                             x += w;
                                         }
                                         y += lh;
                                     }
                                 },
                             );
-                            text_div = div().size_full().child(painter);
+                            text_div = div().w_full().h(px(total_h)).child(painter);
                         } else {
                             text_div = text_div.child(SharedString::from(formatted.text.clone()));
                         }
                         // Excel clips overflow at the bottom (shows the start), so top-align when wrapped text is taller than the cell
                         let est_lines = ((formatted.text.chars().count() as f32 * font_size * 0.5) / width.max(1.0)).ceil().max(1.0);
-                        let overflow = style.align.wrap && est_lines * font_size * 1.2 > height;
+                        let overflow = style.align.wrap && rich_total.unwrap_or(est_lines * font_size * 1.2) > height;
                         let mut v_div = div().size_full().flex().flex_col();
                         v_div = if overflow {
                             v_div.justify_start()
@@ -732,7 +737,7 @@ impl gpui::Render for SheetView {
             if let Some((left, top, width, height)) = edit_rect {
                 if let Some(editor) = self.cell_editor.clone() {
                     let estyle = styles.get(sheet.style_id(CellRef::new(self.edit_row, self.edit_col)));
-                    let font_size = (estyle.font.size * office_knob_f("sheet.fontScale", 1.25) as f32 * zoom).clamp(1.0, 40.0);
+                    let font_size = (estyle.font.size * office_knob_f("sheet.fontScale", 4.0 / 3.0) as f32 * zoom).clamp(1.0, 40.0);
                     self.edit_rect_cache = Some((left, top, width, height));
                     self.edit_font_px = font_size;
                     self.edit_font_cur = edit_font(&estyle.font.name, estyle.font.bold, estyle.font.italic);
