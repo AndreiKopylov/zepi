@@ -21,6 +21,7 @@ zepi/
 │   ├── acp/                   # ACP adapter: pi as the editor agent (TypeScript)
 │   ├── runtime/               # pi runtime: settings, extensions, browser agent
 │   └── tools/                 # doctor/probe utilities
+├── utils/sheetprobe/      # dev-only xlsx->PNG renderer to calibrate Excel view vs Excel (no Zed rebuild)
 ├── scripts/
 │   ├── native.py              # prepare: Zed tarball per pin + overlay + removals
 │   ├── win-run.py             # run: seeds configs, launches the release-fast exe

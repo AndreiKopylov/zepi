@@ -1,0 +1,18 @@
+[package]
+name = "sheetprobe"
+version = "0.1.0"
+edition = "2021"
+description = "Dev-only xlsx -> PNG renderer (ab_glyph) to calibrate the Excel viewer against real Excel without rebuilding Zed."
+publish = false
+
+[dependencies]
+gridcraft-model = { path = "../../native/overlay/vendor/gridcraft/crates/model" }
+gridcraft-core = { path = "../../native/overlay/vendor/gridcraft/crates/core" }
+gridcraft-xlsx = { path = "../../native/overlay/vendor/gridcraft/crates/xlsx" }
+ab_glyph = "0.2"
+image = "0.25"
+
+[profile.release]
+opt-level = 2
+
+[workspace]
