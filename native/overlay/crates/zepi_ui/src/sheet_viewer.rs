@@ -372,6 +372,7 @@ pub struct SheetView {
     search_editor: Option<Entity<Editor>>,
     cell_editor: Option<Entity<Editor>>,
     focus_search_on_render: bool,
+    refocus_root: bool,
     search_matches: Vec<(u32, u32, usize, usize)>,
     search_current: usize,
     search_query: String,
@@ -425,6 +426,7 @@ impl SheetView {
             search_editor: None,
             cell_editor: None,
             focus_search_on_render: false,
+            refocus_root: false,
             search_matches: Vec::new(),
             search_current: 0,
             search_query: String::new(),
@@ -1136,6 +1138,7 @@ impl SheetView {
         let text = self.cell_editor.as_ref().map(|e| e.read(cx).text(cx)).unwrap_or_else(|| self.edit_buffer.clone());
         self.cell_editor = None;
         self.editing = false;
+        self.refocus_root = true;
         self.caret_task = None;
         self.edit_drag = false;
         self.item.update(cx, |item, cx| {
@@ -1176,6 +1179,7 @@ impl SheetView {
         self.edit_caret = 0;
         self.edit_sel_anchor = None;
         self.editing = false;
+        self.refocus_root = true;
         self.caret_task = None;
         self.edit_drag = false;
         cx.notify();

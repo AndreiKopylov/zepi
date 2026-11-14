@@ -1,9 +1,13 @@
-use gpui::{HighlightStyle, StyledText};
 
 use super::*;
 
 impl gpui::Render for SheetView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.refocus_root {
+            self.refocus_root = false;
+            let handle = self.focus_handle.clone();
+            window.on_next_frame(move |window, cx| window.focus(&handle, cx));
+        }
         if self.focus_search_on_render {
             self.focus_search_on_render = false;
             if let Some(editor) = self.search_editor.as_ref() {
@@ -148,7 +152,7 @@ impl gpui::Render for SheetView {
             .child(
                 IconButton::new("sheet-search", IconName::MagnifyingGlass)
                     .icon_size(ui::IconSize::Small)
-                    .tooltip(Tooltip::for_action_title("Search", &SheetSearch))
+                    .tooltip({ let f = self.focus_handle.clone(); move |_w, cx| Tooltip::for_action_in("Search", &SheetSearch, &f, cx) })
                     .on_click({
                         let view = view_for_header.clone();
                         move |_, window, cx| {
@@ -161,7 +165,7 @@ impl gpui::Render for SheetView {
             let n = self.search_matches.len();
             let label = if n == 0 { "No results".to_string() } else { format!("{}/{}", self.search_current + 1, n) };
             let view = cx.entity();
-            let search_focus = self.search_editor.as_ref().map(|e| e.focus_handle(cx)).unwrap_or_else(|| self.focus_handle.clone());
+            let search_focus = self.focus_handle.clone();
             let mut bar = ui::h_flex()
                 .key_context("SheetSearch")
                 .flex_none()
@@ -181,7 +185,7 @@ impl gpui::Render for SheetView {
             bar.child(Label::new(SharedString::from(label)).size(LabelSize::XSmall).color(UiColor::Muted))
                 .child(IconButton::new("sheet-search-prev", IconName::ChevronUp).icon_size(ui::IconSize::XSmall).tooltip({ let f = search_focus.clone(); move |_w, cx| Tooltip::for_action_in("Previous match", &SheetSearchPrev, &f, cx) }).on_click({ let v = view.clone(); move |_, _, cx| { let _ = v.update(cx, |this, cx| this.search_prev(cx)); } }))
                 .child(IconButton::new("sheet-search-next", IconName::ChevronDown).icon_size(ui::IconSize::XSmall).tooltip({ let f = search_focus.clone(); move |_w, cx| Tooltip::for_action_in("Next match", &SheetSearchNext, &f, cx) }).on_click({ let v = view.clone(); move |_, _, cx| { let _ = v.update(cx, |this, cx| this.search_next(cx)); } }))
-                .child(IconButton::new("sheet-search-close", IconName::Close).icon_size(ui::IconSize::XSmall).on_click({ let v = view; move |_, w, cx| { let _ = v.update(cx, |this, cx| this.toggle_search(w, cx)); } }))
+                .child(IconButton::new("sheet-search-close", IconName::Close).icon_size(ui::IconSize::XSmall).tooltip({ let f = search_focus.clone(); move |_w, cx| Tooltip::for_action_in("Close search", &SheetSearch, &f, cx) }).on_click({ let v = view; move |_, w, cx| { let _ = v.update(cx, |this, cx| this.toggle_search(w, cx)); } }))
         });
 
         // formula bar
@@ -619,31 +623,26 @@ impl gpui::Render for SheetView {
                             text_div = text_div.underline();
                         }
                         let mut rich_total: Option<f32> = None;
-                        if let Some(rs) = wb.rich.iter().find(|r| r.text == formatted.text) {
-
+                        let cell_hits: Vec<(usize, usize)> = if self.search_open { self.search_matches.iter().filter(|m| m.0 == row && m.1 == col).map(|m| (m.2, m.3)).collect() } else { Vec::new() };
+                        let cur_hit: Option<(usize, usize)> = if self.search_open { self.search_matches.get(self.search_current).filter(|m| m.0 == row && m.1 == col).map(|m| (m.2, m.3)) } else { None };
+                        let rs_opt = wb.rich.iter().find(|r| r.text == formatted.text);
+                        if let Some(rs) = rs_opt {
                             let knob = office_knob_f("sheet.fontScale", 4.0 / 3.0) as f32;
                             let family = SharedString::from(style.font.name.clone());
                             let base_color = color;
                             let mut runs: Vec<(String, f32, Hsla, bool, bool, bool, bool)> = Vec::new();
                             for run in &rs.runs {
-                                runs.push((
-                                    run.text.clone(),
-                                    (run.size.unwrap_or(style.font.size) * knob * zoom).clamp(1.0, 40.0),
-                                    run.color.map(|cc| gpui::rgb(cc).into()).unwrap_or(base_color),
-                                    run.bold || style.font.bold,
-                                    run.italic || style.font.italic,
-                                    run.underline,
-                                    run.strike,
-                                ));
+                                runs.push((run.text.clone(), (run.size.unwrap_or(style.font.size) * knob * zoom).clamp(1.0, 40.0), run.color.map(|cc| gpui::rgb(cc).into()).unwrap_or(base_color), run.bold || style.font.bold, run.italic || style.font.italic, run.underline, run.strike));
                             }
                             let inner_w = (width + 2.0).max(10.0);
                             let center = matches!(style.align.h, gridcraft_model::style::HAlign::Center | gridcraft_model::style::HAlign::CenterAcross);
-                            let mut lines: Vec<Vec<(String, f32, Hsla, bool, bool, bool, bool, f32, f32)>> = vec![Vec::new()];
+                            let mut lines: Vec<Vec<(String, f32, Hsla, bool, bool, bool, bool, f32, f32, usize)>> = vec![Vec::new()];
                             let mut cur_w = 0.0f32;
+                            let mut off = 0usize;
                             for (text, sz, col, b, i, u, st) in &runs {
                                 let mut first_seg = true;
                                 for seg in text.split('\n') {
-                                    if !first_seg { lines.push(Vec::new()); cur_w = 0.0; }
+                                    if !first_seg { lines.push(Vec::new()); cur_w = 0.0; off += 1; }
                                     first_seg = false;
                                     for word in seg.split_inclusive(' ').flat_map(|w| w.split_inclusive('-')) {
                                         if word.is_empty() { continue; }
@@ -653,8 +652,9 @@ impl gpui::Render for SheetView {
                                         let w = f32::from(shaped.width).round();
                                         let h = f32::from(shaped.ascent + shaped.descent);
                                         if cur_w + w > inner_w && cur_w > 0.0 { lines.push(Vec::new()); cur_w = 0.0; }
-                                        lines.last_mut().unwrap().push((word.to_string(), *sz, *col, *b, *i, *u, *st, w, h));
+                                        lines.last_mut().unwrap().push((word.to_string(), *sz, *col, *b, *i, *u, *st, w, h, off));
                                         cur_w += w;
+                                        off += word.chars().count();
                                     }
                                 }
                             }
@@ -667,6 +667,8 @@ impl gpui::Render for SheetView {
                             let line_hs: Vec<f32> = lines.iter().map(|l| if l.is_empty() { base_h } else { l.iter().map(|w| w.8).fold(0.0f32, f32::max) }).collect();
                             let total_h: f32 = line_hs.iter().sum();
                             rich_total = Some(total_h);
+                            let hits = cell_hits;
+                            let cur = cur_hit;
                             let painter = gpui::canvas(
                                 |_, _, _| {},
                                 move |bounds, _, window, cx| {
@@ -675,10 +677,21 @@ impl gpui::Render for SheetView {
                                         let lh = line_hs[li];
                                         let lw: f32 = line.iter().map(|w| w.7).sum();
                                         let mut x = if center { ((inner_w - lw) / 2.0).max(0.0) } else { 0.0 };
-                                        for (word, sz, col, b, i, u, st, w, _h) in line {
+                                        for (word, sz, col, b, i, u, st, w, _h, cs) in line {
+                                            let ce = cs + word.chars().count();
                                             let font = gpui::Font { family: family.clone(), weight: if *b { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if *i { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
                                             let run = gpui::TextRun { len: word.len(), font, color: *col, background_color: None, underline: if *u { Some(Default::default()) } else { None }, strikethrough: if *st { Some(Default::default()) } else { None } };
                                             let shaped = window.text_system().shape_line(SharedString::from(word.clone()), px(*sz), &[run], None);
+                                            for (hs, he) in hits.iter().chain(cur.iter()) {
+                                                let aa = (*hs).max(*cs);
+                                                let bb = (*he).min(ce);
+                                                if aa >= bb { continue; }
+                                                if let Some((hx0, hx1)) = hit_span(&shaped, word, *cs, aa, bb) {
+                                                    let is_cur = cur.map(|(ca, cb)| *hs == ca && *he == cb).unwrap_or(false);
+                                                    let bg = if is_cur { gpui::hsla(0.58, 0.9, 0.5, 0.6) } else { gpui::hsla(0.58, 0.8, 0.6, 0.3) };
+                                                    window.paint_quad(gpui::fill(gpui::Bounds { origin: gpui::point(bounds.origin.x + px(2.0 + x + hx0), bounds.origin.y + px(y)), size: gpui::size(px(hx1 - hx0), px(lh)) }, bg));
+                                                }
+                                            }
                                             let _ = shaped.paint(gpui::point(bounds.origin.x + px(2.0 + x), bounds.origin.y + px(y)), px(lh), gpui::TextAlign::Left, None, window, cx);
                                             x += w;
                                         }
@@ -687,6 +700,8 @@ impl gpui::Render for SheetView {
                                 },
                             );
                             text_div = div().w_full().h(px(total_h)).child(painter);
+                        } else if !cell_hits.is_empty() {
+                            text_div = text_div.child(search_styled(&formatted.text, &cell_hits, cur_hit, color, &style));
                         } else {
                             text_div = text_div.child(SharedString::from(formatted.text.clone()));
                         }
@@ -764,7 +779,7 @@ impl gpui::Render for SheetView {
                     style.local_player.selection = gpui::hsla(0.6, 0.8, 0.5, 0.35);
                     style.text = gpui::TextStyle { color: model_color_hsla(&estyle.font.color, text_color, &wb.theme.colors), font_family: SharedString::from(estyle.font.name.clone()), font_size: gpui::AbsoluteLength::Pixels(px(font_size)), ..Default::default() };
                     grid = grid.child(
-                        div().absolute().left(px(left)).top(px(top)).w(px(width)).min_h(px(height)).bg(cell_bg).border_2().border_color(select_border).cursor_text().child(editor::EditorElement::new(&editor, style)),
+                        div().absolute().left(px(left)).top(px(top)).w(px(width)).h(px(height)).overflow_hidden().bg(cell_bg).border_2().border_color(select_border).cursor_text().child(editor::EditorElement::new(&editor, style)),
                     );
                 }
             }
@@ -836,6 +851,8 @@ impl gpui::Render for SheetView {
             .bg(colors.panel_background)
             .track_focus(&self.focus_handle)
             .key_context(if self.editing { "SheetEditing" } else { "SheetView" })
+            .on_action(cx.listener(|this, _: &SheetSearchNext, _w, cx| this.search_next(cx)))
+            .on_action(cx.listener(|this, _: &SheetSearchPrev, _w, cx| this.search_prev(cx)))
             
             .on_action(cx.listener(|this, _: &Save, window, cx| this.save(window, cx)))
             .on_action(cx.listener(|this, _: &ZoomIn, _window, cx| this.set_zoom(this.zoom + 0.1, cx)))
@@ -945,3 +962,43 @@ impl gpui::Render for SheetView {
     }
 }
 
+
+#[allow(clippy::too_many_arguments)]
+fn search_styled(text: &str, hits: &[(usize, usize)], cur: Option<(usize, usize)>, color: Hsla, style: &gridcraft_model::style::Style) -> gpui::StyledText {
+    let n = text.chars().count();
+    let mut b: Vec<usize> = vec![0, n];
+    for (x, y) in hits { b.push(*x); b.push(*y); }
+    if let Some((x, y)) = cur { b.push(x); b.push(y); }
+    b.sort(); b.dedup();
+    let byte: Vec<usize> = text.char_indices().map(|(i, _)| i).chain(std::iter::once(text.len())).collect();
+    let font = gpui::Font { family: SharedString::from(style.font.name.clone()), weight: if style.font.bold { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if style.font.italic { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
+    let mut runs = Vec::new();
+    for w in b.windows(2) {
+        let (a, bb) = (w[0], w[1]);
+        if a >= bb { continue; }
+        let is_cur = cur.map(|(ca, cb)| a >= ca && bb <= cb).unwrap_or(false);
+        let is_hit = hits.iter().any(|(ha, hb)| a >= *ha && bb <= *hb);
+        let bg = if is_cur { Some(gpui::hsla(0.58, 0.9, 0.5, 0.6)) } else if is_hit { Some(gpui::hsla(0.58, 0.8, 0.6, 0.3)) } else { None };
+        runs.push(gpui::TextRun { len: byte[bb] - byte[a], font: font.clone(), color, background_color: bg, underline: None, strikethrough: None });
+    }
+    gpui::StyledText::new(text.to_string()).with_runs(runs)
+}
+
+fn hit_span(shaped: &gpui::ShapedLine, word: &str, cs: usize, aa: usize, bb: usize) -> Option<(f32, f32)> {
+    let chars: Vec<usize> = word.char_indices().map(|(i, _)| i).collect();
+    let n = word.chars().count();
+    let ba = if aa - cs < n { chars[aa - cs] } else { word.len() };
+    let bbty = if bb - cs < n { chars[bb - cs] } else { word.len() };
+    let mut x0: Option<f32> = None;
+    let mut x1: Option<f32> = None;
+    for r in &shaped.runs {
+        for g in &r.glyphs {
+            let gx = f32::from(g.position.x);
+            if g.index >= ba && g.index < bbty && x0.is_none() { x0 = Some(gx); }
+            if g.index >= bbty && x1.is_none() { x1 = Some(gx); }
+        }
+    }
+    let x0 = x0?;
+    let x1 = x1.unwrap_or_else(|| f32::from(shaped.width));
+    if x1 > x0 { Some((x0, x1)) } else { None }
+}

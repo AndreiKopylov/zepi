@@ -8,6 +8,10 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Added
 
+- Excel search redesigned like Word/PowerPoint: a dedicated bar with a match counter and
+  prev/next/close buttons whose tooltips show the hotkeys, occurrence search across cells,
+  F3/Shift+F3 (and Enter/Shift+Enter) to step, Esc to close; stepping selects and scrolls to the
+  matched cell. Matches are highlighted per-character in blue without shifting the text.
 - Excel search redesigned like Word: a dedicated bar with a match counter and prev/next/close
   buttons (tooltips show hotkeys), occurrence search across cells, Enter/Shift+Enter to step,
   Esc to close; stepping selects and scrolls to the matched cell.
@@ -29,6 +33,9 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Changed
 
+- Fixed black artifacts over cell text when selecting a letter in the in-cell editor (the gpui
+  editor's selection-occurrence highlight is disabled there); the editor no longer grows past the
+  cell row, and focus returns to the sheet after editing so search hotkeys keep working.
 - Fixed black artifacts over cell text when selecting a letter in the cell editor: the gpui
   editor's selection-occurrence highlight is now disabled for the in-cell editor.
 - Excel viewer metric parity with Excel: respect stored row heights, render blank lines
