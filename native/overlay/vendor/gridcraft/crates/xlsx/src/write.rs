@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
-use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
+use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, RichString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
@@ -353,9 +353,10 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     // Phonetic (furigana) data is kept per string text: the table below holds each text once, so
     // the runs of the entry with that text are written next to it (`Workbook::phonetics`).
     let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
+    let rich: HashMap<&str, &RichString> = wb.rich.iter().map(|r| (r.text.as_str(), r)).collect();
     let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
     for t in &out.sst.list {
-        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body(t, phonetics.get(t.as_str()).copied()));
+        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body_full(t, phonetics.get(t.as_str()).copied(), rich.get(t.as_str()).copied()));
     }
     sst.push_str("</sst>");
     out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());

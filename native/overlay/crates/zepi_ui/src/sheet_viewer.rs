@@ -16,7 +16,7 @@ use gpui::{
 };
 use gridcraft_core::{CellRef, Value};
 use gridcraft_model::style::{PatternType, StyleId};
-use gridcraft_model::workbook::Workbook;
+use gridcraft_model::workbook::{RichRun, RichString, Workbook};
 use gridcraft_model::{Cell, Formula};
 use gridcraft_numfmt::{NumberFormat, format_value};
 use gridcraft_xlsx::{read_xlsx, write_xlsx};
@@ -26,7 +26,7 @@ use theme::ActiveTheme;
 use ui::{
     ButtonCommon, Clickable, Color as UiColor, Icon, IconButton, IconName, Label, LabelCommon,
     LabelSize, ScrollAxes,
-    ScrollableHandle, Scrollbars, Tooltip, WithScrollbar,
+    ScrollableHandle, ScrollbarStyle, Scrollbars, Tooltip, WithScrollbar,
 };
 use workspace::item::{ItemBufferKind, Item, ProjectItem, SerializableItem, TabContentParams};
 use workspace::notifications::{DetachAndPromptErr, NotificationId};
@@ -35,7 +35,7 @@ use workspace::{
     register_serializable_item,
 };
 
-use crate::slides_viewer::{office_knob, office_knob_f};
+use crate::slides_viewer::{office_knob, office_knob_f, office_thumb_color};
 
 mod sheet_render;
 
@@ -54,6 +54,7 @@ actions!(
         MoveRight,
         SheetSearch,
         SheetSearchNext,
+        SheetSearchPrev,
         SheetCopy,
         SheetCut,
         SheetPaste,
@@ -96,6 +97,31 @@ fn shape_width(ts: &WindowTextSystem, text: &str, font: &gpui::Font, size: Pixel
         ts.shape_line(SharedString::from(text), size, &[run], None)
             .width(),
     )
+}
+
+fn splice_runs(runs: &mut Vec<RichRun>, old: &str, new: &str) {
+    let oc: Vec<char> = old.chars().collect();
+    let nc: Vec<char> = new.chars().collect();
+    let mut p = 0;
+    while p < oc.len() && p < nc.len() && oc[p] == nc[p] { p += 1; }
+    let mut s = 0;
+    while s < oc.len() - p && s < nc.len() - p && oc[oc.len() - 1 - s] == nc[nc.len() - 1 - s] { s += 1; }
+    let mut attrs: Vec<RichRun> = Vec::new();
+    for r in runs.iter() { for _ in r.text.chars() { attrs.push(RichRun { text: String::new(), ..r.clone() }); } }
+    while attrs.len() < oc.len() { attrs.push(runs.last().cloned().unwrap_or_default()); }
+    let ins = if p > 0 { attrs[p - 1].clone() } else { attrs.first().cloned().unwrap_or_default() };
+    let mut na: Vec<RichRun> = attrs[..p].to_vec();
+    for _ in 0..(nc.len() - p - s) { na.push(ins.clone()); }
+    na.extend_from_slice(&attrs[oc.len() - s..]);
+    let mut out: Vec<RichRun> = Vec::new();
+    let mut cur: Option<RichRun> = None;
+    let mut buf = String::new();
+    for (ch, at) in nc.iter().zip(na.iter()) {
+        let same = cur.as_ref().map(|c| c.bold == at.bold && c.italic == at.italic && c.underline == at.underline && c.strike == at.strike && c.color == at.color && c.size == at.size && c.font == at.font).unwrap_or(false);
+        if same { buf.push(*ch); } else { if let Some(c) = cur.take() { if !buf.is_empty() { out.push(RichRun { text: buf.clone(), ..c }); } } buf.clear(); buf.push(*ch); cur = Some(at.clone()); }
+    }
+    if let Some(c) = cur { if !buf.is_empty() { out.push(RichRun { text: buf, ..c }); } }
+    *runs = out;
 }
 
 fn edit_font(name: &str, bold: bool, italic: bool) -> gpui::Font {
@@ -309,7 +335,8 @@ impl project::ProjectItem for SheetItem {
                 .background_executor()
                 .spawn(async move {
                     let bytes = std::fs::read(&abs_path)?;
-                    let (wb, _report) = read_xlsx(&bytes)?;
+                    let (mut wb, _report) = read_xlsx(&bytes)?;
+                    SheetView::autofit_display_rows(&mut wb);
                     anyhow::Ok((wb, abs_path))
                 })
                 .await;
@@ -368,7 +395,14 @@ pub struct SheetView {
     edit_sel_anchor: Option<usize>,
     search_open: bool,
     search_editor: Option<Entity<Editor>>,
+    cell_editor: Option<Entity<Editor>>,
+    edit_runs: Vec<RichRun>,
+    edit_prev: String,
     focus_search_on_render: bool,
+    refocus_root: bool,
+    search_matches: Vec<(u32, u32, usize, usize)>,
+    search_current: usize,
+    search_query: String,
     grid_origin: Point<gpui::Pixels>,
     grid_size: Point<gpui::Pixels>,
     self_write: Option<Instant>,
@@ -382,6 +416,10 @@ pub struct SheetView {
     edit_font_cur: gpui::Font,
     caret_on: bool,
     edit_drag: bool,
+    edit_align: u8,
+    edit_layout: Vec<(f32, f32, Vec<(usize, usize, f32, f32, Vec<f32>)>)>,
+    edit_origin: std::sync::Arc<std::sync::Mutex<(f32, f32)>>,
+    edit_mouse: Option<(f32, f32)>,
     caret_task: Option<Task<()>>,
 }
 
@@ -417,7 +455,14 @@ impl SheetView {
             edit_sel_anchor: None,
             search_open: false,
             search_editor: None,
+            cell_editor: None,
+            edit_runs: Vec::new(),
+            edit_prev: String::new(),
             focus_search_on_render: false,
+            refocus_root: false,
+            search_matches: Vec::new(),
+            search_current: 0,
+            search_query: String::new(),
             grid_origin: Point::default(),
             grid_size: Point::default(),
             self_write: None,
@@ -430,6 +475,10 @@ impl SheetView {
             edit_font_cur: gpui::Font::default(),
             caret_on: true,
             edit_drag: false,
+            edit_align: 0,
+            edit_layout: Vec::new(),
+            edit_origin: std::sync::Arc::new(std::sync::Mutex::new((0.0, 0.0))),
+            edit_mouse: None,
             caret_task: None,
         };
         // Worktree events can be missed when a writer replaces the file (Office and
@@ -513,7 +562,8 @@ impl SheetView {
                     .background_executor()
                     .spawn(async move {
                         let bytes = std::fs::read(&abs_try)?;
-                        let (wb, _report) = read_xlsx(&bytes)?;
+                        let (mut wb, _report) = read_xlsx(&bytes)?;
+                    SheetView::autofit_display_rows(&mut wb);
                         anyhow::Ok(wb)
                     })
                     .await;
@@ -833,74 +883,65 @@ impl SheetView {
     }
 
     /// Caret bar position inside the edit overlay, measured by text shaping.
+    fn edit_lines(&self, inner_w: f32, window: &Window) -> Vec<String> {
+        let ts = window.text_system();
+        let font = &self.edit_font_cur;
+        let size = px(self.edit_font_px.max(6.0));
+        let mut out = Vec::new();
+        for para in self.edit_buffer.split('\n') {
+            let mut cur = String::new();
+            let mut curw = 0.0f32;
+            for word in para.split_inclusive(' ') {
+                let w = shape_width(ts, word, font, size);
+                if curw + w > inner_w && !cur.is_empty() { out.push(cur.clone()); cur.clear(); curw = 0.0; }
+                cur.push_str(word);
+                curw += w;
+            }
+            out.push(cur);
+        }
+        out
+    }
+
     fn caret_pos(&self, left: f32, top: f32, width: f32, font_size: f32, window: &Window) -> (f32, f32) {
         let ts = window.text_system();
         let font = &self.edit_font_cur;
         let size = px(font_size);
-        let inner_w = (width - 8.0).max(10.0);
-        let before_all: String = self.edit_buffer.chars().take(self.edit_caret).collect();
-        let line_idx = before_all.matches(NLCH).count();
-        let line_prefix = before_all.rsplit(NLCH).next().unwrap_or("");
-        let pw = shape_width(ts, line_prefix, font, size);
-        let wraps = (pw / inner_w).floor() as usize;
-        let mut y_lines = wraps;
-        for prev in self.edit_buffer.split(NLCH).take(line_idx) {
-            let w = shape_width(ts, prev, font, size);
-            y_lines += (w / inner_w).ceil().max(1.0) as usize;
+        let inner_w = (width - 6.0).max(10.0);
+        let line_h = font_size * 1.25;
+        let lines = self.edit_lines(inner_w, window);
+        let mut pos = 0usize;
+        for (idx, line) in lines.iter().enumerate() {
+            let lc = line.chars().count();
+            if self.edit_caret <= pos + lc {
+                let prefix: String = self.edit_buffer.chars().skip(pos).take(self.edit_caret - pos).collect();
+                let w = shape_width(ts, &prefix, font, size);
+                return (left + 3.0 + w, top + 1.0 + idx as f32 * line_h);
+            }
+            pos += lc;
+            if self.edit_buffer.chars().nth(pos) == Some('\n') { pos += 1; }
         }
-        (
-            left + 3.0 + (pw - wraps as f32 * inner_w),
-            top + 2.0 + y_lines as f32 * font_size * 1.25,
-        )
+        (left + 3.0, top + 1.0 + lines.len().saturating_sub(1) as f32 * line_h)
     }
 
-    /// Map a click inside the edit overlay to a caret offset, measured by shaping.
-    fn click_caret(&self, x: f32, y: f32, width: f32, window: &Window, cx: &App) -> usize {
-        let font_px = self.edit_font_px.max(6.0);
-        let efont = self
-            .item
-            .read(cx)
-            .wb
-            .as_ref()
-            .and_then(|wb| {
-                let sh = wb.sheets.get(self.sheet)?;
-                let st = wb
-                    .styles
-                    .get(sh.style_id(CellRef::new(self.edit_row, self.edit_col)));
-                Some(edit_font(&st.font.name, st.font.bold, st.font.italic))
-            })
-            .unwrap_or_else(|| self.edit_font_cur.clone());
-        let ts = window.text_system();
-        let inner_w = (width - 8.0).max(10.0);
-        let line_h = font_px * 1.25;
-        let clicked_line = (((y - 2.0) / line_h).floor() as i32).max(0) as usize;
-        let mut acc = 0usize;
-        let mut consumed = 0usize;
-        let mut caret = self.edit_buffer.chars().count();
-        for seg in self.edit_buffer.split(NLCH) {
-            let seg_w = shape_width(ts, seg, &efont, px(font_px));
-            let slots = (seg_w / inner_w).ceil().max(1.0) as usize;
-            if clicked_line < acc + slots {
-                let slot = clicked_line.saturating_sub(acc);
-                let target = (x - 3.0) + slot as f32 * inner_w;
-                let mut lo = 0usize;
-                let mut hi = seg.chars().count();
-                while lo < hi {
-                    let mid = (lo + hi) / 2;
-                    let pref: String = seg.chars().take(mid).collect();
-                    if shape_width(ts, &pref, &efont, px(font_px)) < target {
-                        lo = mid + 1;
-                    } else {
-                        hi = mid;
+    /// Map a click inside the edit overlay to a caret offset using the same wrapped layout as the render.
+    fn click_caret(&self, x: f32, y: f32, _width: f32, _window: &Window, _cx: &App) -> usize {
+        let n = self.edit_buffer.chars().count();
+        for (ly, lh, words) in &self.edit_layout {
+            if y >= *ly && y < *ly + *lh {
+                for (cs, ce, wx, ww, xs) in words {
+                    if x >= *wx && x < *wx + *ww {
+                        let rel = x - wx;
+                        let mut k = xs.iter().rposition(|&v| v <= rel).unwrap_or(0);
+                        if k + 1 < xs.len() && (rel - xs[k]) > (xs[k + 1] - rel) { k += 1; }
+                        return (cs + k).min(*ce).min(n);
                     }
                 }
-                caret = consumed + lo;
-                break;
+                if let Some(last) = words.last() { return last.1.min(n); }
+                if let Some(first) = words.first() { return first.0.min(n); }
             }
-            acc += slots;
-            consumed += seg.chars().count() + 1;
         }
-        caret
+        if y < 0.0 { return 0; }
+        n
     }
 
     fn zoom_reset(&mut self, cx: &mut Context<Self>) {
@@ -1001,88 +1042,91 @@ impl SheetView {
         if self.search_open {
             if self.search_editor.is_none() {
                 let editor = cx.new(|cx| Editor::single_line(window, cx));
+                cx.subscribe(&editor, |this, _ed, ev, cx| {
+                    if matches!(ev, editor::EditorEvent::BufferEdited) {
+                        this.recompute_search(cx);
+                    }
+                }).detach();
                 self.search_editor = Some(editor);
             }
             self.focus_search_on_render = true;
+            self.recompute_search(cx);
         } else {
             self.search_editor = None;
+            self.search_matches.clear();
+            self.search_query.clear();
             window.focus(&self.focus_handle, cx);
         }
         cx.notify();
     }
 
-    fn search_next(&mut self, cx: &mut Context<Self>) {
-        let query = self
-            .search_editor
-            .as_ref()
-            .map(|editor| editor.read(cx).text(cx))
-            .unwrap_or_default();
-        let query = query.trim().to_lowercase();
-        if query.is_empty() {
-            return;
-        }
-        let (last_row, last_col) = self.used_bounds(cx);
-        let cols = last_col + 1;
-        let total = (last_row + 1) * cols;
-        let start = self.sel_row * cols + self.sel_col + 1;
-        let sheet_cells = self
-            .item
-            .read(cx)
-            .wb
-            .as_ref()
-            .and_then(|wb| wb.sheets.get(self.sheet).cloned());
-        let Some(sheet_cells) = sheet_cells else { return };
-        for step in 0..total {
-            let idx = (start + step) % total;
-            let row = idx / cols;
-            let col = idx % cols;
-            let text = sheet_cells
-                .cell(CellRef::new(row, col))
-                .map(|cell| cell.bar_text().to_lowercase())
-                .unwrap_or_default();
-            if !text.contains(&query) {
-                continue;
-            }
-            self.sel_row = row;
-            self.sel_col = col;
-            let item = self.item.read(cx);
-            if let Some(wb) = item.wb.as_ref() {
-                if let Some(sheet) = wb.sheets.get(self.sheet) {
-                    let (sx, sy) = self.scroll.pos();
-                    let view_w = (f32::from(self.grid_size.x) - LEFT_W).max(50.0) / self.zoom;
-                    let view_h = (f32::from(self.grid_size.y) - TOP_H).max(50.0) / self.zoom;
-                    let cl = sheet.col_left(col) as f32;
-                    let cw = sheet.col_width(col);
-                    let rt = sheet.row_top(row) as f32;
-                    let rh = sheet.row_height(row);
-                    let mut nx = sx;
-                    let mut ny = sy;
-                    if cl < nx {
-                        nx = cl;
-                    } else if cl + cw > nx + view_w {
-                        nx = cl + cw - view_w;
+    fn recompute_search(&mut self, cx: &mut Context<Self>) {
+        let q = self.search_editor.as_ref().map(|e| e.read(cx).text(cx)).unwrap_or_default().trim().to_lowercase();
+        self.search_query = q.clone();
+        self.search_matches.clear();
+        self.search_current = 0;
+        if !q.is_empty() {
+            let (last_row, last_col) = self.used_bounds(cx);
+            if let Some(sheet) = self.item.read(cx).wb.as_ref().and_then(|wb| wb.sheets.get(self.sheet).cloned()) {
+                for row in 0..=last_row {
+                    for col in 0..=last_col {
+                        let text = sheet.cell(CellRef::new(row, col)).map(|c| c.bar_text()).unwrap_or_default();
+                        for (ms, me) in crate::slides_viewer::scan_char_matches(&text, &q) {
+                            self.search_matches.push((row, col, ms, me));
+                        }
                     }
-                    if rt < ny {
-                        ny = rt;
-                    } else if rt + rh > ny + view_h {
-                        ny = rt + rh - view_h;
-                    }
-                    self.scroll.set_pos(nx, ny);
                 }
             }
-            cx.notify();
-            return;
+        }
+        if !self.search_matches.is_empty() {
+            self.jump_to_match(cx);
+        }
+        cx.notify();
+    }
+
+    fn step_match(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let n = self.search_matches.len();
+        if n == 0 { return; }
+        self.search_current = (self.search_current as isize + delta).rem_euclid(n as isize) as usize;
+        self.jump_to_match(cx);
+        cx.notify();
+    }
+
+    fn search_next(&mut self, cx: &mut Context<Self>) { self.step_match(1, cx); }
+    fn search_prev(&mut self, cx: &mut Context<Self>) { self.step_match(-1, cx); }
+
+    fn jump_to_match(&mut self, cx: &mut Context<Self>) {
+        let Some(&(row, col, _, _)) = self.search_matches.get(self.search_current) else { return };
+        self.anchor = None;
+        self.sel_row = row;
+        self.sel_col = col;
+        let item = self.item.read(cx);
+        if let Some(wb) = item.wb.as_ref() {
+            if let Some(sheet) = wb.sheets.get(self.sheet) {
+                let (sx, sy) = self.scroll.pos();
+                let view_w = (f32::from(self.grid_size.x) - LEFT_W).max(50.0) / self.zoom;
+                let view_h = (f32::from(self.grid_size.y) - TOP_H).max(50.0) / self.zoom;
+                let cl = sheet.col_left(col) as f32;
+                let cw = sheet.col_width(col);
+                let rt = sheet.row_top(row) as f32;
+                let rh = sheet.row_height(row);
+                let mut nx = sx;
+                let mut ny = sy;
+                if cl < nx { nx = cl; } else if cl + cw > nx + view_w { nx = cl + cw - view_w; }
+                if rt < ny { ny = rt; } else if rt + rh > ny + view_h { ny = rt + rh - view_h; }
+                self.scroll.set_pos(nx, ny);
+            }
         }
     }
 
-    fn start_edit(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn start_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.item.read(cx).wb.is_none() || self.editing {
             return;
         }
         let text = self.bar_text(cx);
         self.edit_row = self.sel_row;
         self.edit_col = self.sel_col;
-        self.edit_buffer = text;
+        self.edit_buffer = text.clone();
         self.edit_caret = self.edit_buffer.chars().count();
         self.edit_sel_anchor = None;
         self.caret_on = true;
@@ -1095,28 +1139,22 @@ impl SheetView {
                         .get(sheet.style_id(CellRef::new(self.edit_row, self.edit_col)));
                     self.edit_font_px = (st.font.size * 4.0 / 3.0 * self.zoom).clamp(8.0, 40.0);
                     self.edit_font_cur = edit_font(&st.font.name, st.font.bold, st.font.italic);
+                    self.edit_align = match st.align.h { gridcraft_model::style::HAlign::Center | gridcraft_model::style::HAlign::CenterAcross => 1, gridcraft_model::style::HAlign::Right | gridcraft_model::style::HAlign::Fill | gridcraft_model::style::HAlign::Justify => 2, _ => 0 };
                 }
             }
         }
-        self.caret_task = Some(cx.spawn(async move |this, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(530))
-                .await;
-            let cont = this
-                .update(cx, |this, cx| {
-                    if !this.editing {
-                        return false;
-                    }
-                    this.caret_on = !this.caret_on;
-                    cx.notify();
-                    true
-                })
-                .unwrap_or(false);
-            if !cont {
-                break;
+        self.edit_runs = {
+            let item = self.item.read(cx);
+            let mut found = None;
+            if let Some(wb) = item.wb.as_ref() {
+                if let Some(rs) = wb.rich.iter().find(|r| r.text == text) { found = Some(rs.runs.clone()); }
             }
-        }));
+            found.unwrap_or_else(|| vec![RichRun { text: text.clone(), ..Default::default() }])
+        };
+        self.edit_prev = text.clone();
         self.editing = true;
+        let fh = self.focus_handle.clone();
+        window.on_next_frame(move |window, cx| { window.focus(&fh, cx); });
         cx.notify();
     }
 
@@ -1126,7 +1164,9 @@ impl SheetView {
             return;
         }
         let text = self.edit_buffer.clone();
+        self.cell_editor = None;
         self.editing = false;
+        self.refocus_root = true;
         self.caret_task = None;
         self.edit_drag = false;
         self.item.update(cx, |item, cx| {
@@ -1142,6 +1182,10 @@ impl SheetView {
                         let old = sheet.cell(at).cloned();
                         let new = parse_cell_text(&text, style);
                         sheet.set_cell(at, new.clone());
+                        let wb = item.wb.as_mut().unwrap();
+                        wb.rich.retain(|r| r.text != current && r.text != text);
+                        let has_ov = self.edit_runs.iter().any(|r| r.bold || r.italic || r.underline || r.strike || r.color.is_some() || r.size.is_some() || r.font.is_some());
+                        if has_ov && !text.is_empty() { wb.rich.push(RichString { text: text.clone(), runs: self.edit_runs.clone() }); }
                         self.undo_stack.push(SheetOp::Cells(vec![(at, old, Some(new))]));
                         self.redo_stack.clear();
                         item.dirty = true;
@@ -1162,10 +1206,12 @@ impl SheetView {
         if !self.editing {
             return;
         }
+        self.cell_editor = None;
         self.edit_buffer.clear();
         self.edit_caret = 0;
         self.edit_sel_anchor = None;
         self.editing = false;
+        self.refocus_root = true;
         self.caret_task = None;
         self.edit_drag = false;
         cx.notify();
@@ -1182,6 +1228,108 @@ impl SheetView {
         self.edit_sel_anchor = Some(self.edit_caret);
         self.edit_buffer = chars.into_iter().collect();
         cx.notify();
+    }
+
+    fn edit_sel_range(&self) -> Option<(usize, usize)> {
+        self.edit_sel_anchor.map(|a| (a.min(self.edit_caret), a.max(self.edit_caret))).filter(|(a, b)| a < b)
+    }
+
+    fn edit_set_text(&mut self, new: String, caret: usize, anchor: Option<usize>, cx: &mut Context<Self>) {
+        splice_runs(&mut self.edit_runs, &self.edit_buffer, &new);
+        self.edit_prev = new.clone();
+        self.edit_buffer = new;
+        self.edit_caret = caret;
+        self.edit_sel_anchor = anchor;
+        cx.notify();
+    }
+
+    fn edit_insert(&mut self, text: &str, cx: &mut Context<Self>) {
+        let chars: Vec<char> = self.edit_buffer.chars().collect();
+        let n = chars.len();
+        let (s, e) = self.edit_sel_range().unwrap_or((self.edit_caret.min(n), self.edit_caret.min(n)));
+        let mut nc: Vec<char> = chars[..s].to_vec();
+        nc.extend(text.chars());
+        nc.extend_from_slice(&chars[e..]);
+        let caret = s + text.chars().count();
+        self.edit_set_text(nc.into_iter().collect(), caret, None, cx);
+    }
+
+    fn edit_delete(&mut self, back: bool, cx: &mut Context<Self>) {
+        let chars: Vec<char> = self.edit_buffer.chars().collect();
+        let n = chars.len();
+        let (s, e, caret) = if let Some((s, e)) = self.edit_sel_range() {
+            (s, e, s)
+        } else if back {
+            let c = self.edit_caret.min(n);
+            if c == 0 { return; }
+            (c - 1, c, c - 1)
+        } else {
+            let c = self.edit_caret.min(n);
+            if c == n { return; }
+            (c, c + 1, c)
+        };
+        let mut nc: Vec<char> = chars[..s].to_vec();
+        nc.extend_from_slice(&chars[e..]);
+        self.edit_set_text(nc.into_iter().collect(), caret, None, cx);
+    }
+
+    fn edit_move(&mut self, dir: &str, shift: bool, _window: &Window, cx: &mut Context<Self>) {
+        let n = self.edit_buffer.chars().count();
+        let mut caret = self.edit_caret.min(n);
+        let anchor = if shift { self.edit_sel_anchor.or(Some(self.edit_caret)) } else { None };
+        let lay = &self.edit_layout;
+        let cur = lay.iter().rposition(|(_, _, w)| w.first().map(|f| f.0 <= caret).unwrap_or(false)).unwrap_or(0);
+        let first = lay[cur].2.first().map(|f| f.0).unwrap_or(0);
+        let last = lay[cur].2.last().map(|f| f.1).unwrap_or(first);
+        let col = caret.saturating_sub(first);
+        match dir {
+            "left" => caret = caret.saturating_sub(1),
+            "right" => caret = (caret + 1).min(n),
+            "home" => caret = first,
+            "end" => caret = last,
+            "up" => if cur > 0 { let t = &lay[cur - 1].2; let tf = t.first().map(|f| f.0).unwrap_or(0); let tl = t.last().map(|f| f.1).unwrap_or(tf); caret = (tf + col).min(tl); },
+            "down" => if cur + 1 < lay.len() { let t = &lay[cur + 1].2; let tf = t.first().map(|f| f.0).unwrap_or(0); let tl = t.last().map(|f| f.1).unwrap_or(tf); caret = (tf + col).min(tl); },
+            _ => {}
+        }
+        self.edit_caret = caret.min(n);
+        self.edit_sel_anchor = anchor;
+        cx.notify();
+    }
+
+    fn edit_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let k = &ev.keystroke;
+        let m = k.modifiers;
+        let key = k.key.as_str();
+        if m.control || m.platform {
+            match key {
+                "a" => { self.edit_sel_anchor = Some(0); self.edit_caret = self.edit_buffer.chars().count(); cx.notify(); return true; }
+                "c" | "x" => {
+                    if let Some((s, e)) = self.edit_sel_range() {
+                        let t: String = self.edit_buffer.chars().skip(s).take(e - s).collect();
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(t));
+                        if key == "x" { self.edit_delete(false, cx); }
+                    }
+                    return true;
+                }
+                "v" => { if let Some(item) = cx.read_from_clipboard() { if let Some(t) = item.text() { self.edit_insert(&t, cx); } } return true; }
+                _ => return false,
+            }
+        }
+        match key {
+            "enter" | "tab" => { self.commit_edit(cx); true }
+            "escape" => { self.cancel_edit(cx); true }
+            "backspace" => { self.edit_delete(true, cx); true }
+            "delete" => { self.edit_delete(false, cx); true }
+            "left" | "right" | "up" | "down" | "home" | "end" => { self.edit_move(key, m.shift, window, cx); true }
+            _ => {
+                if key.chars().count() == 1 {
+                    let ch = key.chars().next().unwrap();
+                    let ch = if m.shift { ch.to_uppercase().next().unwrap_or(ch) } else { ch };
+                    self.edit_insert(&ch.to_string(), cx);
+                    true
+                } else { false }
+            }
+        }
     }
 
     fn show_toast(&self, ws: Option<Entity<Workspace>>, cx: &mut Context<Self>, message: String) {
@@ -1240,6 +1388,64 @@ impl SheetView {
             written
         })
         .detach_and_prompt_err("Failed to save", window, cx, |err, _, _| Some(format!("{err}")));
+    }
+
+    /// Excel auto-fits rows to wrapped text when no explicit height is stored; mirror that (spread-style estimate).
+    fn autofit_display_rows(wb: &mut Workbook) {
+        for arc_sheet in wb.sheets.iter_mut() {
+            let sheet = Arc::make_mut(arc_sheet);
+            let Some(range) = sheet.used_range() else { continue };
+            let (last_row, last_col) = (range.end.row, range.end.col);
+            let mut computed: Vec<(u32, f32)> = Vec::new();
+            for row in 0..=last_row {
+                if sheet.rows.get(&row).is_some_and(|i| i.custom || i.size.is_some()) {
+                    continue;
+                }
+                let mut max_h = 0.0f32;
+                for col in 0..=last_col {
+                    let at = CellRef::new(row, col);
+                    let merge = sheet.merge_at(at);
+                    if merge.is_some_and(|m| m.start != at) {
+                        continue;
+                    }
+                    let Some(cell) = sheet.cell(at) else { continue };
+                    let text = cell.bar_text();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let style = wb.styles.get(sheet.style_id(at));
+                    if !style.align.wrap && !text.contains('\n') {
+                        continue;
+                    }
+                    let width = match merge {
+                        Some(m) => (sheet.col_left(m.end.col + 1) - sheet.col_left(m.start.col)) as f32,
+                        None => sheet.col_width(col),
+                    };
+                    let fs = style.font.size * office_knob_f("sheet.fontScale", 1.25) as f32;
+                    let cw = (fs * 0.5).max(4.0);
+                    let avail = (width - 8.0).max(cw);
+                    let mut lines = 0usize;
+                    for seg in text.split('\n') {
+                        let (mut cur, mut n) = (0.0f32, 1usize);
+                        for _ in seg.chars() {
+                            if cur > 0.0 && cur + cw > avail {
+                                n += 1;
+                                cur = 0.0;
+                            }
+                            cur += cw;
+                        }
+                        lines += n;
+                    }
+                    max_h = max_h.max(lines as f32 * fs * 1.2 + 4.0);
+                }
+                if max_h > sheet.default_row_height {
+                    computed.push((row, max_h));
+                }
+            }
+            for (row, h) in computed {
+                sheet.rows.entry(row).or_default().size = Some(h);
+            }
+        }
     }
 
     fn content_size(&self, cx: &App) -> (f32, f32) {

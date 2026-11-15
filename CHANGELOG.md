@@ -6,6 +6,37 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.1-beta6] - 2026-11-15
+
+### Added
+
+- Excel search like Word/PowerPoint: match counter, prev/next, F3/Shift+F3/Enter/Esc, and a
+  per-character highlight that does not shift the text.
+- Excel in-cell editing keeps rich formatting (color/bold/italic/size) and cell alignment;
+  caret and selection track the text, selection persists, and long text grows downward like Excel.
+- utils/sheetprobe: dev-only xlsx-to-PNG renderer to calibrate the Excel view against Excel
+  without rebuilding Zed.
+- Local gridcraft patch (scripts/gridcraft-local-patches/): rich-text runs survive read/save
+  round-trips.
+- Local wordcraft patch (scripts/wordcraft-local-patches/): Office cloud fonts and a legacy
+  .doc (Word 97-2003) reader.
+- ui scrollbar thumb_color override for a track-less, editor-style thumb.
+
+### Changed
+
+- Excel rendering parity: stored row heights, blank-line gaps, pt-to-px 4/3, hyphen wrap, text
+  padding and integer glyph advances; merged cells, borders and per-run rich text.
+- Office viewers (Excel/Word/PowerPoint) share one editor-style autohiding scrollbar.
+- Settings grouped into zepi.agent / zepi.office with a sheet.fontScale knob; row/column
+  resize marks the sheet dirty without auto-saving.
+- Word parity: Word's font-substitution table, .doc paragraph spacing and table margins, and
+  per-page (landscape) geometry.
+
+### Fixed
+
+- Headings with an empty numbering label no longer show a stray bullet dot.
+- Agent tool rows collapse multi-line shell commands to a single-line summary.
+
 ## [0.0.1-beta5] - 2026-11-12
 
 ### Changed

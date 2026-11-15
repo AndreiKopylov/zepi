@@ -105,10 +105,10 @@ fn zepi_tool_input_summary(tool_call: &ToolCall) -> Option<String> {
     let obj = tool_call.raw_input.as_ref()?.as_object()?;
     let text = |key: &str| obj.get(key).and_then(|value| value.as_str()).map(|s| s.to_string());
     if let Some(command) = text("command").or_else(|| text("cmd")).or_else(|| text("script")) {
-        return Some(text("description").unwrap_or(command));
+        return single_line(text("description").unwrap_or(command));
     }
     if let Some(pattern) = text("pattern").or_else(|| text("query")) {
-        return Some(match text("path") {
+        return single_line(match text("path") {
             Some(path) => format!("{pattern} · {path}"),
             None => pattern,
         });
@@ -116,6 +116,13 @@ fn zepi_tool_input_summary(tool_call: &ToolCall) -> Option<String> {
     text("path").or_else(|| text("file_path")).or_else(|| text("file"))
         .map(|path| std::path::Path::new(&path).file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or(path))
         .or_else(|| text("url"))
+        .and_then(single_line)
+}
+
+/// Tool summaries live in a fixed-height row, so newlines must not leak into them.
+fn single_line(text: String) -> Option<String> {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!line.is_empty()).then_some(line)
 }
 
 /// How a parent's view names a subagent. An ACP parent's own title for the subagent

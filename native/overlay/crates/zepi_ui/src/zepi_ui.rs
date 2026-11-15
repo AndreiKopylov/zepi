@@ -5,6 +5,7 @@ use workspace::{MultiWorkspace, Workspace};
 
 pub mod sheet_viewer;
 pub mod slides_viewer;
+pub mod html_doc;
 mod word_viewer;
 
 actions!(zepi, [FocusComposer, Submit]);

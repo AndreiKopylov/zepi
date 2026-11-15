@@ -1669,14 +1669,19 @@
       "right": "sheet_viewer::MoveRight",
       "ctrl-=": "sheet_viewer::ZoomIn",
       "ctrl--": "sheet_viewer::ZoomOut",
-      "ctrl-f": "sheet_viewer::SheetSearch"
+      "ctrl-f": "sheet_viewer::SheetSearch",
+      "f3": "sheet_viewer::SheetSearchNext",
+      "shift-f3": "sheet_viewer::SheetSearchPrev"
     }
   },
   {
     "context": "SheetSearch",
     "bindings": {
       "enter": "sheet_viewer::SheetSearchNext",
-      "escape": "sheet_viewer::SheetSearch"
+      "shift-enter": "sheet_viewer::SheetSearchPrev",
+      "escape": "sheet_viewer::SheetSearch",
+      "f3": "sheet_viewer::SheetSearchNext",
+      "shift-f3": "sheet_viewer::SheetSearchPrev",
     }
   },
   {
@@ -1696,8 +1701,21 @@
   {
     "context": "SheetEditing",
     "bindings": {
+      "f3": "sheet_viewer::SheetSearchNext",
+      "shift-f3": "sheet_viewer::SheetSearchPrev",
       "enter": "sheet_viewer::CommitEdit",
-      "escape": "sheet_viewer::CancelEdit"
+      "escape": "sheet_viewer::CancelEdit",
+      "f3": "sheet_viewer::SheetSearchNext",
+      "shift-f3": "sheet_viewer::SheetSearchPrev",
+    }
+  },
+  {
+    "context": "SheetEditing && Editor",
+    "bindings": {
+      "enter": "sheet_viewer::CommitEdit",
+      "escape": "sheet_viewer::CancelEdit",
+      "f3": "sheet_viewer::SheetSearchNext",
+      "shift-f3": "sheet_viewer::SheetSearchPrev",
     }
   },
   {

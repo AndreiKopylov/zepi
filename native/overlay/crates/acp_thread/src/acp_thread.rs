@@ -1618,7 +1618,19 @@ impl ToolCall {
         };
 
         if kind == &acp_v2::ToolKind::Execute {
-            title.clone()
+            // pi sometimes glues the command onto the tool name without a separator.
+            if let Some(name) = tool_name.filter(|name| !name.trim().is_empty())
+                && let Some(rest) = title.strip_prefix(name.as_ref())
+                && !rest.is_empty()
+                && !rest.starts_with(|c: char| c.is_whitespace() || c == ':' || c == '·')
+            {
+                return name.clone();
+            }
+            if let Some((first_line, _)) = title.split_once('\n') {
+                (first_line.to_owned() + "…").into()
+            } else {
+                title.clone()
+            }
         } else if kind == &acp_v2::ToolKind::Edit {
             MarkdownEscaped(title).to_string().into()
         } else if let Some((first_line, _)) = title.split_once('\n') {

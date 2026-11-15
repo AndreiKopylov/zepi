@@ -183,6 +183,26 @@ pub struct PhoneticString {
     pub props: Option<PhoneticProps>,
 }
 
+/// One rich-text run (`<r>`) of a shared string: text plus the font overrides it carries.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RichRun {
+    pub text: String,
+    #[serde(default)] pub bold: bool,
+    #[serde(default)] pub italic: bool,
+    #[serde(default)] pub underline: bool,
+    #[serde(default)] pub strike: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub color: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub font: Option<String>,
+}
+
+/// Rich-text runs of a shared string, kept next to its base text so open+save preserves them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RichString {
+    pub text: String,
+    pub runs: Vec<RichRun>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Arc<Sheet>>,
@@ -219,6 +239,9 @@ pub struct Workbook {
     /// which holds unmodelled parts), so it is saved to JSON as well as to XLSX.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub phonetics: Vec<PhoneticString>,
+    /// Rich-text runs per base text, preserved like phonetics so saving keeps colors/bold/italic.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich: Vec<RichString>,
     /// VBA project (`xl/vbaProject.bin`) carried through unchanged. GridCraft does not run
     /// macros; the blob is preserved so that saving a macro-enabled workbook never destroys the
     /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros. Shared, so a
@@ -339,6 +362,7 @@ impl Workbook {
             custom_lists: vec![],
             cell_styles: vec![],
             phonetics: vec![],
+            rich: vec![],
             vba_project: None,
             csv_delimiter: None,
             macros: crate::macros::Macros::default(),

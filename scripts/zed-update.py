@@ -154,6 +154,7 @@ def main():
     env['CARGO_NET_OFFLINE'] = 'false'
     env['CARGO_NET_GIT_FETCH_WITH_CLI'] = 'true'
     env['CARGO_BUILD_JOBS'] = '4'
+    env['CRAFT_I18N_DIR'] = str(ROOT / 'native' / 'overlay' / 'vendor' / 'craft-i18n')
     env['ZED_COMMIT_SHA'] = ref + '-zepi-trial'
     env['LK_DEBUG_WEBRTC'] = 'false'
     env['INCLUDE'] = os.pathsep.join([MSVC + '/include', SDK + '/Include/' + SDKV + '/ucrt', SDK + '/Include/' + SDKV + '/um', SDK + '/Include/' + SDKV + '/shared', SDK + '/Include/' + SDKV + '/winrt', SDK + '/Include/' + SDKV + '/cppwinrt', str(LOCAL / 'msvc-shim')])

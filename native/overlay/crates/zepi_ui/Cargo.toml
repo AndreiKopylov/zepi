@@ -15,9 +15,16 @@ workspace = true
 anyhow.workspace = true
 project.workspace = true
 editor.workspace = true
+multi_buffer.workspace = true
+language.workspace = true
 db.workspace = true
 wordcraft-doc = { path = "../../vendor/wordcraft/crates/doc" }
 wordcraft-docx = { path = "../../vendor/wordcraft/crates/docx" }
+wordcraft-docbin = { path = "../../vendor/wordcraft/crates/docbin" }
+wordcraft-fonts = { path = "../../vendor/wordcraft/crates/fonts" }
+html5ever = "0.39"
+markup5ever_rcdom = "0.39"
+base64 = "0.22"
 wordcraft-layout = { path = "../../vendor/wordcraft/crates/layout" }
 wordcraft-render = { path = "../../vendor/wordcraft/crates/render" }
 gridcraft-core = { path = "../../vendor/gridcraft/crates/core" }

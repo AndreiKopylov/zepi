@@ -51,6 +51,7 @@ const ZOOM_MIN: f64 = 0.25;
 const ZOOM_MAX: f64 = 4.0;
 
 pub fn init(cx: &mut App) {
+    wordcraft_fonts::FontDb::global().load_system_fonts();
     register_project_item::<SlidesView>(cx);
     register_serializable_item::<SlidesView>(cx);
     cx.bind_keys([
@@ -953,7 +954,7 @@ impl SlidesView {
                     if let Ok(image) = rendered {
                         this.cache.insert(slot, Arc::new(image));
                         this.order.push(slot);
-                        let cap = office_knob("rasterCacheCap", CACHE_CAP as u64) as usize;
+                        let cap = office_knob("raster.cacheCap", CACHE_CAP as u64) as usize;
                         while this.order.len() > cap {
                             let oldest = this.order.remove(0);
                             this.cache.remove(&oldest);
@@ -995,6 +996,11 @@ pub(crate) fn office_knob_f(key: &str, default: f64) -> f64 {
     office_value(key).and_then(|value| value.as_f64()).unwrap_or(default)
 }
 
+// mid-gray reads on both light slides and the dark tape
+pub(crate) fn office_thumb_color() -> gpui::Hsla {
+    gpui::rgb(0x808080).opacity(0.9).into()
+}
+
 // knobs are read on hot paths (wheel, render): cache the parsed settings by mtime
 fn office_value(key: &str) -> Option<serde_json_lenient::Value> {
     use std::sync::Mutex;
@@ -1015,11 +1021,15 @@ fn office_value(key: &str) -> Option<serde_json_lenient::Value> {
         *guard = Some((mtime, value));
     }
     let (_, root) = guard.as_ref()?;
-    Some(root["zepi"]["officeViewer"][key].clone())
+    let mut cur = root.get("zepi")?.get("office")?;
+    for part in key.split('.') {
+        cur = cur.get(part)?;
+    }
+    Some(cur.clone())
 }
 
 fn slide_gap() -> f32 {
-    office_knob_f("slideGap", 14.0) as f32
+    office_knob_f("pageGap", 14.0) as f32
 }
 
 static RASTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1034,7 +1044,7 @@ fn rasterize_slide(pres: Arc<Presentation>, index: usize, key: u32, id_upper: u6
     let _guard = RASTER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scale = key as f64 / 2.0;
-        let max_pixels = office_knob("maxRasterPixels", 6_000_000) as f64;
+        let max_pixels = office_knob("raster.maxPixels", 6_000_000) as f64;
         let area = pres.slide_size.width * pres.slide_size.height * scale * scale;
         if area > max_pixels {
             scale *= (max_pixels / area).sqrt();
@@ -1223,11 +1233,14 @@ impl gpui::Render for SlidesView {
         let (slide_w, slide_h) = self.slide_size_px(cx);
         let zoom = self.zoom as f32;
         let border = cx.theme().colors().border;
-        let selection_bg = cx.theme().players().local().selection;
+        let mut selection_bg = cx.theme().players().local().selection;
+        // Themes may ship an opaque player selection; keep the overlay see-through.
+        selection_bg.a = selection_bg.a.min(0.25);
         let mut region_bubble: Option<gpui::Div> = None;
         let mut tape = ui::v_flex()
             .w(px(slide_w))
-            .mx_auto()
+            // explicit centering: auto margins overflow differently across taffy versions
+            .ml(px(((f32::from(self.scroll.bounds().size.width) - slide_w) / 2.0).max(0.0)))
             .gap(px(slide_gap()))
             .py(px(TAPE_PAD));
         for ix in 0..count {
@@ -1369,12 +1382,12 @@ impl gpui::Render for SlidesView {
                     div()
                         .id("slides-thumb")
                         .absolute()
-                        .right(px(2.))
+                        .right(px(0.))
                         .top(px(top))
-                        .w(px(6.))
+                        .w(px(15.))
                         .h(px(thumb_h))
-                        .rounded_full()
-                        .bg(cx.theme().colors().scrollbar_thumb_background)
+                        .cursor_default()
+                        .bg(office_thumb_color())
                         .when(!reveal, |this| this.visible_on_hover("slides-thumb-zone"))
                         .on_mouse_down(MouseButton::Left, {
                             let view = view.clone();
@@ -1920,7 +1933,8 @@ impl gpui::Render for SlidesView {
                             .right_0()
                             .top_0()
                             .bottom_0()
-                            .w(px(12.))
+                            .w(px(15.))
+                            .cursor_default()
                             .group("slides-thumb-zone")
                             .on_mouse_move({
                                 let view = view.clone();

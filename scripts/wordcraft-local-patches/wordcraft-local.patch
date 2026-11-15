@@ -1,0 +1,407 @@
+diff --git a/native/overlay/vendor/wordcraft/crates/docbin/src/lib.rs b/native/overlay/vendor/wordcraft/crates/docbin/src/lib.rs
+index 6b30149..cce3636 100644
+--- a/native/overlay/vendor/wordcraft/crates/docbin/src/lib.rs
++++ b/native/overlay/vendor/wordcraft/crates/docbin/src/lib.rs
+@@ -267,6 +267,10 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) ->
+         doc.core = core;
+     }
+     doc.body.clear();
++    let table_style_margins = table::style_cell_margins_of(&raw_styles);
++    // Word adds the paragraphs' spaces in the binary format (its default doNotUseHTMLParagraphAutoSpacing
++    // settings for Word 97-2003 files); taking the larger one would drop a heading's space before.
++    doc.settings.sum_paragraph_spacing = true;
+     doc.styles = Arc::new(fmt::stylesheet(&raw_styles, &fonts, standard_fonts));
+     doc.numbering = Arc::new(list::parse(&table, &fib, &fonts));
+     let sheet: StyleSheet = StyleSheet::clone(&doc.styles);
+@@ -416,7 +420,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) ->
+         return Err(paragraph_limit(max_paragraphs));
+     }
+     doc.media.extend(pics.media);
+-    doc.body = table::assemble(paras);
++    doc.body = table::assemble(paras, table_style_margins);
+     doc.ensure_nonempty();
+     work.log();
+     Ok(doc)
+@@ -433,7 +437,7 @@ fn story_blocks(ctx: &WalkCtx<'_>, a: u32, b: u32, pics: &mut media::Pictures, m
+     if ctx.paragraphs.exceeded.get() {
+         return Err(paragraph_limit(max_paragraphs));
+     }
+-    Ok(table::assemble(paras))
++    Ok(table::assemble(paras, table::style_cell_margins_of(ctx.raw_styles)))
+ }
+ 
+ /// A header or footer story's blocks without its guard paragraph mark. [MS-DOC] 2.3.3: a
+@@ -463,7 +467,7 @@ fn header_story_blocks(
+             paras.pop();
+         }
+     }
+-    Ok(table::assemble(paras))
++    Ok(table::assemble(paras, table::style_cell_margins_of(ctx.raw_styles)))
+ }
+ 
+ /// A story's CP range `[a, b)`, relative to a subdocument starting at `base` with `len`
+diff --git a/native/overlay/vendor/wordcraft/crates/docbin/src/stsh.rs b/native/overlay/vendor/wordcraft/crates/docbin/src/stsh.rs
+index 6186ab1..a7542ce 100644
+--- a/native/overlay/vendor/wordcraft/crates/docbin/src/stsh.rs
++++ b/native/overlay/vendor/wordcraft/crates/docbin/src/stsh.rs
+@@ -18,6 +18,8 @@ pub(crate) struct RawStyle {
+     pub(crate) papx: Vec<u8>,
+     /// Character-formatting UPX grpprl (paragraph and character styles).
+     pub(crate) chpx: Vec<u8>,
++    /// Table-formatting UPX grpprl (table styles).
++    pub(crate) tapx: Vec<u8>,
+ }
+ 
+ /// The stylesheet's standard fonts, the ones text takes when neither its style nor its own
+@@ -123,6 +125,7 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
+         // character sprms; character styles: UPX0 is the character grpprl.
+         let mut papx = Vec::new();
+         let mut chpx = Vec::new();
++        let mut tapx = Vec::new();
+         if stk == 1 {
+             if let Some(u) = upxs.first() {
+                 papx = u.get(2..).unwrap_or(&[]).to_vec(); // skip the istd of GrpPrlAndIstd
+@@ -134,8 +137,12 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
+             && let Some(u) = upxs.first()
+         {
+             chpx = u.clone();
++        } else if stk == 3
++            && let Some(u) = upxs.first()
++        {
++            tapx = u.clone();
+         }
+-        out.push(RawStyle { stk, istd_base, name, papx, chpx });
++        out.push(RawStyle { stk, istd_base, name, papx, chpx, tapx });
+     }
+     Ok(out)
+ }
+diff --git a/native/overlay/vendor/wordcraft/crates/docbin/src/table.rs b/native/overlay/vendor/wordcraft/crates/docbin/src/table.rs
+index 400c871..43aa1eb 100644
+--- a/native/overlay/vendor/wordcraft/crates/docbin/src/table.rs
++++ b/native/overlay/vendor/wordcraft/crates/docbin/src/table.rs
+@@ -44,6 +44,8 @@ const T_VERT_ALIGN: u16 = 0xD62C;
+ const T_SET_SHD: u16 = 0xD62D;
+ const T_CANT_SPLIT: u16 = 0x3466;
+ const T_CELL_WIDTH: u16 = 0xD635;
++const T_CELL_PADDING: u16 = 0xD632;
++const T_CELL_PADDING_DEFAULT: u16 = 0xD634;
+ 
+ /// Most grid columns we build from a `sprmTDefTable` (the model's own cap is 63; one more
+ /// edge is fine but merged rows can sum spans slightly over, so clamp when assembling).
+@@ -64,6 +66,10 @@ pub(crate) struct RowInfo {
+     pub(crate) edges: Vec<f32>,
+     height: Option<f32>,
+     height_rule: HeightRule,
++    /// Cell margins (top, left, bottom, right) for the cell this mark ends (`sprmTCellPadding`).
++    pad: Option<[Option<f32>; 4]>,
++    /// Row-wide cell margins (`sprmTCellPaddingDefault`), for cells without their own.
++    pad_default: Option<[Option<f32>; 4]>,
+     header: bool,
+     cant_split: bool,
+     align: Option<Align>,
+@@ -94,6 +100,12 @@ impl RowInfo {
+         self.height
+     }
+ 
++    /// The row-wide cell margins, for tests.
++    #[cfg(test)]
++    pub(crate) fn padding_default(&self) -> Option<[Option<f32>; 4]> {
++        self.pad_default
++    }
++
+     /// The fill cell `i` ends up with (the last shading entry for it wins), for tests.
+     #[cfg(test)]
+     pub(crate) fn shading_of(&self, i: u8) -> Option<Rgb> {
+@@ -129,6 +141,10 @@ fn set<T>(slots: &mut Vec<(u8, T)>, c: u8, v: T) {
+ }
+ 
+ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
++    if std::env::var("WC_DEBUG_PAPX").is_ok() {
++        let ops: Vec<String> = sprm::iter(papx).map(|p| format!("{:04X}:{}", p.op, p.operand.len())).collect();
++        eprintln!("papx len={} ops={}", papx.len(), ops.join(" "));
++    }
+     let mut r = RowInfo::default();
+     let mut gap_half: Option<i16> = None;
+     let mut dxa_left: Option<i16> = None;
+@@ -142,6 +158,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
+             T_DEF_TABLE => r.edges = def_table_edges(prl.operand),
+             T_TABLE_HEADER => r.header = prl.operand.first().copied().unwrap_or(0) != 0,
+             T_CANT_SPLIT | T_CANT_SPLIT_90 => r.cant_split = prl.operand.first().copied().unwrap_or(0) != 0,
++            T_CELL_PADDING => merge_margins(&mut r.pad, cssa_margins(&prl)),
++            T_CELL_PADDING_DEFAULT => merge_margins(&mut r.pad_default, cssa_margins(&prl)),
+             T_ROW_HEIGHT => {
+                 if let Some(v) = s16(&prl) {
+                     if v < 0 {
+@@ -275,7 +293,7 @@ pub(crate) struct ParaOut {
+ /// Group consecutive in-table paragraphs into [`Table`] blocks; the rest pass through.
+ /// Rows that never close (or tables nested deeper than we model) degrade to paragraphs so
+ /// no text is lost.
+-pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
++pub(crate) fn assemble(paras: Vec<ParaOut>, style_margins: Option<[f32; 4]>) -> Blocks {
+     let mut out: Blocks = Vec::new();
+     let mut rows: Vec<Row> = Vec::new();
+     let mut cells: Vec<Cell> = Vec::new();
+@@ -293,6 +311,13 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
+         cells.push(Cell { props: CellProps { span: 1, ..Default::default() }, blocks, controls: Default::default() });
+     }
+     fn build_row(mut cells: Vec<Cell>, info: &RowInfo) -> Row {
++        if let Some(pad) = info.pad_default {
++            for c in cells.iter_mut() {
++                if c.props.margins.is_none() && c.props.partial_margins.is_none() {
++                    c.props.partial_margins = Some(pad);
++                }
++            }
++        }
+         // Per-cell overrides first (sprm cell indices count pre-merge cells), then merges.
+         for (i, c) in cells.iter_mut().enumerate() {
+             let i = i as u8;
+@@ -340,7 +365,16 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
+             controls: Default::default(),
+         }
+     }
+-    fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
++    fn flush_table(
++        out: &mut Blocks,
++        rows: &mut Vec<Row>,
++        cells: &mut Vec<Cell>,
++        cell: &mut Blocks,
++        grid: &[f32],
++        props: &TableProps,
++        nested: bool,
++        style_margins: Option<[f32; 4]>,
++    ) {
+         if !cells.is_empty() || !cell.is_empty() {
+             flush_cell(cells, cell);
+             // A stray trailing row (no TTP of its own): size its cells from the grid.
+@@ -363,8 +397,12 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
+                 }
+             }
+         } else {
++            let mut tprops = props.clone();
++            if tprops.cell_margins.is_none() {
++                tprops.cell_margins = style_margins;
++            }
+             out.push(Arc::new(Block::Table(Table {
+-                props: props.clone(),
++                props: tprops,
+                 grid: grid.to_vec(),
+                 rows: std::mem::take(rows),
+                 controls: Default::default(),
+@@ -376,7 +414,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
+     for p in paras {
+         let Some(info) = p.row else {
+             if open {
+-                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
++                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1, style_margins);
+                 grid.clear();
+                 // Table props are per-table (first row carrying the sprm wins within the
+                 // table): reset the accumulator so one table's borders, align, indent and
+@@ -426,6 +464,11 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
+             }
+             if !row_end_only {
+                 flush_cell(&mut cells, &mut cell);
++                if let Some(pad) = info.pad {
++                    if let Some(last) = cells.last_mut().filter(|c| c.props.margins.is_none() && c.props.partial_margins.is_none()) {
++                        last.props.partial_margins = Some(pad);
++                    }
++                }
+             }
+             if info.ttp {
+                 let row = build_row(std::mem::take(&mut cells), &info);
+@@ -436,7 +479,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
+         }
+     }
+     if open {
+-        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
++        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1, style_margins);
+     }
+     out
+ }
+@@ -444,6 +487,64 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
+ /// Cell-edge positions (points) from a `sprmTDefTable` operand: cb u16, itcMac u8, then
+ /// itcMac+1 twip boundaries followed by the TC80s (skipped). Edges are returned as stored:
+ /// per-row, in operand order; sorting and capping happen when the table grid is assembled.
++/// Sides of `add` win over what earlier sprms of the same mark set.
++fn merge_margins(into: &mut Option<[Option<f32>; 4]>, add: Option<[Option<f32>; 4]>) {
++    let Some(add) = add else { return };
++    let slot = into.get_or_insert([None; 4]);
++    for i in 0..4 {
++        if add[i].is_some() {
++            slot[i] = add[i];
++        }
++    }
++}
++
++/// Cell margins from a `sprmTCellPadding`/`Default` CSSA operand: itc pair, side bits, unit and
++/// width in twips. Sides absent from `grfbrc` stay `None` to inherit the table's defaults.
++fn cssa_margins(prl: &Prl) -> Option<[Option<f32>; 4]> {
++    // spra 6 leaves the operand's size byte in front of the CSSA.
++    let o = match prl.operand.split_first() {
++        Some((cb, rest)) if usize::from(*cb) + 1 == prl.operand.len() => rest,
++        _ => prl.operand,
++    };
++    // The spec's CSSA carries a two-byte itc pair; writers also emit a packed one-byte itc,
++    // so the unit byte sits at 3 or at 2.
++    let is_width = |f: &u8| *f == 0x03 || *f == 0x13;
++    let (grfbrc, w) = if o.get(3).is_some_and(is_width) {
++        (*o.get(2)?, i16::from_le_bytes([*o.get(4)?, *o.get(5)?]))
++    } else if o.get(2).is_some_and(is_width) {
++        (*o.get(1)?, i16::from_le_bytes([*o.get(3)?, *o.get(4)?]))
++    } else {
++        return None;
++    };
++    let v = (w.max(0) as f32) / 20.0;
++    let mut m = [None; 4];
++    for (bit, slot) in [(0x01, 0), (0x02, 1), (0x04, 2), (0x08, 3)] {
++        if grfbrc & bit != 0 {
++            m[slot] = Some(v);
++        }
++    }
++    m.iter().any(Option::is_some).then_some(m)
++}
++
++/// Cell margins a table-style grpprl (TAPX) sets on all four sides, for tables whose own rows
++/// carry no `sprmTCellPaddingDefault`.
++pub(crate) fn style_cell_margins(grpprl: &[u8]) -> Option<[f32; 4]> {
++    let mut m = None;
++    for prl in sprm::iter(grpprl) {
++        if prl.op == T_CELL_PADDING_DEFAULT || prl.op == T_CELL_PADDING {
++            merge_margins(&mut m, cssa_margins(&prl));
++        }
++    }
++    // A partial set would silently zero the other sides against Word's defaults.
++    let m = m?;
++    m.iter().all(Option::is_some).then(|| m.map(|v| v.unwrap_or(0.0)))
++}
++
++/// The margins of the stylesheet's first table style (the default table style), if it sets any.
++pub(crate) fn style_cell_margins_of(raw: &[crate::stsh::RawStyle]) -> Option<[f32; 4]> {
++    raw.iter().find(|s| s.stk == 3).and_then(|s| style_cell_margins(&s.tapx))
++}
++
+ fn def_table_edges(operand: &[u8]) -> Vec<f32> {
+     let itc = operand.get(2).copied().unwrap_or(0) as usize;
+     if itc == 0 {
+diff --git a/native/overlay/vendor/wordcraft/crates/docbin/src/tests.rs b/native/overlay/vendor/wordcraft/crates/docbin/src/tests.rs
+index 8638014..0108fb7 100644
+--- a/native/overlay/vendor/wordcraft/crates/docbin/src/tests.rs
++++ b/native/overlay/vendor/wordcraft/crates/docbin/src/tests.rs
+@@ -2066,6 +2066,33 @@ fn rejected_inline_pictures_are_not_read_again() {
+     assert_eq!(pics.media.len(), 2);
+ }
+ 
++#[test]
++fn cell_padding_sprms_set_the_side_margins_in_both_itc_forms() {
++    // sprmTCellPaddingDefault (spra 6, so the operand opens with its size byte): the spec's
++    // two-byte itc pair, then the packed one-byte form LibreOffice writes. 55 twips = 2.75 pt on
++    // the top and left sides.
++    let spec = grpprl(&[(0xD634, &[0x06, 0x00, 0x01, 0x03, 0x03, 0x37, 0x00])]);
++    let packed = grpprl(&[(0xD634, &[0x05, 0x01, 0x03, 0x03, 0x37, 0x00])]);
++    for papx in [spec, packed] {
++        let row = crate::table::decode(&papx);
++        assert_eq!(row.padding_default(), Some([Some(2.75), Some(2.75), None, None]), "{papx:02x?}");
++    }
++}
++
++#[test]
++fn table_style_cell_margins_need_all_four_sides() {
++    // Four single-side records make the full set; one alone stays partial and is ignored.
++    let full = grpprl(&[
++        (0xD634, &[0x06, 0x00, 0x01, 0x01, 0x03, 0x37, 0x00]),
++        (0xD634, &[0x06, 0x00, 0x01, 0x02, 0x03, 0x37, 0x00]),
++        (0xD634, &[0x06, 0x00, 0x01, 0x04, 0x03, 0x37, 0x00]),
++        (0xD634, &[0x06, 0x00, 0x01, 0x08, 0x03, 0x37, 0x00]),
++    ]);
++    assert_eq!(crate::table::style_cell_margins(&full), Some([2.75; 4]));
++    let one = grpprl(&[(0xD634, &[0x06, 0x00, 0x01, 0x01, 0x03, 0x37, 0x00])]);
++    assert_eq!(crate::table::style_cell_margins(&one), None);
++}
++
+ #[test]
+ fn row_height_of_i16_min_does_not_overflow() {
+     // sprmTDyaRowHeight = -32768: negating the i16 overflowed (a debug-build panic).
+diff --git a/native/overlay/vendor/wordcraft/crates/fonts/src/fontdb/names.rs b/native/overlay/vendor/wordcraft/crates/fonts/src/fontdb/names.rs
+index 4d94585..882a21c 100644
+--- a/native/overlay/vendor/wordcraft/crates/fonts/src/fontdb/names.rs
++++ b/native/overlay/vendor/wordcraft/crates/fonts/src/fontdb/names.rs
+@@ -232,7 +232,11 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
+         let root = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+         dirs.push(root.join("Fonts"));
+         if let Some(l) = std::env::var_os("LOCALAPPDATA") {
+-            dirs.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
++            let local = std::path::PathBuf::from(l);
++            dirs.push(local.join("Microsoft\\Windows\\Fonts"));
++            // Office's cloud fonts (Aptos, Open Sans, Lato…): Word uses them for the families it
++            // knows, so a document naming one must not fall back to a substitute here.
++            dirs.push(local.join("Microsoft\\FontCache\\4\\CloudFonts"));
+         }
+     } else {
+         dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts"].map(Into::into));
+diff --git a/native/overlay/vendor/wordcraft/crates/fonts/src/word.rs b/native/overlay/vendor/wordcraft/crates/fonts/src/word.rs
+index 4860faf..8db3c71 100644
+--- a/native/overlay/vendor/wordcraft/crates/fonts/src/word.rs
++++ b/native/overlay/vendor/wordcraft/crates/fonts/src/word.rs
+@@ -445,10 +445,28 @@ fn is_hebrew(f: &str) -> bool {
+     NAMES.contains(&f) || f.contains("hebrew")
+ }
+ 
++/// Families Word itself replaces with a specific face, measured from Word's PDF exports: it never
++/// walks a `;` list, and its own pick for these names is not the generic substitute list's
++/// (Open Sans paginates as Segoe UI in Word, not as the list's Arial).
++const WORD_SUBSTITUTES: &[(&str, &[&str])] = &[("open sans", &["Segoe UI", "Selawik"])];
++
++/// The installed face Word would use for `family` ([`WORD_SUBSTITUTES`]), if any is installed.
++fn word_substitute(db: &FontDb, family: &str) -> Option<&'static str> {
++    let f = family.trim().to_ascii_lowercase();
++    WORD_SUBSTITUTES
++        .iter()
++        .find(|(name, _)| *name == f)
++        .and_then(|&(_, subs)| subs.iter().copied().find(|s| db.has_family(s)))
++}
++
+ /// The first installed substitute for a missing `family`. For a Thai font, the first with Latin
+ /// letters and digits as well as Thai ones (a Thai face without Latin would leave a mixed run in
+ /// two fonts, #1549), else the first with Thai letters, else the first installed.
+ fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
++    // Word's own pick for the name beats twins and the generic lists.
++    if let Some(sub) = word_substitute(db, family) {
++        return Some(sub);
++    }
+     // A twin draws the text as the font would: Carlito for Calibri, Helvetica for Arial on a Mac.
+     if let Some(twin) = metric_twins(family).find(|t| db.has_family(t)) {
+         return Some(twin);
+@@ -601,6 +619,15 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
+     }
+ 
+     let mut direct_probes = MAX_DIRECT_CANDIDATE_PROBES;
++    // Word never reads past the first name of a list: it does not know the list, so the name goes
++    // through its own substitution even when the family is installed (Open Sans;Arial -> Segoe UI,
++    // while a bare Open Sans keeps the cloud font). Only a list with no such pick walks on.
++    if let Some(&first) = candidates.first() {
++        let base = charset_base_family(first);
++        if let Some(sub) = word_substitute(db, base) {
++            return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
++        }
++    }
+ 
+     // 1. First installed family in the list:
+     for &cand in &candidates {
+@@ -781,6 +808,18 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn word_own_substitutes_are_consulted_by_name() {
++        // The table holds only families whose Word pick was measured; generic names stay out.
++        assert_eq!(WORD_SUBSTITUTES.iter().find(|(n, _)| *n == "open sans").map(|&(_, s)| s), Some(&["Segoe UI", "Selawik"][..]));
++        assert!(!WORD_SUBSTITUTES.iter().any(|(n, _)| *n == "arial" || *n == "roboto" || *n == "noto sans"));
++        // Without any of its faces installed the table defers to the usual substitution.
++        let db = FontDb::with_font_dirs(Vec::new());
++        if word_substitute(&db, "Open Sans").is_some() {
++            assert!(db.has_family("Segoe UI") || db.has_family("Selawik"));
++        }
++    }
++
+     #[test]
+     fn family_cache_stays_bounded() {
+         for i in 0..(FAMILY_CACHE_MAX + 50) {

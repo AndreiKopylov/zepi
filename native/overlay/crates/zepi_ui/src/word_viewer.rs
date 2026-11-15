@@ -12,9 +12,9 @@ use crate::slides_viewer::{
     office_knob_f, scan_char_matches, ClearSelection, CopyRegionImage, PageNext, PagePrev, CopySelection, SearchNext, SearchPrev,
     SendRegionImage, SendSlideText, ToggleSearch,
 };
-use crate::slides_viewer::office_knob;
+use crate::slides_viewer::{office_knob, office_thumb_color};
 use wordcraft_doc::Document;
-use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Placed};
+use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Placed, ViewMode};
 use wordcraft_render::{RenderOptions, render_page};
 use editor::{Editor, EditorEvent};
 use gpui::prelude::*;
@@ -37,7 +37,7 @@ use workspace::{Pane, Workspace, register_project_item, register_serializable_it
 
 const BASE_SUPERSAMPLE: f64 = 2.0;
 fn slide_gap() -> f32 {
-    office_knob_f("slideGap", 14.0) as f32
+    office_knob_f("pageGap", 14.0) as f32
 }
 const TAPE_PAD: f32 = 24.0;
 const CACHE_CAP: usize = 12;
@@ -45,6 +45,7 @@ const ZOOM_MIN: f64 = 0.25;
 const ZOOM_MAX: f64 = 4.0;
 
 pub fn init(cx: &mut App) {
+    wordcraft_fonts::FontDb::global().load_system_fonts();
     register_project_item::<WordView>(cx);
     register_serializable_item::<WordView>(cx);
     cx.bind_keys([
@@ -61,8 +62,8 @@ fn raster_for(zoom: f64) -> f64 {
     (((zoom * BASE_SUPERSAMPLE) * 2.0).round() / 2.0).clamp(0.5, 4.0)
 }
 
-fn raster_key(zoom: f64) -> u32 {
-    (raster_for(zoom) * 2.0) as u32
+fn raster_key(zoom: f64, scale: f32) -> u32 {
+    (raster_for(zoom) * scale.max(1.0) as f64 * 2.0).round() as u32
 }
 
 #[derive(Clone)]
@@ -194,7 +195,7 @@ impl project::ProjectItem for WordItem {
                     .absolute_path(path, cx)
                     .and_then(|abs| abs.extension().map(|ext| ext.to_string_lossy().to_ascii_lowercase()))
             })?;
-        if ext != "docx" {
+        if ext != "docx" && ext != "doc" {
             return None;
         }
         let abs_path = project.read(cx).absolute_path(path, cx)?;
@@ -314,6 +315,7 @@ pub struct WordView {
     image_tag: u32,
     // mtime+size of the bytes currently shown; the poll compares against it
     loaded_stamp: Option<(u64, u64)>,
+    scale: f32,
 }
 
 fn arm_timer(
@@ -390,6 +392,7 @@ impl WordView {
             raster_gen: 0,
             image_tag: next_image_tag(),
             loaded_stamp,
+            scale: 1.0,
         };
         this.ensure(0, cx);
         // Worktree events can be missed when a writer replaces the file (Office and
@@ -512,18 +515,44 @@ impl WordView {
         self.item.read(cx).layout.as_ref().map_or(0, |layout| layout.pages.len())
     }
 
-    fn slide_size_px(&self, cx: &App) -> (f32, f32) {
+    // Sections may be landscape, so every page keeps its own size on the tape.
+    fn page_size_px(&self, ix: usize, cx: &App) -> (f32, f32) {
+        let item = self.item.read(cx);
+        let Some(page) = item.layout.as_ref().and_then(|layout| layout.pages.get(ix)) else {
+            return (0.0, 0.0);
+        };
+        (page.w * self.zoom as f32, page.h * self.zoom as f32)
+    }
+
+    fn tape_width_px(&self, cx: &App) -> f32 {
+        let item = self.item.read(cx);
+        let zoom = self.zoom as f32;
+        item.layout
+            .as_ref()
+            .map_or(0.0, |layout| layout.pages.iter().map(|page| page.w).fold(0.0, f32::max) * zoom)
+    }
+
+    // Tape top of page ix: page heights differ per section, so the offsets accumulate.
+    fn page_top(&self, ix: usize, cx: &App) -> f32 {
         let item = self.item.read(cx);
         let Some(layout) = item.layout.as_ref() else {
-            return (0.0, 0.0);
+            return TAPE_PAD;
         };
-        let Some(page) = layout.pages.first() else {
-            return (0.0, 0.0);
-        };
-        (
-            page.w * self.zoom as f32,
-            page.h * self.zoom as f32,
-        )
+        let zoom = self.zoom as f32;
+        layout
+            .pages
+            .iter()
+            .take(ix)
+            .fold(TAPE_PAD, |top, page| top + page.h * zoom + slide_gap())
+    }
+
+    fn index_at(&self, y: f32, cx: &App) -> usize {
+        let count = self.slide_count(cx);
+        let mut ix = 0;
+        while ix + 1 < count && y >= self.page_top(ix + 1, cx) {
+            ix += 1;
+        }
+        ix
     }
 
     fn blocks_for(&mut self, ix: usize, cx: &App) -> Arc<Vec<TextBlock>> {
@@ -540,11 +569,13 @@ impl WordView {
     }
 
     fn slide_origin(&self, ix: usize, cx: &App) -> Point<Pixels> {
-        let (slide_w, slide_h) = self.slide_size_px(cx);
+        let (slide_w, _) = self.page_size_px(ix, cx);
         let bounds = self.scroll.bounds();
         let offset = self.scroll.offset();
-        let content_x = ((f32::from(bounds.size.width) - slide_w) / 2.0).max(0.0);
-        let content_y = TAPE_PAD + ix as f32 * (slide_h + slide_gap());
+        let tape_w = self.tape_width_px(cx);
+        let content_x =
+            ((f32::from(bounds.size.width) - tape_w) / 2.0).max(0.0) + (tape_w - slide_w) / 2.0;
+        let content_y = self.page_top(ix, cx);
         gpui::point(
             bounds.origin.x + px(content_x) + offset.x,
             bounds.origin.y + px(content_y) + offset.y,
@@ -571,7 +602,7 @@ impl WordView {
     }
 
     fn region_image(&self, region: Region, _cx: &App) -> Option<gpui::Image> {
-        let key = raster_key(self.zoom);
+        let key = raster_key(self.zoom, self.scale);
         let raster = raster_for(self.zoom);
         let image = self.cache.get(&(region.slide, key))?;
         let decoded = image::load_from_memory(&image.bytes).ok()?;
@@ -673,13 +704,7 @@ impl WordView {
         if count == 0 {
             return 0;
         }
-        let (_, h) = self.slide_size_px(cx);
-        let step = h + slide_gap();
-        if step <= 0.0 {
-            return 0;
-        }
-        let pos = -f32::from(self.scroll.offset().y) - TAPE_PAD;
-        ((pos / step).round() as isize).clamp(0, count as isize - 1) as usize
+        self.index_at(-f32::from(self.scroll.offset().y), cx)
     }
 
     fn create_page_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Editor> {
@@ -706,8 +731,7 @@ impl WordView {
         editor
     }
     fn scroll_to_slide(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let (_, slide_h) = self.slide_size_px(cx);
-        let top = TAPE_PAD + ix as f32 * (slide_h + slide_gap());
+        let top = self.page_top(ix, cx);
         self.scroll.set_offset(gpui::point(px(0.), -px(top)));
         self.ensure(ix, cx);
         cx.notify();
@@ -919,16 +943,13 @@ impl WordView {
     }
 
     fn center_slide(&self, cx: &App) -> usize {
-        let (_, slide_h) = self.slide_size_px(cx);
-        let step = slide_h + slide_gap();
         let viewport = self.scroll.bounds().size.height;
         let y = -f32::from(self.scroll.offset().y) + f32::from(viewport) / 2.0;
-        let ix = (y / step).floor() as isize;
-        ix.clamp(0, self.slide_count(cx) as isize - 1) as usize
+        self.index_at(y, cx)
     }
 
     fn ensure(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let key = raster_key(self.zoom);
+        let key = raster_key(self.zoom, self.scale);
         let slot = (ix, key);
         if self.cache.contains_key(&slot) || self.pending.contains(&slot) {
             return;
@@ -963,7 +984,7 @@ impl WordView {
                     if let Ok(image) = rendered {
                         this.cache.insert(slot, Arc::new(image));
                         this.order.push(slot);
-                        let cap = office_knob("rasterCacheCap", CACHE_CAP as u64) as usize;
+                        let cap = office_knob("raster.cacheCap", CACHE_CAP as u64) as usize;
                         while this.order.len() > cap {
                             let oldest = this.order.remove(0);
                             this.cache.remove(&oldest);
@@ -981,16 +1002,15 @@ impl WordView {
         if count == 0 {
             return;
         }
-        let (_, slide_h) = self.slide_size_px(cx);
-        let step = slide_h + slide_gap();
         let viewport = self.scroll.bounds().size.height;
-        let offset = -self.scroll.offset().y;
-        let first = (f32::from(offset) / step).floor() as isize - 1;
-        let visible = (f32::from(viewport) / step).ceil() as isize + 2;
-        for ix in first..first + visible {
-            if ix >= 0 && (ix as usize) < count {
-                self.ensure(ix as usize, cx);
+        let offset = f32::from(-self.scroll.offset().y);
+        let first = self.index_at(offset, cx).saturating_sub(1);
+        let bottom = offset + f32::from(viewport) + slide_gap();
+        for ix in first..count {
+            if self.page_top(ix, cx) > bottom {
+                break;
             }
+            self.ensure(ix, cx);
         }
     }
 }
@@ -1005,7 +1025,13 @@ fn next_image_tag() -> u32 {
 }
 
 fn import_doc(bytes: &[u8]) -> Result<(Arc<Document>, Arc<DocLayout>)> {
-    let doc = wordcraft_docx::read_with_password(bytes, None).map_err(|error| anyhow::anyhow!("docx import: {error:?}"))?;
+    let doc = if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        wordcraft_docbin::read_with_password(bytes, None).map_err(|error| anyhow::anyhow!("doc import: {error:?}"))?
+    } else if crate::html_doc::looks_like_html(bytes) {
+        crate::html_doc::read(bytes)?
+    } else {
+        wordcraft_docx::read_with_password(bytes, None).map_err(|error| anyhow::anyhow!("docx import: {error:?}"))?
+    };
     let mut cache = LayoutCache::new();
     let layout = wordcraft_layout::layout(&doc, &mut cache, &LayoutOptions::default());
     Ok((Arc::new(doc), Arc::new(layout)))
@@ -1022,11 +1048,12 @@ fn rasterize_page(
     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let page = &layout.pages[index];
         let mut scale = key as f64 / 2.0;
-        let max_pixels = office_knob("maxRasterPixels", 6_000_000) as f64;
+        let max_pixels = office_knob("raster.maxPixels", 16_000_000) as f64;
         let area = page.w as f64 * page.h as f64 * scale * scale;
         if area > max_pixels {
             scale *= (max_pixels / area).sqrt();
         }
+        scale = scale.min(16000.0 / page.h as f64).min(16000.0 / page.w as f64);
         render_page(&doc, page, scale as f32, &RenderOptions::default())
     }))
     .map_err(|_| anyhow::anyhow!("wordcraft panicked on page {}", index + 1))?;
@@ -1161,6 +1188,7 @@ impl workspace::item::SerializableItem for WordView {
 
 impl gpui::Render for WordView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.scale = window.scale_factor();
         if let Some(error) = self.item.read(cx).import_error.clone() {
             return div()
                 .size_full()
@@ -1204,26 +1232,31 @@ impl gpui::Render for WordView {
             });
         }
         let count = self.slide_count(cx);
-        let (slide_w, slide_h) = self.slide_size_px(cx);
+        let tape_w = self.tape_width_px(cx);
         let zoom = self.zoom as f32;
         let border = cx.theme().colors().border;
-        let selection_bg = cx.theme().players().local().selection;
+        let mut selection_bg = cx.theme().players().local().selection;
+        // Themes may ship an opaque player selection; keep the overlay see-through.
+        selection_bg.a = selection_bg.a.min(0.25);
         let mut region_bubble: Option<gpui::Div> = None;
         let mut tape = ui::v_flex()
-            .w(px(slide_w))
-            .mx_auto()
+            .w(px(tape_w))
+            // explicit centering: auto margins overflow differently across taffy versions
+            .ml(px(((f32::from(self.scroll.bounds().size.width) - tape_w) / 2.0).max(0.0)))
             .gap(px(slide_gap()))
             .py(px(TAPE_PAD));
         for ix in 0..count {
-            let slot = (ix, raster_key(self.zoom));
+            let slot = (ix, raster_key(self.zoom, self.scale));
             let image = self
                 .cache
                 .get(&slot)
                 .or_else(|| self.stale.get(&slot))
                 .cloned();
+            let (slide_w, slide_h) = self.page_size_px(ix, cx);
             let mut slide = div()
                 .w(px(slide_w))
                 .h(px(slide_h))
+                .ml(px((tape_w - slide_w) / 2.0))
                 .flex_none()
                 .relative()
                 .shadow_lg()
@@ -1353,12 +1386,11 @@ impl gpui::Render for WordView {
                     div()
                         .id("slides-thumb")
                         .absolute()
-                        .right(px(2.))
+                        .right(px(0.))
                         .top(px(top))
-                        .w(px(6.))
+                        .w(px(15.))
                         .h(px(thumb_h))
-                        .rounded_full()
-                        .bg(cx.theme().colors().scrollbar_thumb_background)
+                        .bg(office_thumb_color())
                         .when(!reveal, |this| this.visible_on_hover("slides-thumb-zone"))
                         .on_mouse_down(MouseButton::Left, {
                             let view = view.clone();
