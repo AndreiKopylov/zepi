@@ -6,6 +6,8 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.1-beta6] - 2026-11-15
+
 ### Added
 
 - Excel search like Word/PowerPoint: match counter, prev/next, F3/Shift+F3/Enter/Esc, and a
