@@ -297,19 +297,17 @@ impl AgentServer for CustomAgentServer {
                     agent_id.as_ref() == "zepi-pi",
                     "Zepi only supports bundled pi"
                 );
-                let node = std::env::var_os("ZEPI_NODE")
-                    .or_else(|| {
-                        std::env::var_os("PATH").and_then(|paths| {
-                            std::env::split_paths(&paths).find_map(|dir| {
-                                ["node.exe", "node"]
-                                    .iter()
-                                    .map(|name| dir.join(name))
-                                    .find(|candidate| candidate.is_file())
-                                    .map(|candidate| candidate.into_os_string())
-                            })
+                let node = std::env::var_os("ZEPI_NODE").or_else(|| {
+                    std::env::var_os("PATH").and_then(|paths| {
+                        std::env::split_paths(&paths).find_map(|dir| {
+                            ["node.exe", "node"]
+                                .iter()
+                                .map(|name| dir.join(name))
+                                .find(|candidate| candidate.is_file())
+                                .map(|candidate| candidate.into_os_string())
                         })
                     })
-                    .context("Missing Zepi Node runtime")?;
+                });
                 extra_env.insert("ZEPI_ROOT".into(), root.to_string_lossy().into_owned());
                 // Bundled python leads PATH so `python` in agent commands never hits a system
                 // install or the Windows Store stub; ZEPI_PYTHON is the explicit form.
@@ -323,27 +321,44 @@ impl AgentServer for CustomAgentServer {
                     "PI_CODING_AGENT_DIR".into(),
                     std::env::var_os("ZEPI_PI_CONFIG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join(".local/zepi")).to_string_lossy().into_owned(),
                 );
-                project::agent_server_store::AgentServerCommand {
-                    path: node.into(),
-                    args: if root.join("packages/acp/src/cli.js").is_file() {
-                        vec![root.join("packages/acp/src/cli.js").to_string_lossy().into_owned()]
-                    } else {
-                        let loader = root.join("node_modules/tsx/dist/loader.mjs");
-                        // node parses --import as a URL; a bare Windows path arrives as scheme "d:"
-                        let loader = if cfg!(windows) {
-                            format!("file:///{}", loader.to_string_lossy().replace(std::path::MAIN_SEPARATOR_STR, "/"))
-                        } else {
-                            loader.to_string_lossy().into_owned()
-                        };
-                        vec![
-                            "--import".into(),
-                            loader,
-                            root.join("packages/acp/src/cli.ts")
-                                .to_string_lossy()
-                                .into_owned(),
-                        ]
+                let agent_exe = std::env::var_os("ZEPI_AGENT")
+                    .map(std::path::PathBuf::from)
+                    .filter(|p| p.is_file())
+                    .or_else(|| {
+                        let beside = root.join("agent.exe");
+                        beside.is_file().then_some(beside)
+                    });
+                match agent_exe {
+                    Some(agent) => project::agent_server_store::AgentServerCommand {
+                        path: agent.into(),
+                        args: vec![],
+                        env: Some(extra_env),
                     },
-                    env: Some(extra_env),
+                    None => {
+                        let node = node.context("Missing Zepi Node runtime")?;
+                        project::agent_server_store::AgentServerCommand {
+                            path: node.into(),
+                            args: if root.join("packages/acp/src/cli.js").is_file() {
+                                vec![root.join("packages/acp/src/cli.js").to_string_lossy().into_owned()]
+                            } else {
+                                let loader = root.join("node_modules/tsx/dist/loader.mjs");
+                                // node parses --import as a URL; a bare Windows path arrives as scheme "d:"
+                                let loader = if cfg!(windows) {
+                                    format!("file:///{}", loader.to_string_lossy().replace(std::path::MAIN_SEPARATOR_STR, "/"))
+                                } else {
+                                    loader.to_string_lossy().into_owned()
+                                };
+                                vec![
+                                    "--import".into(),
+                                    loader,
+                                    root.join("packages/acp/src/cli.ts")
+                                        .to_string_lossy()
+                                        .into_owned(),
+                                ]
+                            },
+                            env: Some(extra_env),
+                        }
+                    }
                 }
             } else {
                 store

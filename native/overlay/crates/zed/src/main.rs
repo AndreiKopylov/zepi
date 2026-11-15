@@ -86,6 +86,30 @@ use crate::zed::{CrashHandler, OpenRequestKind, eager_load_active_theme_and_icon
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+#[cfg(windows)]
+fn visible_window_count() -> usize {
+    type HWND = isize;
+    type BOOL = i32;
+    type LPARAM = isize;
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn EnumWindows(cb: unsafe extern "system" fn(HWND, LPARAM) -> BOOL, l: LPARAM) -> BOOL;
+        fn IsWindowVisible(h: HWND) -> BOOL;
+        fn GetWindowThreadProcessId(h: HWND, pid: *mut u32) -> u32;
+    }
+    unsafe extern "system" fn cb(hwnd: HWND, l: LPARAM) -> BOOL {
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == std::process::id() && IsWindowVisible(hwnd) != 0 {
+            *(l as *mut usize) += 1;
+        }
+        1
+    }
+    let mut count = 0usize;
+    unsafe { EnumWindows(cb, &mut count as *mut usize as isize); }
+    count
+}
+
 fn build_application() -> Application {
     let platform = gpui_platform::current_platform(false);
     if std::env::var("ZED_EXPERIMENTAL_A11Y").as_deref() == Ok("1") {
@@ -519,6 +543,20 @@ fn main() {
 
         release_channel::init(app_version, cx);
         gpui_tokio::init(cx);
+        // OS-thread watchdog (survives gpui teardown): once the last visible window is
+        // gone, force exit so no windowless process holds the single-instance mutex.
+        #[cfg(windows)]
+        std::thread::spawn(|| {
+            let mut seen_window = false;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if visible_window_count() > 0 { seen_window = true; }
+                else if seen_window {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    std::process::exit(0);
+                }
+            }
+        });
         if let Some(app_commit_sha) = app_commit_sha {
             AppCommitSha::set_global(app_commit_sha, cx);
         }
@@ -594,13 +632,19 @@ fn main() {
 
         // Package changes queued while an agent runtime was open are applied before the first
         // agent connects, so picking them up needs no restart.
-        if let (Some(root), Some(node)) = (std::env::var_os("ZEPI_ROOT"), std::env::var_os("ZEPI_NODE")) {
-            let script = std::path::PathBuf::from(root).join("packages/runtime/bin/pi-extensions.mjs");
-            if script.is_file() {
+        if let Some(root) = std::env::var_os("ZEPI_ROOT") {
+            let root = std::path::PathBuf::from(root);
+            let node = std::env::var_os("ZEPI_NODE");
+            let agent = std::env::var_os("ZEPI_AGENT").map(std::path::PathBuf::from).filter(|p| p.is_file())
+                .or_else(|| { let b = root.join("agent.exe"); b.is_file().then_some(b) });
+            let script = root.join("packages/runtime/bin/pi-extensions.mjs");
+            if agent.is_some() || (node.is_some() && script.is_file()) {
                 cx.background_spawn(async move {
                     use std::io::Write as _;
-                    let spawned = util::command::new_std_command(node)
-                        .arg(script)
+                    let spawned = match agent {
+                        Some(a) => { let mut c = util::command::new_std_command(a); c.arg("pi-extensions"); c }
+                        None => { let mut c = util::command::new_std_command(node.unwrap()); c.arg(script); c }
+                    }
                         .stdin(std::process::Stdio::piped())
                         .stdout(std::process::Stdio::piped())
                         .stderr(std::process::Stdio::piped())

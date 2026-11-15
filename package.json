@@ -16,7 +16,8 @@
     "test": "npm run test:acp && npm run test:runtime && python3 scripts/test/test_native_prepare.py",
     "test:runtime": "npm --prefix packages/runtime test",
     "setup:acp": "node scripts/setup/acp.mjs",
-    "test:acp": "tsx --test packages/acp/test/acp.test.ts packages/acp/test/acp-startup.test.ts packages/acp/test/pi-commands.test.ts packages/acp/test/pi-component-terminal.test.ts packages/acp/test/subagents.test.ts packages/acp/test/agent-roles.test.ts packages/acp/test/editor-query.test.ts packages/acp/test/editor-files.test.ts packages/acp/test/mcp.test.ts packages/acp/test/mcp-structured-result.test.ts packages/acp/test/prompt-content.test.ts packages/acp/test/default-tools.test.ts packages/acp/test/runtime-settings.test.ts packages/acp/test/pi-network.test.ts packages/acp/test/session-owner.test.ts packages/acp/test/turn-state.test.ts packages/acp/test/codemode.test.ts",
+    "test:acp": "bun test packages/acp/test/acp.test.ts packages/acp/test/acp-startup.test.ts packages/acp/test/pi-commands.test.ts packages/acp/test/pi-component-terminal.test.ts packages/acp/test/subagents.test.ts packages/acp/test/agent-roles.test.ts packages/acp/test/editor-query.test.ts packages/acp/test/editor-files.test.ts packages/acp/test/mcp.test.ts packages/acp/test/mcp-structured-result.test.ts packages/acp/test/prompt-content.test.ts packages/acp/test/default-tools.test.ts packages/acp/test/runtime-settings.test.ts packages/acp/test/pi-network.test.ts packages/acp/test/session-owner.test.ts packages/acp/test/turn-state.test.ts packages/acp/test/codemode.test.ts",
+    "test:acp:node": "tsx --test packages/acp/test/acp.test.ts packages/acp/test/acp-startup.test.ts packages/acp/test/pi-commands.test.ts packages/acp/test/pi-component-terminal.test.ts packages/acp/test/subagents.test.ts packages/acp/test/agent-roles.test.ts packages/acp/test/editor-query.test.ts packages/acp/test/editor-files.test.ts packages/acp/test/mcp.test.ts packages/acp/test/mcp-structured-result.test.ts packages/acp/test/prompt-content.test.ts packages/acp/test/default-tools.test.ts packages/acp/test/runtime-settings.test.ts packages/acp/test/pi-network.test.ts packages/acp/test/session-owner.test.ts packages/acp/test/turn-state.test.ts packages/acp/test/codemode.test.ts",
     "setup:browser": "node scripts/setup/browser.mjs",
     "native:prepare": "python3 scripts/native.py prepare",
     "native:check": "python3 scripts/native.py check",
@@ -25,16 +26,18 @@
     "native:fetch": "python3 scripts/native.py fetch",
     "sync:pi": "node scripts/config/sync-pi.mjs",
     "test:acp-native": "python3 scripts/native.py test-acp",
-    "test:pi-settings": "node --test packages/runtime/test/pi/settings.test.mjs",
-    "test:extensions": "node --test packages/runtime/test/pi/extensions.test.mjs",
+    "test:pi-settings": "bun test packages/runtime/test/pi/settings.test.mjs",
+    "test:extensions": "bun test packages/runtime/test/pi/extensions.test.mjs",
     "probe": "tsx scripts/tools.ts probe",
     "smoke": "node scripts/smoke.mjs",
     "test:native": "python3 scripts/native.py test-native",
     "test:browser": "tsx --test packages/acp/test/browser.test.ts packages/acp/test/browser-handoff.test.ts packages/acp/test/browser-ultrafast.test.ts",
-    "test:preview": "tsx --test packages/acp/test/preview.test.ts packages/acp/test/preview-dependencies.test.ts",
-    "test:ecosystem": "tsx --test packages/acp/test/ecosystem.test.ts",
+    "test:preview": "bun test packages/acp/test/preview.test.ts packages/acp/test/preview-dependencies.test.ts",
+    "test:ecosystem": "bun test packages/acp/test/ecosystem.test.ts",
     "package:app": "python3 scripts/package-app.py",
-    "test:runtime-install": "node --test packages/runtime/test/lifecycle.test.mjs"
+    "test:runtime-install": "node --test packages/runtime/test/lifecycle.test.mjs",
+    "test:lifecycle": "bun test packages/runtime/test/zepi-lifecycle.test.mjs",
+    "test:codemode": "bun test packages/runtime/test/codemode-worker.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2"

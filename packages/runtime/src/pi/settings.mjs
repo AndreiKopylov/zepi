@@ -1,8 +1,8 @@
-import {piDirectory, runtimeRoot as root, bundledPiEntry} from '../paths.mjs';
+import {piDirectory, runtimeRoot as root} from '../paths.mjs';
+import {ModelRuntime, SettingsManager, readStoredCredential, FileSettingsStorage, AuthStorage, ReadOnlyAuthStorage, ModelConfig, getSupportedThinkingLevels, piManifest} from './embed.mjs';
 import { readFile, writeFile, mkdir, chmod, rename, mkdtemp, rm, access } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { pathToFileURL } from "node:url";
 import { browserCandidates, resolveBrowserExecutable } from "../browser/config.mjs";
 import {runtimeSettings, mergeRuntimeSettings, modelSettings, mergeModelSettings, PiRuntimeSettingsError} from './runtime-settings.mjs';
 import {httpProxyStatus, mergeHttpProxy, PiHttpSettingsError} from './http-settings.mjs';
@@ -10,15 +10,9 @@ import {refreshModelCatalogs} from './model-catalog.mjs';
 
 export class PiConfigError extends Error {}
 
-const piEntry = bundledPiEntry;
-const { ModelRuntime, SettingsManager, readStoredCredential } = await import(piEntry.href);
 // Use pi's own locked credential store and models.json validator. These internal
 // APIs are audited against the exact bundled version, not reimplemented here.
-const { FileSettingsStorage } = await import(new URL("core/settings-manager.js", piEntry).href);
-const { AuthStorage, ReadOnlyAuthStorage } = await import(new URL("core/auth-storage.js", piEntry).href);
-const { ModelConfig } = await import(new URL("core/model-config.js", piEntry).href);
-const { getSupportedThinkingLevels } = await import(pathToFileURL(join(root, "packages/acp/node_modules/@earendil-works/pi-ai/dist/index.js")).href);
-const manifest = JSON.parse(await readFile(new URL("../package.json", piEntry), "utf8"));
+const manifest = piManifest;
 export const bundledVersion = manifest.version;
 if (bundledVersion !== "1.5.2") throw new PiConfigError("Zepi requires bundled pi 1.5.2. Run setup:acp.");
 

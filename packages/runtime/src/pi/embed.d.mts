@@ -1,0 +1,16 @@
+export declare const DefaultPackageManager: any;
+export declare const SettingsManager: any;
+export declare const parseFrontmatter: any;
+export declare const ModelRuntime: any;
+export declare const readStoredCredential: any;
+export declare const FileSettingsStorage: any;
+export declare const AuthStorage: any;
+export declare const ReadOnlyAuthStorage: any;
+export declare const ModelConfig: any;
+export declare const getSupportedThinkingLevels: any;
+export declare const takeOverStdout: any;
+export declare const restoreStdout: any;
+export declare const writeRawStdout: any;
+export declare const flushRawStdout: any;
+export declare const KeybindingsManager: any;
+export declare const piManifest: any;

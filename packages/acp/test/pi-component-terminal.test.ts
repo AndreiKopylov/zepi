@@ -49,7 +49,7 @@ function transport(options: {createError?:boolean; delayCreate?:number; exitEarl
       await exited;
       assert.equal(released,expectedReleases);
       assert.equal(process?.exitCode !== null || process?.signalCode !== null,true);
-      if(path) await assert.rejects(access(dirname(path)));
+      if(path) await assert.rejects(access(path));
     },
   };
 }

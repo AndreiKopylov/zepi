@@ -92,9 +92,13 @@ fn mcp_status(data: &Value) -> String {
 
 fn run_pi_request(request: Value) -> Result<Value, String> {
     let root = std::env::var_os("ZEPI_ROOT").ok_or("Zepi runtime directory is unavailable.")?;
-    let node = std::env::var_os("ZEPI_NODE").ok_or("Zepi Node.js runtime is unavailable.")?;
     let root = std::path::PathBuf::from(root);
-    let mut child = util::command::new_std_command(node).arg(root.join("packages/runtime/bin/pi-extensions.mjs")).current_dir(root)
+    let agent = std::env::var_os("ZEPI_AGENT").map(std::path::PathBuf::from).filter(|p| p.is_file())
+        .or_else(|| { let b = root.join("agent.exe"); b.is_file().then_some(b) });
+    let mut child = match agent {
+        Some(a) => { let mut c = util::command::new_std_command(a); c.arg("pi-extensions"); c }
+        None => { let mut c = util::command::new_std_command(std::env::var_os("ZEPI_NODE").ok_or("Zepi Node.js runtime is unavailable.")?); c.arg(root.join("packages/runtime/bin/pi-extensions.mjs")); c },
+    }.current_dir(root)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
         .map_err(|_| "Unable to manage pi extensions.".to_owned())?;
     if let Some(mut stdin) = child.stdin.take() {
@@ -111,9 +115,13 @@ enum AuthEvent { Started(ChildStdin), Url(String), Finished(Result<(), String>) 
 fn run_mcp_sign_in(name: String, events: mpsc::Sender<AuthEvent>) {
     let result = (|| -> Result<(), String> {
         let root = std::env::var_os("ZEPI_ROOT").ok_or("Zepi runtime directory is unavailable.")?;
-        let node = std::env::var_os("ZEPI_NODE").ok_or("Zepi Node.js runtime is unavailable.")?;
         let root = std::path::PathBuf::from(root);
-        let mut child = util::command::new_std_command(node).arg(root.join("packages/runtime/bin/mcp-auth.mjs")).arg(name).current_dir(root)
+        let agent = std::env::var_os("ZEPI_AGENT").map(std::path::PathBuf::from).filter(|p| p.is_file())
+            .or_else(|| { let b = root.join("agent.exe"); b.is_file().then_some(b) });
+        let mut child = match agent {
+            Some(a) => { let mut c = util::command::new_std_command(a); c.arg("mcp-auth").arg(name); c }
+            None => { let mut c = util::command::new_std_command(std::env::var_os("ZEPI_NODE").ok_or("Zepi Node.js runtime is unavailable.")?); c.arg(root.join("packages/runtime/bin/mcp-auth.mjs")).arg(name); c }
+        }.current_dir(root)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
             .map_err(|_| "Unable to start MCP sign-in.".to_owned())?;
         // Dropping the pipe cancels in pi and closes its callback listener.

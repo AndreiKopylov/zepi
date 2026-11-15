@@ -18,7 +18,9 @@ export function createPiUI(pi: AgentSession, client: AgentContext, turnSignal: (
   let lifetime = new AbortController();
   let activeComponent = false;
   const findTheme = (name:string) => pi.resourceLoader.getThemes().themes.find(theme => theme.name === name) ?? getThemeByName(name);
-  let theme = findTheme(pi.settingsManager.getTheme() ?? 'dark') ?? getThemeByName('dark')!;
+  // bun may not resolve pi's bundled theme files; fall back to a pass-through theme.
+  let theme = findTheme(pi.settingsManager.getTheme() ?? 'dark') ?? getThemeByName('dark')
+    ?? ({ fg: (_c: unknown, s: string) => s, bg: (_c: unknown, s: string) => s } as NonNullable<ReturnType<typeof getThemeByName>>);
   // pi copies the UI object; this stable proxy keeps its theme reference current.
   const liveTheme = new Proxy(theme, {get(_target,key) {
     const value=Reflect.get(theme,key,theme);

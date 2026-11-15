@@ -75,10 +75,13 @@ impl PiSettingsView {
         let node = std::env::var_os("ZEPI_NODE");
         let task = cx.background_spawn(async move {
             let root = root.ok_or_else(|| "Zepi runtime directory is unavailable.".to_string())?;
-            let node = node.ok_or_else(|| "Zepi Node.js runtime is unavailable.".to_string())?;
-            let mut child = util::command::new_std_command(node)
-                .arg(root.join("packages/runtime/bin/pi-settings.mjs"))
-                .current_dir(&root)
+            let agent = std::env::var_os("ZEPI_AGENT").map(std::path::PathBuf::from).filter(|p| p.is_file())
+                .or_else(|| { let b = root.join("agent.exe"); b.is_file().then_some(b) });
+            let mut child = match agent {
+                Some(a) => { let mut c = util::command::new_std_command(a); c.arg("pi-settings"); c }
+                None => { let mut c = util::command::new_std_command(node.ok_or_else(|| "Zepi Node.js runtime is unavailable.".to_string())?); c.arg(root.join("packages/runtime/bin/pi-settings.mjs")); c }
+            }
+            .current_dir(&root)
                 .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
                 .spawn().map_err(|_| "Unable to start pi settings.".to_string())?;
             let body = serde_json::to_vec(&request).map_err(|_| "Unable to read settings.".to_string())?;

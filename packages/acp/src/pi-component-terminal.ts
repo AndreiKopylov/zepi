@@ -8,7 +8,8 @@ import {methods, type AgentContext, type SessionUpdate} from '@agentclientprotoc
 import {StringDecoder} from 'node:string_decoder';
 import {StdinBuffer, TuiMainScreen, type Component, type Terminal} from '@earendil-works/pi-tui';
 import type {AgentSession, ExtensionUIContext, Theme} from '@earendil-works/pi-coding-agent';
-import {KeybindingsManager} from '../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js';
+import {KeybindingsManager} from '../../runtime/src/pi/embed.mjs';
+import {acpRoot, nodeExe} from './runtime-paths.ts';
 
 export interface PiComponentHost {
   mount?(terminalId:string):Promise<void>;
@@ -16,7 +17,7 @@ export interface PiComponentHost {
   input?(data:string):string|undefined;
 }
 
-const helper = fileURLToPath(new URL('../bin/component-terminal.mjs', import.meta.url));
+const helper = join(acpRoot(), 'bin', 'component-terminal.mjs');
 
 /** Run the plugin's real TUI in Zed's existing terminal, without starting another harness. */
 export async function showPiComponent<T>(pi: AgentSession, client: AgentContext, theme: Theme, agentDir: string,
@@ -111,7 +112,7 @@ export async function showPiComponent<T>(pi: AgentSession, client: AgentContext,
     if(!host?.mount)emit({sessionUpdate:'tool_call', toolCallId:callId, title:'Extension interface', kind:'other', status:'in_progress',
       content:[{type:'content',content:{type:'text',text:'Use the embedded terminal to interact with this pi extension. Ctrl+C closes it.'}}]});
     // Own a late response as well, so cancellation never leaks the terminal process.
-    const creatingTerminal=client.request(methods.client.terminal.create,{sessionId:pi.sessionId,command:process.execPath,
+    const creatingTerminal=client.request(methods.client.terminal.create,{sessionId:pi.sessionId,command:nodeExe(),
       args:[helper,socketPath],cwd:pi.sessionManager.getCwd(),outputByteLimit:256*1024,_meta:{zepiPiComponent:true}})
       .then(async created => {
         if (closing) {await release(created.terminalId); return;}

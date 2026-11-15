@@ -45,15 +45,16 @@ Settings, sessions and skills live in `%LOCALAPPDATA%\Zepi`; updates never touch
 - A model provider (any OpenAI-compatible endpoint, or one of pi's built-in providers).
 - For the agent's browser tools: a system Chrome or Edge. The browser is driven by a native
   Rust/CDP engine (`zepi_browser`, chromiumoxide) — no Playwright or bundled Chromium download.
-- No system Node.js, Python or git required — everything is bundled.
+- The editor and agent need no system runtime (the agent is a bundled bun binary). Optional
+  features use system tools: Node.js for language servers/preview, bun for MCP servers. Python is bundled.
 
 ## How it is built
 
 ```
 zepi.exe                 editor + agent host (Rust: Zed plus the Zepi overlay)
+agent.exe                bun binary: ACP adapter + pi, no Node at runtime
 zepi_browser.exe         native Rust/CDP browser, an MCP server (chromiumoxide)
-packages/, node_modules/ ACP adapter and pi
-deps/node/               Node 24 for the agent
+packages/                adapter/runtime sources + preview helpers
 deps/python/             CPython 3.13 with document libraries
 native/                  appearance, pi defaults, skills
 ```

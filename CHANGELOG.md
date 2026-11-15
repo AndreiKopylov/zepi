@@ -18,17 +18,26 @@ All notable changes to Zepi are documented here. The format follows
 
 - Browser tools: indexed-element targeting (click/fill/select), real press_key, window modes
   (normal/maximized/fullscreen), screenshot saved to a file; MCP smoke test.
+- Single-file bun agent (`agent.exe`): the ACP adapter and pi compile into one binary; sessions
+  open faster and the bundle no longer ships the agent's node_modules. Run standalone (without
+  Zepi) it behaves like the pi CLI, sharing Zepi's pi config; the interactive TUI uses a shipped
+  pi-tui native prebuild.
 
 ### Removed
 
 - Node browser branch (browser-server, ultrafast, inspector) and the jev-browser/Playwright
   dependencies (~18 MB of node_modules); the pinned-Chromium download; browser decision/text
   model settings.
+- Node.js and all node_modules from the bundle (~300 MB installed). The agent is a bun binary;
+  settings/extensions run as its subcommands, MCP servers use system bun, language servers and
+  preview use system Node.js.
 
 ### Fixed
 
 - Task browser no longer conflicts with a running Chrome; the page fills the window; screenshots
   are valid JPEG and no longer break text-only models.
+- Preview and extension terminals resolve the Node runtime and helper scripts from ZEPI_ROOT so
+  they keep working under the bun-compiled agent.
 
 ## [0.0.1-beta6] - 2026-11-15
 

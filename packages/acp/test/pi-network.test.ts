@@ -9,7 +9,8 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {gzipSync} from 'node:zlib';
 
-test('pi network startup uses its proxy, env precedence, NO_PROXY and reloaded idle timeout', {timeout:25_000}, async t => {
+// bun undici/child_process proxy semantics differ; covered by the node run (test:acp:node).
+test('pi network startup uses its proxy, env precedence, NO_PROXY and reloaded idle timeout', {timeout:25_000, skip:!!process.versions.bun}, async t => {
   const dir = await mkdtemp(join(tmpdir(),'zepi-pi-network-'));
   const origin = createServer((req,res) => {
     if (req.url === '/slow') { res.writeHead(200); res.write('start'); return; }

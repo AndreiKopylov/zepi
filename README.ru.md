@@ -45,15 +45,16 @@ openpyxl, python-pptx, pypdf и Pillow. Ставить ничего не нуж�
 - Провайдер моделей (любой OpenAI-совместимый endpoint или один из встроенных в pi).
 - Для браузерных инструментов агента: системный Chrome или Edge. Браузером управляет нативный
   Rust/CDP-движок (`zepi_browser`, chromiumoxide) — без Playwright и докачки Chromium.
-- Системный Node.js, Python и git **не нужны** — всё в поставке.
+- Редактору и агенту системный рантайм не нужен (агент — bun-бинарь в поставке). Опциональные
+  функции используют системные инструменты: Node.js для language servers/превью, bun для MCP. Python в поставке.
 
 ## Как это устроено
 
 ```
 zepi.exe                 редактор + хост агента (Rust: Zed плюс оверлей Zepi)
+agent.exe                bun-бинарь: ACP-адаптер + pi, без Node в рантайме
 zepi_browser.exe         нативный Rust/CDP-браузер, MCP-сервер (chromiumoxide)
-packages/, node_modules/ ACP-адаптер и pi
-deps/node/               Node 24 для агента
+packages/                исходники адаптера/runtime + превью-хелперы
 deps/python/             CPython 3.13 с документными библиотеками
 native/                  внешний вид, дефолты pi, скиллы
 ```
