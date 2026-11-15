@@ -3,7 +3,7 @@
 #define AppExeName "zepi.exe"
 #define AppPublisher "Zepi"
 #ifndef AppVersion
-  #define AppVersion "0.0.1-beta6"
+  #define AppVersion "0.0.1-beta7"
 #endif
 #define AppId "{{6F1D6E5A-8F14-4E2C-9B7A-2E4C9F0B31D7}"
 #define StagingDir "..\dist\staging"

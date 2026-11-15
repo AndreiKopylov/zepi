@@ -12,10 +12,6 @@ pub(crate) struct PiBrowserSettingsView {
     keep_open: bool,
     window_mode: String,
     candidates: Vec<(String, String)>,
-    browser_text_url: Entity<Editor>,
-    browser_text_model: Entity<Editor>,
-    browser_text_key: Entity<Editor>,
-    browser_text_reasoning: String,
     busy: bool,
     notice: String,
     failed: bool,
@@ -48,10 +44,6 @@ impl PiBrowserSettingsView {
             keep_open: false,
             window_mode: "fullscreen".into(),
             candidates: Vec::new(),
-            browser_text_url: input("OpenAI-compatible base URL, e.g. https://api.deepseek.com/v1", false, window, cx),
-            browser_text_model: input("Text model ID", false, window, cx),
-            browser_text_key: input("API key or $ENV_VAR reference; leave blank to keep", true, window, cx),
-            browser_text_reasoning: "low".into(),
             busy: false,
             notice: String::new(),
             failed: false,
@@ -104,23 +96,15 @@ impl PiBrowserSettingsView {
                         view.candidates = data["browser"]["candidates"].as_array().into_iter().flatten()
                             .filter_map(|item| Some((item["path"].as_str()?.to_owned(), item["source"].as_str().unwrap_or_default().to_owned())))
                             .collect();
-                        if first || matches!(operation.as_str(), "status" | "browser-set" | "browser-install") {
+                        if first || matches!(operation.as_str(), "status" | "browser-set") {
                             let path = data["browser"]["path"].as_str().unwrap_or_default();
                             view.executable.update(cx, |editor, cx| editor.set_text(path, window, cx));
                         }
-                        if first || matches!(operation.as_str(), "status" | "browser-text") {
-                            view.browser_text_url.update(cx, |editor, cx| editor.set_text(data["browserText"]["overrideApiUrl"].as_str().or_else(|| data["browserText"]["apiUrl"].as_str()).unwrap_or_default(), window, cx));
-                            view.browser_text_model.update(cx, |editor, cx| editor.set_text(data["browserText"]["overrideModel"].as_str().or_else(|| data["browserText"]["model"].as_str()).unwrap_or_default(), window, cx));
-                            view.browser_text_reasoning = data["browserText"]["reasoning"].as_str().unwrap_or("low").into();
-                        }
                         view.data = Some(data);
-                        view.notice = match operation.as_str() {
-                            "browser-set" => "Browser settings saved.".into(),
-                            "browser-install" => "Chromium installation started.".into(),
-                            _ => view.notice.clone(),
-                        };
+                        if operation == "browser-set" {
+                            view.notice = "Browser settings saved.".into();
+                        }
                         view.failed = false;
-                        view.poll_install(window, cx);
                     }
                     Err(message) => {
                         view.notice = message;
@@ -128,22 +112,6 @@ impl PiBrowserSettingsView {
                     }
                 }
                 cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    // While an installation runs in the background, refresh the status until it settles.
-    fn poll_install(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.browser()["install"].as_str() != Some("installing") {
-            return;
-        }
-        cx.spawn_in(window, async move |view, cx| {
-            cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
-            let _ = view.update_in(cx, |view, window, cx| {
-                if !view.busy && view.browser()["install"].as_str() == Some("installing") {
-                    view.request(json!({"operation": "status"}), window, cx);
-                }
             });
         })
         .detach();
@@ -185,7 +153,6 @@ impl PiBrowserSettingsView {
         !self.browser()["executablePath"].as_str().unwrap_or_default().is_empty()
     }
 
-    // Zed-style picker: detected browsers, a native dialog for anything else, and auto detection.
     fn change_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let weak = cx.entity().downgrade();
         let entries = self.candidates.clone();
@@ -220,24 +187,6 @@ impl PiBrowserSettingsView {
         self.data.as_ref().map(|data| data["browser"].clone()).unwrap_or(Value::Null)
     }
 
-    fn selector(&self, id: &'static str, label: String, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let weak = cx.entity().downgrade();
-        let menu = ContextMenu::build(window, cx, move |mut menu, _, _| {
-            for (value, name) in [("low", "Low"), ("none", "None")] {
-                let weak = weak.clone();
-                let value = value.to_owned();
-                menu = menu.entry(name, None, move |_, cx| {
-                    let _ = weak.update(cx, |view, cx| {
-                        view.browser_text_reasoning = value.clone();
-                        cx.notify();
-                    });
-                });
-            }
-            menu
-        });
-        DropdownMenu::new(id, label, menu).style(DropdownStyle::Outlined).full_width(true).into_any_element()
-    }
-
     fn window_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let weak = cx.entity().downgrade();
         let label = format!("Window: {}", match self.window_mode.as_str() {
@@ -264,28 +213,6 @@ impl PiBrowserSettingsView {
             .attach(gpui::Anchor::BottomLeft)
             .into_any_element()
     }
-    fn install_section(&self, cx: &mut Context<Self>, heading: &str) -> gpui::AnyElement {
-        let browser = self.browser();
-        let install = browser["install"].as_str().unwrap_or("idle");
-        let target = browser["target"].as_str().unwrap_or_default();
-        let status = match install {
-            "installing" => "Installation is running; the page refreshes itself until it settles.",
-            "done" => "Chromium is installed into the Zepi browsers directory.",
-            "failed" => "The last installation failed; see install.log inside the browsers directory.",
-            _ => "Downloads Chromium and its headless shell (about 0.7 GB) with the bundled playwright.",
-        };
-        v_flex().gap_3()
-            .child(Label::new(heading.to_owned()))
-            .child(Label::new(status).size(LabelSize::Small).color(Color::Muted))
-            .when(!target.is_empty(), |this| this.child(Label::new(format!("Target: {target}")).size(LabelSize::Small).color(Color::Muted)))
-            .child(Button::new("pib-install", match install {
-                "installing" => "Installing...",
-                "failed" => "Retry installation",
-                _ => "Install Chromium via playwright",
-            }).style(ButtonStyle::Outlined).disabled(self.busy || install == "installing")
-                .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation": "browser-install"}), window, cx))))
-            .into_any_element()
-    }
 }
 
 impl Render for PiBrowserSettingsView {
@@ -297,18 +224,11 @@ impl Render for PiBrowserSettingsView {
         let source_label = match source {
             "setting" => "configured path",
             "zepi" => "Zepi browsers directory",
-            "playwright" => "playwright cache",
             "system" => "system browser",
             "missing" => "configured path not found",
             _ => "no Chromium-based browser found",
         };
         let file_name = path.rsplit(['\\', '/']).next().unwrap_or(path);
-        let install_note = match browser["install"].as_str().unwrap_or("idle") {
-            "installing" => Some("Chromium installation is running."),
-            "failed" => Some("The last Chromium installation failed; see install.log inside the browsers directory."),
-            "done" => Some("Chromium is installed into the Zepi browsers directory."),
-            _ => None,
-        };
         v_flex().id("zepi-pi-browser-settings").size_full().overflow_y_scroll().track_scroll(&self.scroll_handle).px_8().pb_12().gap_6()
             .child(v_flex().gap_2().pt_4()
                 .child(h_flex().w_full().justify_between().gap_2()
@@ -316,23 +236,16 @@ impl Render for PiBrowserSettingsView {
                     .when(!self.notice.is_empty(), |this| {
                         this.child(Label::new(self.notice.clone()).size(LabelSize::Small).color(if self.failed { Color::Error } else { Color::Success }))
                     }))
-                .child(Label::new("Chromium-family browser for browser tasks, takeovers and preview captures.").size(LabelSize::Small).color(Color::Muted)))
+                .child(Label::new("Chromium-family browser driven by the native Rust/CDP engine.").size(LabelSize::Small).color(Color::Muted)))
             .child(v_flex().gap_3().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
                 .child(Label::new("Browser use"))
                 .when(found, |this| this
-                    .child(Label::new(format!("Browser: {file_name} ({source_label})")).size(LabelSize::Small).color(Color::Muted))
-                    .when_some(install_note, |this, note| this.child(Label::new(note).size(LabelSize::Small).color(Color::Muted)))
-                    .child(field("Executable", text_field(self.executable.clone(), cx)))
-                    .child(Label::new("Change pins one executable. Auto detection checks the Zepi browsers directory, the playwright cache, then system Chrome or Edge.").size(LabelSize::Small).color(Color::Muted))
-                    .child(h_flex().gap_2()
-                        .child(self.change_menu(window, cx))
-                        .child(Button::new("pib-install-anyway", "Install pinned Chromium anyway").style(ButtonStyle::Transparent).disabled(self.busy || browser["install"].as_str() == Some("installing"))
-                            .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation": "browser-install"}), window, cx))))))
+                    .child(Label::new(format!("Browser: {file_name} ({source_label})")).size(LabelSize::Small).color(Color::Muted)))
                 .when(!found, |this| this
-                    .child(Label::new("No Chromium-based browser found. Install the pinned Chromium, or pick an existing Chrome or Edge executable.").size(LabelSize::Small).color(Color::Warning))
-                    .child(self.install_section(cx, "Install"))
-                    .child(field("Executable", text_field(self.executable.clone(), cx)))
-                    .child(self.change_menu(window, cx)))
+                    .child(Label::new("No Chromium-based browser found. Pick an existing Chrome or Edge executable.").size(LabelSize::Small).color(Color::Warning)))
+                .child(field("Executable", text_field(self.executable.clone(), cx)))
+                .child(Label::new("Change pins one executable. Auto detection checks the Zepi browsers directory, then system Chrome or Edge.").size(LabelSize::Small).color(Color::Muted))
+                .child(self.change_menu(window, cx))
                 .child(Label::new("Applies to tasks started after the change.").size(LabelSize::Small).color(Color::Muted))
                 .child(Label::new(if self.keep_open {
                     "The task browser stays open between turns and closes with the task."
@@ -346,36 +259,11 @@ impl Render for PiBrowserSettingsView {
                     }))))
             .child(v_flex().gap_2()
                 .child(Label::new(match self.window_mode.as_str() {
-                    "normal" => "The window opens at its default size and the page keeps a fixed 1120x780 viewport.",
+                    "normal" => "The window opens at its default size.",
                     "maximized" => "The window opens maximized and the page fills it. Applies to browsers opened after the change.",
                     _ => "The window opens in fullscreen and the page fills it. Applies to browsers opened after the change.",
                 }).size(LabelSize::Small).color(Color::Muted))
                 .child(h_flex().child(self.window_menu(window, cx))))
-            .child(v_flex().gap_3().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
-                .child(Label::new("Input text model"))
-                .child(Label::new("Uses your main language model and its existing authentication by default, only when entering text. A separate OpenAI-compatible text model is optional.").size(LabelSize::Small).color(Color::Muted))
-                .when_some(self.data.as_ref().and_then(|d| d["browserText"]["message"].as_str()).map(str::to_owned), |this, message| this.child(Label::new(message).size(LabelSize::Small).color(Color::Muted)))
-                .child(field("Base URL", text_field(self.browser_text_url.clone(), cx)))
-                .child(field("Model", text_field(self.browser_text_model.clone(), cx)))
-                .child(field("API Key", text_field(self.browser_text_key.clone(), cx)))
-                .child(field("Reasoning", self.selector("pib-browser-text-reasoning", match self.browser_text_reasoning.as_str() { "low" => "Low".into(), _ => "None".into() }, window, cx)))
-                .child(Label::new(match self.data.as_ref().and_then(|d| d["browserText"]["credential"].as_str()) {
-                    Some("configured") => "Authentication configured",
-                    Some("environment") => "Using TEXT_MODEL_API_KEY from the environment",
-                    _ => "Configure the main model or an optional text model override",
-                }).size(LabelSize::Small).color(Color::Muted))
-                .child(h_flex().gap_2()
-                    .child(Button::new("pib-use-main-browser-text", "Use Main Model").style(ButtonStyle::Outlined).disabled(self.busy)
-                        .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation": "browser-text", "source": "pi"}), window, cx))))
-                    .child(Button::new("pib-save-browser-text", "Save Text Override").style(ButtonStyle::Outlined).disabled(self.busy)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let key = this.browser_text_key.read(cx).text(cx);
-                            this.browser_text_key.update(cx, |editor, cx| editor.set_text("", window, cx));
-                            this.request(json!({"operation": "browser-text", "source": "custom", "apiUrl": this.browser_text_url.read(cx).text(cx),
-                                "model": this.browser_text_model.read(cx).text(cx), "reasoning": this.browser_text_reasoning, "key": key}), window, cx);
-                        })))
-                    .child(Button::new("pib-remove-browser-text-key", "Remove Override API Key").disabled(self.busy)
-                        .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation": "browser-text", "removeKey": true}), window, cx))))))
     }
 }
 

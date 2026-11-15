@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile, readdir, symlink, cp, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,7 @@ import { call, fixtureModel, lastToolText, type FixtureStep } from "./fixture-mo
 import {EDITOR_QUERY} from '../src/editor-query.ts';
 
 const name = (action: string) => `mcp__zepi_browser__browser_${action}`;
+const browserExe = process.env.ZEPI_BROWSER_EXE ?? fileURLToPath(new URL("../../../zepi-build/release-fast/zepi_browser.exe", import.meta.url));
 const start = () => call("preview", { action: "start", files: ["index.html"], entry: "index.html" });
 const source = (increment: number) => `<!doctype html><title>Preview repair fixture</title><p id="count">Count: 0</p><button onclick="document.querySelector('#count').textContent='Count: ${increment}'">Increment</button>`;
 
@@ -103,8 +105,8 @@ async function harness(steps: FixtureStep[], options: {
     .onNotification(methods.client.session.update, ({ params }) => { updates.push(params.update); })
     .connect({ readable: toClient.readable, writable: toAgent.writable });
   await connection.agent.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true } });
-  const newTask = () => connection.agent.request(methods.agent.session.new, { cwd, mcpServers: options.browser ? [{ name: "zepi_browser", command: process.execPath,
-    args: [fileURLToPath(new URL("../../runtime/bin/browser-server.mjs", import.meta.url))], env: [{ name: "JEV_BROWSER_HEADED", value: "0" }],
+  const newTask = () => connection.agent.request(methods.agent.session.new, { cwd, mcpServers: options.browser && existsSync(browserExe) ? [{ name: "zepi_browser", command: browserExe,
+    args: ["serve"], env: [],
   }] : [] });
   return { cwd, buffers, terminals, updates, newTask, requests: fixture.requests,
     prompt: (sessionId: string) => connection.agent.request(methods.agent.session.prompt, { sessionId, prompt: [{ type: "text", text: "Run the preview verification fixture." }] }),

@@ -6,6 +6,30 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.1-beta7] - 2026-11-15
+
+### Changed
+
+- Browser automation now runs on a native Rust/CDP engine (`zepi_browser`, chromiumoxide) driving
+  system Chrome/Edge, replacing the Node/Playwright/jev browser. The main agent model drives the
+  browser directly; no separate browser decision/text model.
+
+### Added
+
+- Browser tools: indexed-element targeting (click/fill/select), real press_key, window modes
+  (normal/maximized/fullscreen), screenshot saved to a file; MCP smoke test.
+
+### Removed
+
+- Node browser branch (browser-server, ultrafast, inspector) and the jev-browser/Playwright
+  dependencies (~18 MB of node_modules); the pinned-Chromium download; browser decision/text
+  model settings.
+
+### Fixed
+
+- Task browser no longer conflicts with a running Chrome; the page fills the window; screenshots
+  are valid JPEG and no longer break text-only models.
+
 ## [0.0.1-beta6] - 2026-11-15
 
 ### Added

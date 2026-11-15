@@ -237,61 +237,16 @@ test("Full Access persists globally, validates booleans and survives model setti
   await assertPrivateMode(join(f.target,"settings.json"));
 });
 
-test("Jev configuration uses global settings and pi credentials without exposing keys", async t => {
+test("browser window and keep-open settings are global and validated", async t => {
   const f = await fixture(t);
-  const {browserDecisionEnvironment} = await import('../../src/browser/config.mjs');
-  const result = await f.bridge.execute({operation: 'browser-decision', apiUrl: 'http://127.0.0.1:19001/v1/systemone', model: 'jev-fixture', key: 'fixture-jev-secret'});
-  assert.equal(result.browserDecision.credential, 'configured');
-  assert.ok(!JSON.stringify(result).includes('fixture-jev-secret'));
-  assert.equal(result.defaultModel, 'test-model');
-  assert.equal((await f.get(f.target, 'settings.json')).customSetting.retain, true);
-  const env = await browserDecisionEnvironment(f.target);
-  const {ZEPI_BROWSER_EXECUTABLE, ZEPI_BROWSER_SOURCE, ZEPI_BROWSER_KEEP_OPEN, ...rest} = env;
-  assert.deepEqual(rest, {JEV_API_URL:'http://127.0.0.1:19001/v1/systemone', JEV_MODEL:'jev-fixture', TYPESAFE_API_KEY:'fixture-jev-secret', ZEPI_BROWSER_ENGINE:'ultrafast', ZEPI_BROWSER_INSECURE:'', ZEPI_BROWSER_WINDOW:'fullscreen', TEXT_MODEL_SOURCE:'pi',TEXT_MODEL_BASE_URL:'', TEXT_MODEL:'test-model', TEXT_MODEL_REASONING:'low', TEXT_MODEL_API_KEY:''});
-  assert.ok(['setting', 'zepi', 'playwright', 'system', 'none', 'missing'].includes(ZEPI_BROWSER_SOURCE));
-  assert.equal(ZEPI_BROWSER_KEEP_OPEN, '');
-  assert.equal(typeof ZEPI_BROWSER_EXECUTABLE, 'string');
-  await assertPrivateMode(join(f.target, 'auth.json'));
-  await f.bridge.execute({operation:'browser-decision', apiUrl:'https://example.invalid/v1/systemone', model:'jev-new', key:''});
-  assert.equal((await browserDecisionEnvironment(f.target)).TYPESAFE_API_KEY, 'fixture-jev-secret');
-  const before = await readFile(join(f.target,'settings.json'),'utf8');
-  await assert.rejects(f.bridge.execute({operation:'browser-decision', apiUrl:'file:///private', model:'jev-new', key:'new-secret'}));
-  assert.equal(await readFile(join(f.target,'settings.json'),'utf8'), before);
-  assert.equal((await browserDecisionEnvironment(f.target)).TYPESAFE_API_KEY, 'fixture-jev-secret');
-  await f.put(f.target, 'auth.json', {'zepi-jev': {type:'api_key',key:'${ZEPI_JEV_TEST_KEY}',env:{ZEPI_JEV_TEST_KEY:'fixture-resolved-secret'}}});
-  assert.equal((await browserDecisionEnvironment(f.target)).TYPESAFE_API_KEY, 'fixture-resolved-secret');
-  await f.bridge.execute({operation:'browser-decision', apiUrl:'https://example.invalid/v1/systemone', model:'jev-new', removeKey:true});
-  assert.equal((await f.get(f.target, 'auth.json'))['zepi-jev'], undefined);
-});
-
-
-test('browser execution and text model settings are global, isolated and keep keys hidden', async t => {
-  const f=await fixture(t);
-  const {browserDecisionEnvironment}=await import('../../src/browser/config.mjs');
-  await f.bridge.execute({operation:'browser-decision',apiUrl:'https://example.invalid/jev',model:'jev',engine:'legacy',key:'decision-secret'});
-  const saved=await f.bridge.execute({operation:'browser-text',apiUrl:'https://example.invalid/v1',model:'small',reasoning:'none',key:'text-secret'});
-  assert.equal(saved.browserDecision.engine,'legacy');
-  assert.equal(saved.browserText.credential,'configured');
-  assert.ok(!JSON.stringify(saved).includes('text-secret'));
-  const env=await browserDecisionEnvironment(f.target);
-  assert.equal(env.TEXT_MODEL_API_KEY,'text-secret'); assert.equal(env.TYPESAFE_API_KEY,'decision-secret');
-  assert.equal(env.TEXT_MODEL_REASONING,'none'); assert.equal(env.ZEPI_BROWSER_ENGINE,'legacy');
-  const before=await readFile(join(f.target,'settings.json'),'utf8');
-  for (const patch of [{apiUrl:'file:///private'},{reasoning:'high'},{key:'!execute-command'}]) {
-    await assert.rejects(f.bridge.execute({operation:'browser-text',apiUrl:'https://example.invalid/v1',model:'small',...patch}));
-    assert.equal(await readFile(join(f.target,'settings.json'),'utf8'),before);
-  }
-  await f.bridge.execute({operation:'browser-text',apiUrl:'https://example.invalid/v1',model:'small',removeKey:true});
-  assert.equal((await browserDecisionEnvironment(f.target)).TEXT_MODEL_API_KEY,'');
-  assert.equal((await f.get(f.target,'settings.json')).customSetting.retain,true);
-  await f.bridge.execute({operation:'key',provider:'zepi-fixture',key:'main-secret'});
-  const inherited=await f.bridge.execute({operation:'browser-text',source:'pi'});
-  assert.equal(inherited.browserText.source,'pi');assert.equal(inherited.browserText.model,'test-model');
-  assert.equal(inherited.browserText.credential,'configured');
-  assert.ok(!JSON.stringify(inherited).includes('main-secret'));
-  assert.equal((await browserDecisionEnvironment(f.target)).TEXT_MODEL_API_KEY,'');
-  assert.equal((await f.get(f.target,'settings.json')).zepi.browserText.apiUrl,'https://example.invalid/v1','optional override is retained');
-  await f.bridge.execute({operation:'browser-text',removeKey:true});
-  assert.equal((await f.get(f.target,'auth.json'))['zepi-fixture'].key,'main-secret');
-  assert.equal((await f.bridge.status()).browserText.source,'pi');
+  const {browserEnvironment} = await import('../../src/browser/config.mjs');
+  const saved = await f.bridge.execute({operation:'browser-set', window:'maximized', keepOpen:true});
+  assert.equal(saved.browser.window,'maximized');
+  assert.equal(saved.browser.keepOpen,true);
+  const env = await browserEnvironment(f.target);
+  assert.equal(env.window,'maximized'); assert.equal(env.keepOpen,true);
+  await assert.rejects(f.bridge.execute({operation:'browser-set', window:'huge'}));
+  await assert.rejects(f.bridge.execute({operation:'browser-set', keepOpen:'yes'}));
+  assert.equal((await f.get(f.target,'settings.json')).zepi.browser.window,'maximized');
+  await assertPrivateMode(join(f.target,'settings.json'));
 });
