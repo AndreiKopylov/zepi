@@ -10,34 +10,23 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Changed
 
-- Browser automation now runs on a native Rust/CDP engine (`zepi_browser`, chromiumoxide) driving
-  system Chrome/Edge, replacing the Node/Playwright/jev browser. The main agent model drives the
-  browser directly; no separate browser decision/text model.
+- Browser on native Rust/CDP (`zepi_browser`, chromiumoxide); the agent model drives it directly.
+- Agent is a single bun binary (`agent.exe`); run standalone it behaves like the pi CLI.
 
 ### Added
 
-- Browser tools: indexed-element targeting (click/fill/select), real press_key, window modes
-  (normal/maximized/fullscreen), screenshot saved to a file; MCP smoke test.
-- Single-file bun agent (`agent.exe`): the ACP adapter and pi compile into one binary; sessions
-  open faster and the bundle no longer ships the agent's node_modules. Run standalone (without
-  Zepi) it behaves like the pi CLI, sharing Zepi's pi config; the interactive TUI uses a shipped
-  pi-tui native prebuild.
+- Browser tools: element targeting, press_key, window modes, screenshot-to-file.
+- Pinned bun 1.4.4 for reproducible agent builds; `test:lifecycle`, `test:codemode`.
 
 ### Removed
 
-- Node browser branch (browser-server, ultrafast, inspector) and the jev-browser/Playwright
-  dependencies (~18 MB of node_modules); the pinned-Chromium download; browser decision/text
-  model settings.
-- Node.js and all node_modules from the bundle (~300 MB installed). The agent is a bun binary;
-  settings/extensions run as its subcommands, MCP servers use system bun, language servers and
-  preview use system Node.js.
+- Node/Playwright/jev browser and the agent's Node runtime + node_modules (~300 MB).
+  MCP uses system bun; language servers/preview use system Node.
 
 ### Fixed
 
-- Task browser no longer conflicts with a running Chrome; the page fills the window; screenshots
-  are valid JPEG and no longer break text-only models.
-- Preview and extension terminals resolve the Node runtime and helper scripts from ZEPI_ROOT so
-  they keep working under the bun-compiled agent.
+- Browser window/screenshot conflicts; closing no longer leaks processes (OS watchdog);
+  codemode worker resolves inside the bun binary.
 
 ## [0.0.1-beta6] - 2026-11-15
 
