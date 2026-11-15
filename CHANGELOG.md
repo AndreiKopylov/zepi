@@ -6,6 +6,25 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.1-beta8] - 2026-11-15
+
+### Changed
+
+- Browser tools aligned with Playwright MCP: browser_navigate / browser_click / browser_type /
+  browser_select_option / browser_press_key / browser_wait_for / browser_take_screenshot /
+  browser_snapshot / browser_close; removed the ad-hoc browser_act / browser_batch / browser_status.
+- Element targeting by live name/label (element) in click/type/select_option, immune to stale
+  indices from SPA re-renders; node ids remain as fallback.
+
+### Fixed
+
+- Dropdowns (Quasar QSelect, MUI Select, native select): browser_select_option opens, scrolls
+  virtualized lists, types-to-filter for searchable/async address pickers, waits for options,
+  clicks the match and verifies the value; native selects set value directly.
+- Field accessible names read from the Quasar field label / ancestor aria-labelledby (were generic
+  "Выбрать"); option names keep their own text.
+- Clicking a visible menu option selects it directly; stale options route through the select flow.
+
 ## [0.0.1-beta7] - 2026-11-15
 
 ### Changed

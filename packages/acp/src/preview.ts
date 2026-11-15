@@ -342,7 +342,7 @@ export function createPreview(cwd: string, storage: string, sessionId: string, c
   // Extend pi's existing event pipeline; evidence stays with the existing ACP tool call.
   async function browserEvidence(event: ToolResultEvent) {
     const run = active;
-    if (!run?.url || run.stopped || !["mcp__zepi_browser__browser_open", "mcp__zepi_browser__browser_snapshot"].includes(event.toolName)) return;
+    if (!run?.url || run.stopped || !["mcp__zepi_browser__browser_navigate", "mcp__zepi_browser__browser_snapshot"].includes(event.toolName)) return;
     const observed = event.content.filter(part => part.type === "text").map(part => part.text).join("\n");
     let observedUrl = observed.match(/^url: (.+)$/m)?.[1];
     if (!observedUrl) {

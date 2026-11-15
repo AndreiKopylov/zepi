@@ -1,13 +1,23 @@
 // Page-side helpers (adapted from browser-use, MIT): resolve an indexed node to a
 // safe click point and settle autocomplete after input. Injected via Runtime.evaluate.
+
+// ARIA-tree DOM extraction vendored from BB-fat/browser-use-rs (MIT).
+pub const DOM_JS: &str = include_str!("dom.js");
+
 pub const TARGET: &str = r#"(action => {
-  const e=window.__zepiBrowser?.nodes.get(action.node);
-  if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
-      !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
-  if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
-  const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
-  if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-  if (!e.contains(document.elementFromPoint(x,y))) return null;
+  let e=(window.__zepiResolve?window.__zepiResolve(action.node):window.__zepiBrowser?.nodes.get(action.node));
+  if (!e) return {why:'no-node'};
+  if (!e.isConnected) return {why:'disconnected'};
+  if (e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) return {why:'disabled'};
+  if (!e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return {why:'hidden'};
+  if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return {why:'readonly'};
+  let r=e.getBoundingClientRect();
+  const cy=r.y+r.height/2;
+  if (r.bottom<0 || r.top>innerHeight || cy<0 || cy>=innerHeight) { e.scrollIntoView({block:'center'}); e=(window.__zepiResolve?window.__zepiResolve(action.node):e)||e; r=e.getBoundingClientRect(); }
+  const x=r.x+r.width/2, y=r.y+r.height/2;
+  if (!r.width || !r.height) return {why:'zero-size'};
+  if (x<0 || y<0 || x>=innerWidth || y>=innerHeight) return {why:'offscreen'};
+  if (!e.contains(document.elementFromPoint(x,y))) return {why:'occluded'};
   if (action.kind==='select') {
     if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
         !o.disabled && !o.closest('optgroup[disabled]'))) return null;
@@ -19,11 +29,11 @@ pub const TARGET: &str = r#"(action => {
 })("#;
 
 pub const AFTER_INPUT: &str = r#"(action => new Promise(resolve => {
-  const field=window.__zepiBrowser?.nodes.get(action.node);
-  const autocomplete=action.kind==='fill' && field?.getAttribute('role')==='combobox';
+  const field=window.__zepiResolve ? window.__zepiResolve(action.node) : window.__zepiBrowser?.nodes.get(action.node);
+  const autocomplete=(action.kind==='fill'||action.kind==='click') && field?.getAttribute('role')==='combobox';
   let frames=0, stopped=false;
   const finish=()=>{stopped=true;resolve()};
-  setTimeout(finish,autocomplete ? 200 : 50);
+  setTimeout(finish,autocomplete ? 500 : 50);
   const ready=()=>{
     if (stopped) return;
     const ids=(field?.getAttribute('aria-controls')||field?.getAttribute('aria-owns')||'')

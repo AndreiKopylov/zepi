@@ -1,0 +1,45 @@
+<!doctype html><html><head><link rel="stylesheet" href="vendor/quasar.prod.css"></head>
+<body><div id="root"></div>
+<script src="vendor/vue.global.prod.js"></script>
+<script src="vendor/quasar.umd.prod.js"></script>
+<script>
+const {createApp,ref}=Vue;
+const app=createApp({
+  setup(){
+    const tab=ref('main'), name=ref(''), secret=ref(''), notes=ref(''), region=ref(null), agree=ref(false), done=ref(false);
+    const notify=ref(false), vol=ref(30), rate=ref(0), date=ref(''), time=ref(''), country=ref('ru'), radio=ref('r1');
+    const options=Array.from({length:40},(_,i)=>'Region-'+(i+1));
+    const address=ref(null), addressOptions=ref([]);
+    const ALLADDR=Array.from({length:30},(_,i)=>({name:'Address-'+(i+1)+', Moscow',value:i+1}));
+    const addrFilter=(val,update)=>{ setTimeout(()=>{ update(()=>{ addressOptions.value=ALLADDR.filter(a=>a.name.toLowerCase().includes((val||'').toLowerCase())); }); },300); };
+    return {tab,name,secret,notes,region,agree,done,notify,vol,rate,date,time,country,radio,options,address,addressOptions,addrFilter};
+  },
+  template:`<q-layout><q-page-container><q-page padding>
+    <q-tabs v-model="tab"><q-tab name="main" label="Main"/><q-tab name="choices" label="Choices"/></q-tabs>
+    <q-tab-panels v-model="tab">
+      <q-tab-panel name="main">
+        <q-input v-model="name" label="Name" aria-label="Name"/>
+        <q-input v-model="secret" type="password" label="Secret" aria-label="Secret"/>
+        <q-input v-model="notes" type="textarea" label="Notes" aria-label="Notes"/>
+      </q-tab-panel>
+      <q-tab-panel name="choices">
+        <q-select v-model="region" :options="options" label="Region" aria-label="Region"/>
+        <q-select v-model="address" :options="addressOptions" use-input fill-input hide-selected input-debounce="300" behavior="menu" virtual-scroll-slice-size="200" option-label="name" map-options emit-value label="Address" aria-label="Address" @filter="addrFilter"/>
+        <q-toggle v-model="notify" label="Notify" aria-label="Notify"/>
+        <q-slider v-model="vol" :min="0" :max="100" aria-label="Vol"/>
+        <q-rating v-model="rate" :max="5" aria-label="Rate"/>
+        <q-input v-model="date" type="date" label="Date" aria-label="Date"/>
+        <q-input v-model="time" type="time" label="Time" aria-label="Time"/>
+        <select v-model="country" aria-label="Country"><option value="ru">RU</option><option value="us">US</option></select>
+        <q-radio v-model="radio" val="r1" label="R1" aria-label="R1"/>
+        <q-radio v-model="radio" val="r2" label="R2" aria-label="R2"/>
+        <q-checkbox v-model="agree" label="Agree" aria-label="Agree"/>
+        <q-btn :label="done?'Done':'Submit'" @click="done=true"/>
+      </q-tab-panel>
+    </q-tab-panels>
+  </q-page></q-page-container></q-layout>`
+});
+app.use(Quasar,{});
+app.mount('#root');
+window.__ready=true;
+</script></body></html>

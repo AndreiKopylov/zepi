@@ -1,0 +1,48 @@
+<!doctype html><html><body><app-root></app-root>
+<script src="vendor/zone.js"></script>
+<script src="vendor/rxjs.umd.js"></script>
+<script src="vendor/core.umd.js"></script>
+<script src="vendor/common.umd.js"></script>
+<script src="vendor/compiler.umd.js"></script>
+<script src="vendor/platform-browser.umd.js"></script>
+<script src="vendor/platform-browser-dynamic.umd.js"></script>
+<script>
+const {Component,NgModule}=ng.core;
+const {CommonModule}=ng.common;
+const {BrowserModule}=ng.platformBrowser;
+const {platformBrowserDynamic}=ng.platformBrowserDynamic;
+class App{
+  constructor(){this.tab='main';this.name='';this.secret='';this.region='';this.agree=false;this.done=false;
+    this.notify=false;this.vol=30;this.date='';this.time='';this.country='ru';this.radio='r1';this.open=false;this.tick=0;
+    this.options=Array.from({length:40},(_,i)=>'Region-'+(i+1));}
+  pick(o){this.region=o;this.open=false;}
+  track(i){return i+'-'+this.tick;}
+}
+const AppC=Component({selector:'app-root',template:`<div>
+  <div role="tablist">
+    <button role="tab" [attr.aria-selected]="tab==='main'" (click)="tab='main'">Main</button>
+    <button role="tab" [attr.aria-selected]="tab==='choices'" (click)="tab='choices'">Choices</button>
+  </div>
+  <div *ngIf="tab==='main'">
+    <input aria-label="Name" [value]="name" (input)="name=$event.target.value">
+    <input aria-label="Secret" type="password" [value]="secret" (input)="secret=$event.target.value">
+  </div>
+  <div *ngIf="tab==='choices'">
+    <input role="combobox" aria-label="Region" readonly [value]="region" [attr.aria-expanded]="open" (click)="open=!open">
+    <ul *ngIf="open" role="listbox" style="max-height:150px;overflow-y:auto;width:300px" (scroll)="tick=tick+1">
+      <li *ngFor="let o of options; let i=index; trackBy:track" role="option" [attr.aria-label]="o" (click)="pick(o)">{{o}}</li>
+    </ul>
+    <input aria-label="Notify" role="switch" type="checkbox" [checked]="notify" (change)="notify=$event.target.checked">
+    <input aria-label="Vol" type="range" [value]="vol" (input)="vol=$event.target.value">
+    <input aria-label="Date" type="date" [value]="date" (input)="date=$event.target.value">
+    <input aria-label="Time" type="time" [value]="time" (input)="time=$event.target.value">
+    <select aria-label="Country" [value]="country" (change)="country=$event.target.value"><option value="ru">RU</option><option value="us">US</option></select>
+    <input aria-label="R1" type="radio" name="r" [checked]="radio==='r1'" (change)="radio='r1'">
+    <input aria-label="R2" type="radio" name="r" [checked]="radio==='r2'" (change)="radio='r2'">
+    <input aria-label="Agree" type="checkbox" [checked]="agree" (change)="agree=$event.target.checked">
+    <button (click)="done=true">{{done?'Done':'Submit'}}</button>
+  </div>
+</div>`})(App);
+const Mod=NgModule({imports:[BrowserModule,CommonModule],declarations:[AppC],bootstrap:[AppC]})(class{});
+platformBrowserDynamic().bootstrapModule(Mod).then(()=>{window.__ready=true;}).catch(e=>{window.__err=String(e);});
+</script></body></html>
