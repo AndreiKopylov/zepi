@@ -271,12 +271,17 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
     if let Some(node) = &node {
         settings["node"] = json!({"path":node,"ignore_system_version":false});
     }
+    // Keep the operator's chosen model across the node->agent.exe migration.
+    let prev_options = settings["agent_servers"]["zepi-pi"]["default_config_options"].clone();
     settings["agent_servers"]["zepi-pi"] = match &agent {
         Some(agent) => json!({"type":"custom","command":agent,"args":[],
             "env":{"ZEPI_ROOT":root,"PI_CODING_AGENT_DIR":env::var("ZEPI_PI_CONFIG_DIR")?}}),
         None => json!({"type":"custom","command":node.unwrap_or_default(),
             "args":[root.join("packages/acp/src/cli.js")],"env":{"ZEPI_ROOT":root,"PI_CODING_AGENT_DIR":env::var("ZEPI_PI_CONFIG_DIR")?}}),
     };
+    if !prev_options.is_null() {
+        settings["agent_servers"]["zepi-pi"]["default_config_options"] = prev_options;
+    }
     std::fs::create_dir_all(path.parent().unwrap())?;
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
     std::fs::write(&temporary, serde_json::to_vec_pretty(&settings)?)?;
