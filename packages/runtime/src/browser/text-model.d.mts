@@ -1,1 +1,0 @@
-export function createBrowserTextModel(directory:string,options?:{runtime?:import('../../../acp/node_modules/@earendil-works/pi-coding-agent/dist/index.js').ModelRuntime}):Promise<import('./ultrafast/types.ts').TextConfig>;

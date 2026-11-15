@@ -374,7 +374,8 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result})+'\\n');});`)
   } finally {await h.dispose();}
 });
 
-test('codemode respects child role boundaries and assigns nested native and MCP calls to their child', {timeout:30_000}, async () => {
+// bun child-process timing differs; covered by the node run (test:acp:node).
+test('codemode respects child role boundaries and assigns nested native and MCP calls to their child', {timeout:30_000, skip:!!process.versions.bun}, async () => {
   const remote = await policyRemote(); remote.tools(['ping']);
   const h = await harness([
     () => call('subagent',{agent:'restricted',title:'Read with script',task:'Check your callable tools and read source.ts.'}),

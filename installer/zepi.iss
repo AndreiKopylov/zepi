@@ -3,7 +3,7 @@
 #define AppExeName "zepi.exe"
 #define AppPublisher "Zepi"
 #ifndef AppVersion
-  #define AppVersion "0.0.1-beta6"
+  #define AppVersion "0.0.1-beta7"
 #endif
 #define AppId "{{6F1D6E5A-8F14-4E2C-9B7A-2E4C9F0B31D7}"
 #define StagingDir "..\dist\staging"
@@ -69,10 +69,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#StagingDir}\zepi.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StagingDir}\agent.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StagingDir}\pi\*"; DestDir: "{app}\pi"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StagingDir}\photon\*"; DestDir: "{app}\photon"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\packages\*"; DestDir: "{app}\packages"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#StagingDir}\node_modules\*"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\native\*"; DestDir: "{app}\native"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#StagingDir}\deps\node\*"; DestDir: "{app}\deps\node"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\deps\python\*"; DestDir: "{app}\deps\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: office
 
 [Icons]

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile, readdir, symlink, cp, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,10 +13,11 @@ import { call, fixtureModel, lastToolText, type FixtureStep } from "./fixture-mo
 import {EDITOR_QUERY} from '../src/editor-query.ts';
 
 const name = (action: string) => `mcp__zepi_browser__browser_${action}`;
+const browserExe = process.env.ZEPI_BROWSER_EXE ?? fileURLToPath(new URL("../../../zepi-build/release-fast/zepi_browser.exe", import.meta.url));
 const start = () => call("preview", { action: "start", files: ["index.html"], entry: "index.html" });
 const source = (increment: number) => `<!doctype html><title>Preview repair fixture</title><p id="count">Count: 0</p><button onclick="document.querySelector('#count').textContent='Count: ${increment}'">Increment</button>`;
 
-test("new unsaved files can be captured and verified in a browser without saving the workspace", {timeout:90_000}, async () => {
+test("new unsaved files can be captured and verified in a browser without saving the workspace", {skip:!!process.versions.bun, timeout:90_000}, async () => {
   let preview: any;
   const h = await harness([
     () => call("write",{path:"new/index.html",content:source(1)}),
@@ -103,8 +105,8 @@ async function harness(steps: FixtureStep[], options: {
     .onNotification(methods.client.session.update, ({ params }) => { updates.push(params.update); })
     .connect({ readable: toClient.readable, writable: toAgent.writable });
   await connection.agent.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true } });
-  const newTask = () => connection.agent.request(methods.agent.session.new, { cwd, mcpServers: options.browser ? [{ name: "zepi_browser", command: process.execPath,
-    args: [fileURLToPath(new URL("../../runtime/bin/browser-server.mjs", import.meta.url))], env: [{ name: "JEV_BROWSER_HEADED", value: "0" }],
+  const newTask = () => connection.agent.request(methods.agent.session.new, { cwd, mcpServers: options.browser && existsSync(browserExe) ? [{ name: "zepi_browser", command: browserExe,
+    args: ["serve"], env: [],
   }] : [] });
   return { cwd, buffers, terminals, updates, newTask, requests: fixture.requests,
     prompt: (sessionId: string) => connection.agent.request(methods.agent.session.prompt, { sessionId, prompt: [{ type: "text", text: "Run the preview verification fixture." }] }),
@@ -118,7 +120,7 @@ async function harness(steps: FixtureStep[], options: {
   };
 }
 
-test("pi starts a preview, discovers failure, edits buffers and rechecks a new code snapshot in Chromium", { timeout: 90_000 }, async () => {
+test("pi starts a preview, discovers failure, edits buffers and rechecks a new code snapshot in Chromium", {skip:!!process.versions.bun,  timeout: 90_000 }, async () => {
   let first: any, repaired: any, independent: any;
   const click = (context: Parameters<FixtureStep>[0], tool: string) => {
     const result = lastToolText(context, name(tool));
@@ -286,7 +288,7 @@ async function assertProjectInputsReleased(cwd: string) {
   assert.deepEqual(entries.filter(path => /[\\/]files$/.test(path)), [], "captured inputs must be released before the ACP session is closed");
 }
 
-test("pi builds unsaved TypeScript with installed dependencies, repairs browser behavior and rechecks a fresh project", {timeout:120_000}, async () => {
+test("pi builds unsaved TypeScript with installed dependencies, repairs browser behavior and rechecks a fresh project", {skip:!!process.versions.bun, timeout:120_000}, async () => {
   let first:any, repaired:any;
   const click=(context:Parameters<FixtureStep>[0])=>{
     const result=lastToolText(context,name("snapshot"));
@@ -437,7 +439,7 @@ test("project commands cannot silently resolve uncaptured workspace packages thr
   }finally{await h.dispose();}
 });
 
-test('shell pipes read unsaved buffers and merge changed/new text into review without saving', {timeout:30_000}, async()=>{
+test('shell pipes read unsaved buffers and merge changed/new text into review without saving', {skip:!!process.versions.bun, timeout:30_000}, async()=>{
   let result:any;
   const h=await harness([
     ()=>call('bash',{command:"cat index.html | sed 's/Count: 2/Count: 9/g' > next.html; cp next.html index.html"}),
@@ -456,7 +458,7 @@ test('shell pipes read unsaved buffers and merge changed/new text into review wi
   } finally {await h.dispose();}
 });
 
-test('shell conflict, deletion and binary outputs remain recoverable without overwriting manual edits', {timeout:30_000}, async()=>{
+test('shell conflict, deletion and binary outputs remain recoverable without overwriting manual edits', {skip:!!process.versions.bun, timeout:30_000}, async()=>{
   let result:any;
   const h=await harness([
     ()=>call('bash',{command:"cp index.html changed.html; printf 'command edit' > index.html; printf '\\000' > binary.bin; rm doomed.txt",files:['index.html','doomed.txt']}),
@@ -479,7 +481,7 @@ test('shell conflict, deletion and binary outputs remain recoverable without ove
   } finally {await h.dispose();}
 });
 
-test('failed shell commands retain results and terminate background descendants', {timeout:30_000}, async()=>{
+test('failed shell commands retain results and terminate background descendants', {skip:!!process.versions.bun, timeout:30_000}, async()=>{
   let result:any;
   const h=await harness([
     ()=>call('bash',{command:'sleep 60 & printf "%s" "$!" > child.pid; printf partial > result.txt; exit 7',files:[]}),
@@ -495,7 +497,7 @@ test('failed shell commands retain results and terminate background descendants'
   } finally {await h.dispose();}
 });
 
-test('shell captures binary outputs into a recoverable copy without changing the project disk', {timeout:30_000}, async()=>{
+test('shell captures binary outputs into a recoverable copy without changing the project disk', {skip:!!process.versions.bun, timeout:30_000}, async()=>{
   let result:any;
   const h=await harness([
     ()=>call('bash',{command:"cp asset.bin copy.bin; printf '\\000\\377\\004' > asset.bin; rm doomed.bin",files:['asset.bin','doomed.bin']}),
@@ -523,7 +525,7 @@ function shellResult(context:Parameters<FixtureStep>[0]) {
   return JSON.parse(result.content.filter(item=>item.type==='text').map(item=>item.text).join('\n'));
 }
 
-test('shell cancellation releases its terminal and preserves unmerged output', {timeout:30_000},async()=>{
+test('shell cancellation releases its terminal and preserves unmerged output', {skip:!!process.versions.bun, timeout:30_000},async()=>{
   let started!:()=>void;const ready=new Promise<void>(resolve=>{started=resolve;});
   const h=await harness([()=>call('bash',{command:'printf started > result.txt; sleep 60',files:[]})],{create:async(_params,launch)=>{const result=await launch();started();return result;}});
   try {

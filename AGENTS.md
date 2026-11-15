@@ -13,13 +13,14 @@ zepi/
 │   ├── appearance.json        # appearance defaults (dark theme, docks)
 │   ├── pi-defaults/           # pi seeds: models.json, settings.json, skills (no secrets)
 │   └── overlay/               # overlay applied on top of Zed sources (as in upstream zepi)
-│       ├── crates/            # modified/new Zed crates (zepi_ui, agent_ui, workspace, zed, ...)
+│       ├── crates/            # modified/new Zed crates (zepi_ui, zepi_browser, agent_ui, workspace, zed, ...)
+│       │   └── zepi_browser/  # native Rust/CDP browser MCP server (chromiumoxide), replaces Node/Playwright
 │       │   └── zepi_ui/src/   # sheet_viewer (xlsx), word_viewer (docx), slides_viewer (pptx)
 │       ├── vendor/            # gridcraft (xlsx), deckcraft (pptx), wordcraft (docx)
 │       └── assets/keymaps/    # default-windows.json (JSONC!) with office viewer bindings
 ├── packages/
 │   ├── acp/                   # ACP adapter: pi as the editor agent (TypeScript)
-│   ├── runtime/               # pi runtime: settings, extensions, browser agent
+│   ├── runtime/               # pi runtime: settings, extensions, browser config
 │   └── tools/                 # doctor/probe utilities
 ├── utils/sheetprobe/      # dev-only xlsx->PNG renderer to calibrate Excel view vs Excel (no Zed rebuild)
 ├── scripts/
@@ -37,7 +38,8 @@ zepi/
 
 - Native: Rust 1.98.1, Zed v1.28.1 (tarball by pin, sha256 verified), gpui; `release-fast` cargo
   profile (debug is unusable: laggy UI); target dir outside the repo.
-- Agent: bundled Node (v24 LTS in the bundle), TypeScript, ACP; browser agent on Playwright Chromium.
+- Agent: bundled Node (v24 LTS in the bundle), TypeScript, ACP; browser on native Rust/CDP
+  (`zepi_browser`, chromiumoxide) driving system Chrome/Edge — no Playwright.
 - Build tools: MSVC v143 + Windows SDK 10.0.26100 + Spectre-mitigated libs v143 (individual Build
   Tools components, not the C++ workload), cmake and nasm in PATH, `.local/msvc-shim/stdalign.h`
   shim for wasmtime-c-api.

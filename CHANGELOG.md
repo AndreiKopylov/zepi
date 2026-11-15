@@ -6,6 +6,28 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.1-beta7] - 2026-11-15
+
+### Changed
+
+- Browser on native Rust/CDP (`zepi_browser`, chromiumoxide); the agent model drives it directly.
+- Agent is a single bun binary (`agent.exe`); run standalone it behaves like the pi CLI.
+
+### Added
+
+- Browser tools: element targeting, press_key, window modes, screenshot-to-file.
+- Pinned bun 1.4.4 for reproducible agent builds; `test:lifecycle`, `test:codemode`.
+
+### Removed
+
+- Node/Playwright/jev browser and the agent's Node runtime + node_modules (~300 MB).
+  MCP uses system bun; language servers/preview use system Node.
+
+### Fixed
+
+- Browser window/screenshot conflicts; closing no longer leaks processes (OS watchdog);
+  codemode worker resolves inside the bun binary.
+
 ## [0.0.1-beta6] - 2026-11-15
 
 ### Added

@@ -1,26 +1,18 @@
-import {piDirectory, runtimeRoot as root, bundledPiEntry} from '../paths.mjs';
+import {piDirectory, runtimeRoot as root} from '../paths.mjs';
+import {ModelRuntime, SettingsManager, readStoredCredential, FileSettingsStorage, AuthStorage, ReadOnlyAuthStorage, ModelConfig, getSupportedThinkingLevels, piManifest} from './embed.mjs';
 import { readFile, writeFile, mkdir, chmod, rename, mkdtemp, rm, access } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { pathToFileURL } from "node:url";
-import { browserCandidates, browserCredentialId, browserDecisionSettings, browserTextCredentialId, browserTextSettings, resolveBrowserExecutable } from "../browser/config.mjs";
-import { spawn } from "node:child_process";
-import { openSync } from "node:fs";
+import { browserCandidates, resolveBrowserExecutable } from "../browser/config.mjs";
 import {runtimeSettings, mergeRuntimeSettings, modelSettings, mergeModelSettings, PiRuntimeSettingsError} from './runtime-settings.mjs';
 import {httpProxyStatus, mergeHttpProxy, PiHttpSettingsError} from './http-settings.mjs';
 import {refreshModelCatalogs} from './model-catalog.mjs';
 
 export class PiConfigError extends Error {}
 
-const piEntry = bundledPiEntry;
-const { ModelRuntime, SettingsManager, readStoredCredential } = await import(piEntry.href);
 // Use pi's own locked credential store and models.json validator. These internal
 // APIs are audited against the exact bundled version, not reimplemented here.
-const { FileSettingsStorage } = await import(new URL("core/settings-manager.js", piEntry).href);
-const { AuthStorage, ReadOnlyAuthStorage } = await import(new URL("core/auth-storage.js", piEntry).href);
-const { ModelConfig } = await import(new URL("core/model-config.js", piEntry).href);
-const { getSupportedThinkingLevels } = await import(pathToFileURL(join(root, "packages/acp/node_modules/@earendil-works/pi-ai/dist/index.js")).href);
-const manifest = JSON.parse(await readFile(new URL("../package.json", piEntry), "utf8"));
+const manifest = piManifest;
 export const bundledVersion = manifest.version;
 if (bundledVersion !== "1.5.2") throw new PiConfigError("Zepi requires bundled pi 1.5.2. Run setup:acp.");
 
@@ -71,16 +63,11 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
     } finally { await rm(temporary, { recursive: true, force: true }); }
   };
 
-  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
   async function browserStatus() {
     const config = (await readJson(join(directory, "settings.json"), {})).zepi?.browser ?? {};
     const resolved = resolveBrowserExecutable(config.executablePath || '');
-    const target = join(dirname(directory), "browsers");
-    const marker = await readJson(join(target, "install.json"), null);
-    let install = "idle";
-    if (marker?.pid) install = alive(marker.pid) ? "installing" : (resolved.source === "zepi" ? "done" : "failed");
     const window = ["normal", "maximized", "fullscreen"].includes(config.window) ? config.window : "fullscreen";
-    return { executablePath: config.executablePath ?? "", path: resolved.path ?? "", source: resolved.source, keepOpen: config.keepOpen === true, window, install, target, candidates: browserCandidates() };
+    return { executablePath: config.executablePath ?? "", path: resolved.path ?? "", source: resolved.source, keepOpen: config.keepOpen === true, window, candidates: browserCandidates() };
   }
 
   async function status(refreshModels = false) {
@@ -106,8 +93,6 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       defaultTools: (await readJson(join(directory, "settings.json"))).defaultTools ?? null,
       runtime: runtimeSettings(manager),
       httpProxy: httpProxyStatus(manager.getGlobalSettings()),
-      browserDecision: await browserDecisionSettings(directory),
-      browserText: await browserTextSettings(directory,modelRuntime),
       browser: await browserStatus(),
       providers, update: await readJson(join(directory, "pi-update.json"), null) };
   }
@@ -170,65 +155,6 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       });
       await chmod(join(directory, "settings.json"), 0o600);
       return status();
-    } else if (operation === "browser-install") {
-      const target = join(dirname(directory), "browsers");
-      const markerPath = join(target, "install.json");
-      const current = await readJson(markerPath, null);
-      if (current?.pid && alive(current.pid)) return status();
-      await mkdir(target, { recursive: true });
-      const log = openSync(join(target, "install.log"), "w");
-      const child = spawn(process.execPath, [join(process.cwd(), "node_modules", "playwright", "cli.js"), "install", "chromium", "chromium-headless-shell"],
-        { detached: true, stdio: ["ignore", log, log], env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: target } });
-      child.unref();
-      await atomicJson(markerPath, { pid: child.pid, startedAt: new Date().toISOString() });
-      return status();
-    } else if (operation === "browser-text") {
-      if(request.removeKey===true&&request.apiUrl===undefined&&request.model===undefined) {
-        await AuthStorage.create(authPath).delete(browserTextCredentialId);
-        await chmod(authPath,0o600);return status();
-      }
-      if(request.source==='pi') {
-        new FileSettingsStorage(directory,directory).withLock('global',current=>{
-          const value=current?JSON.parse(current):{};
-          value.zepi={...value.zepi,browserText:{...value.zepi?.browserText,source:'pi'}};
-          return JSON.stringify(value,null,2)+'\n';
-        });
-        await chmod(join(directory,'settings.json'),0o600);
-        return status();
-      }
-      if(request.source!==undefined&&request.source!=='custom')throw new PiConfigError('Choose the main model or a custom text model.');
-      const apiUrl = text(request.apiUrl, "Text Model Base URL"), model = text(request.model, "Text Model");
-      const url = new URL(apiUrl);
-      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash || url.search) throw new PiConfigError("Enter an HTTP(S) text model base URL without credentials, query or fragment.");
-      const reasoning = request.reasoning ?? 'low';
-      if (!['low','none'].includes(reasoning)) throw new PiConfigError('Choose low or none for text model reasoning.');
-      const key = request.key ? text(request.key, "Text Model API Key") : undefined;
-      if (key?.startsWith('!')) throw new PiConfigError('Use an API key or a $ENV_VAR reference for the text model.');
-      if (request.removeKey === true) await AuthStorage.create(authPath).delete(browserTextCredentialId);
-      else if (key) await AuthStorage.create(authPath).modify(browserTextCredentialId, async () => ({type:'api_key',key}));
-      new FileSettingsStorage(directory, directory).withLock('global', current => {
-        const value = current ? JSON.parse(current) : {};
-        value.zepi = {...value.zepi, browserText:{source:'custom',apiUrl,model,reasoning}};
-        return JSON.stringify(value,null,2)+'\n';
-      });
-      await chmod(join(directory,'settings.json'),0o600);
-      if (key || request.removeKey) await chmod(authPath,0o600);
-    } else if (operation === "browser-decision") {
-      const apiUrl = text(request.apiUrl, "Jev API URL"), model = text(request.model, "Jev model");
-      const url = new URL(apiUrl);
-      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) throw new PiConfigError("Enter an HTTP(S) Jev endpoint without credentials or a fragment.");
-      if (request.engine !== undefined && !['ultrafast','legacy'].includes(request.engine)) throw new PiConfigError('Choose Ultrafast or Legacy browser execution.');
-      const key = request.key ? text(request.key, "Jev API Key") : undefined;
-      if (key?.startsWith("!")) throw new PiConfigError("Use an API key or a $ENV_VAR reference for Jev.");
-      if (request.removeKey === true) await AuthStorage.create(authPath).delete(browserCredentialId);
-      else if (key) await AuthStorage.create(authPath).modify(browserCredentialId, async () => ({type: "api_key", key}));
-      new FileSettingsStorage(directory, directory).withLock("global", current => {
-        const value = current ? JSON.parse(current) : {};
-        value.zepi = {...value.zepi, browserDecision: {apiUrl, model, engine:request.engine ?? value.zepi?.browserDecision?.engine ?? 'ultrafast'}};
-        return JSON.stringify(value, null, 2) + "\n";
-      });
-      await chmod(join(directory, "settings.json"), 0o600);
-      if (key || request.removeKey) await chmod(authPath, 0o600);
     } else if (operation === "defaults") {
       const provider = providerId(request.provider);
       const modelRuntime = await runtime();

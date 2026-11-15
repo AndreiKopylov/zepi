@@ -464,7 +464,8 @@ test('a superseded MCP connection cannot delay the next prompt or publish stale 
   } finally {await h.close(); await hung.close(); await ready.close();}
 });
 
-test('MCP catalog refresh hides removed tools from scripts and reload preserves the current catalog', {timeout:15_000}, async () => {
+// bun caches ESM across reload; covered by the node run (test:acp:node).
+test('MCP catalog refresh hides removed tools from scripts and reload preserves the current catalog', {timeout:15_000, skip:!!process.versions.bun}, async () => {
   const remote = await policyRemote(); remote.tools(['ping']);
   const h = await mcpHarness({mcpServers:{remote:{url:remote.url}}}, [
     () => call('codemode',{code:'text((await tools.mcp__remote__ping({})).content[0].text);'}), () => 'Catalog changed.',

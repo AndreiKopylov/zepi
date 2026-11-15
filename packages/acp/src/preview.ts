@@ -9,11 +9,12 @@ import { defineTool, type Extension, type ToolResultEvent } from "@earendil-work
 import { Type } from "typebox";
 import { captureDependencies, changedDependencies, type Dependencies } from "./preview-dependencies.ts";
 import { workspacePath } from "./workspace-path.ts";
+import { acpRoot, nodeExe } from "./runtime-paths.ts";
 
 const observationKey = "zepi.dev/observeBuffer";
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const text = (value: unknown) => ({ type: "text" as const, text: JSON.stringify(value, null, 2) });
-const projectScript = fileURLToPath(new URL("../helpers/preview/project.mjs", import.meta.url));
+const projectScript = join(acpRoot(), "helpers", "preview", "project.mjs");
 const commandSchema = Type.Object({
   command: Type.String({ minLength: 1, maxLength: 4096 }),
   args: Type.Optional(Type.Array(Type.String({ maxLength: 16384 }), { maxItems: 128 })),
@@ -21,7 +22,7 @@ const commandSchema = Type.Object({
 });
 type Command = { command: string; args?: string[]; timeoutSeconds?: number };
 type ProjectResult = { runId: string; stage: string; checks: unknown[]; url?: string; error?: string };
-const serverScript = fileURLToPath(new URL("../helpers/preview/server.mjs", import.meta.url));
+const serverScript = join(acpRoot(), "helpers", "preview", "server.mjs");
 type Input = { path: string; hash: string; differsFromDisk: boolean };
 type Run = {
   runId: string; cwd: string; toolCallId: string; fingerprint: string; entry?: string; files: Input[]; capturedAt: string;
@@ -283,7 +284,7 @@ export function createPreview(cwd: string, storage: string, sessionId: string, c
         signal?.throwIfAborted();
         // Keep ownership of a late create response so cancellation can release it.
         const terminal = await client.request(methods.client.terminal.create, {
-          sessionId, command: process.execPath, args: [project ? projectScript : serverScript, run.directory, String(process.pid)],
+          sessionId, command: nodeExe(), args: [project ? projectScript : serverScript, run.directory, String(process.pid)],
           cwd: run.directory, outputByteLimit: 8192,
         });
         run.terminalId = terminal.terminalId;

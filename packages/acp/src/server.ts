@@ -20,7 +20,7 @@ import { installPiCommands } from "./pi-commands.ts";
 import { createSubagents } from "./subagents.ts";
 import { installAgentToolPolicy } from "./agent-tools.ts";
 import { configuredMcp } from "../../runtime/src/pi/extensions.mjs";
-import { browserDecisionEnvironment } from "../../runtime/src/browser/config.mjs";
+import { browserEnvironment } from "../../runtime/src/browser/config.mjs";
 import {codemodeImages} from './codemode-images.ts';
 
 export async function startZepiAgent(agentDir: string, sessionDir: string, stream?: Stream, modelRuntime?: ModelRuntime) {
@@ -57,13 +57,13 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         const client = await clientReady;
         let liveSession:AgentSession|undefined;
         let browserForce: (() => void) | undefined;
-        const browserDecision = await browserDecisionEnvironment(agentDir);
+        const browserDecision = await browserEnvironment(agentDir);
         const images = codemodeImages();
         const preview = createPreview(options.cwd, join(agentDir, "previews"), options.sessionManager.getSessionId(), client);
         const shell = createShell(options.cwd, join(agentDir, "commands"), options.sessionManager.getSessionId(), client);
         // Settings are owned by pi. New tasks see credentials/models changed in
         // Zepi's settings without replacing the model of an active conversation.
-        if (!modelRuntime) await runtime.refresh({ allowNetwork: false });
+        await runtime.refresh({ allowNetwork: false });
         // Let pi resolve explicit lists, +/- modifiers, pending registrations and
         // reload additions. Only the absent-setting fallback is Zepi-specific.
         if (options.settingsManager) {
@@ -74,10 +74,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
           const getExtensions = options.resourceLoader.getExtensions.bind(options.resourceLoader);
           options.resourceLoader.getExtensions = () => {
             const loaded = getExtensions();
-            return { ...loaded, extensions: [...loaded.extensions, preview.extension, shell.extension, accessPolicy(()=>liveSession,name=>browser.track(name),{
-              engine:browserDecision.ZEPI_BROWSER_ENGINE,decisionConfigured:!!browserDecision.TYPESAFE_API_KEY,
-              textConfigured:browserDecision.TEXT_MODEL_SOURCE==='pi'||!!browserDecision.TEXT_MODEL_API_KEY,textSource:browserDecision.TEXT_MODEL_SOURCE,
-            })] };
+            return { ...loaded, extensions: [...loaded.extensions, preview.extension, shell.extension, accessPolicy(()=>liveSession,name=>browser.track(name))] };
           };
           const append = options.resourceLoader.getAppendSystemPrompt.bind(options.resourceLoader);
           options.resourceLoader.getAppendSystemPrompt = () => [...append(),
@@ -89,7 +86,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
             "Bundled (the default): `python`, `python3` or `$env:ZEPI_PYTHON`, living in `<ZEPI_ROOT>\\deps\\python`. Has python-docx, openpyxl, python-pptx, pypdf and Pillow, and no pip. Use it for every .docx/.xlsx/.pptx task; never invent a path under %LOCALAPPDATA% and never try `pip` here.",
             "System: reachable only through `py` or `py -3`, if the machine has Python at all. It has pip but none of the Office libraries. Use it for anything else (pandas, requests, scraping) and always create a project venv (`.venv`) with `py -3 -m venv .venv`, installing into the venv rather than the global interpreter. If `py` is not found, tell the user the task needs a system Python instead of silently switching to the bundled one.",
             "fetch_content fetches http(s) URLs only. Local files are read with the read tool.",
-            `For development verification, use preview start with explicit editor files, including unsaved changes. For static HTML/CSS/JS supply an HTML entry. For projects supply commands for checks/builds and a server command; select installed dependency directories to copy into the captured project. Read the project configuration before choosing commands. Commands run in a copy and do not update source buffers. Open its exact URL with the bundled browser tools, observe, interact, then observe the actual result. After a failure, read and repair the files, start a new preview and repeat the check. Capture a screenshot when visual inspection matters. Before reporting completion, use preview status; a stale or unknown input state does not verify current edits. Include the run ID and tested criteria in the result. Preview status and successful browser calls are not acceptance passes. Evidence covers only captured files and copied dependencies. Successful check exits and server reachability alone do not demonstrate correct behavior. Commands that modify captured source invalidate freshness; repair editor buffers and recapture instead. Never install missing dependencies without user authorization. Re-observe after cancellation or user takeover. Stop preview when finished. Project commands and servers also stop automatically when this turn ends. ${browserDecision.ZEPI_BROWSER_KEEP_OPEN === '1' ? "The task browser stays open between turns so a later turn can continue the same page state; it closes when the task closes." : "Zepi automatically closes the task browser when this turn ends or is cancelled; reopen and re-observe in a later turn."} If the target cannot be started with available tools, report missing verification instead of claiming success.`
+            `For development verification, use preview start with explicit editor files, including unsaved changes. For static HTML/CSS/JS supply an HTML entry. For projects supply commands for checks/builds and a server command; select installed dependency directories to copy into the captured project. Read the project configuration before choosing commands. Commands run in a copy and do not update source buffers. Open its exact URL with the bundled browser tools, observe, interact, then observe the actual result. After a failure, read and repair the files, start a new preview and repeat the check. Capture a screenshot when visual inspection matters. Before reporting completion, use preview status; a stale or unknown input state does not verify current edits. Include the run ID and tested criteria in the result. Preview status and successful browser calls are not acceptance passes. Evidence covers only captured files and copied dependencies. Successful check exits and server reachability alone do not demonstrate correct behavior. Commands that modify captured source invalidate freshness; repair editor buffers and recapture instead. Never install missing dependencies without user authorization. Re-observe after cancellation or user takeover. Stop preview when finished. Project commands and servers also stop automatically when this turn ends. ${browserDecision.keepOpen ? "The task browser stays open between turns so a later turn can continue the same page state; it closes when the task closes." : "Zepi automatically closes the task browser when this turn ends or is cancelled; reopen and re-observe in a later turn."} If the target cannot be started with available tools, report missing verification instead of claiming success.`
           ];
         }
         const created = await createAgentSession({
@@ -132,7 +129,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         Object.defineProperty(created.session, DELIVERY, {value:ledger});
         const dispose = created.session.dispose.bind(created.session);
         created.session.dispose = () => { browserForce?.(); disposeImages(); ledger.dispose(); if(deliveries.get(created.session.sessionId)===ledger)deliveries.delete(created.session.sessionId); dispose(); };
-        const browser = browserLifecycle(created.session, {keepOpen: browserDecision.ZEPI_BROWSER_KEEP_OPEN === '1'});
+        const browser = browserLifecycle(created.session, {keepOpen: browserDecision.keepOpen});
         browserForce = () => { void browser.close(true).catch(error => console.error("Zepi browser cleanup failed:", error)); };
         const prompt = created.session.prompt.bind(created.session);
         created.session.prompt = async (...args) => {
@@ -165,7 +162,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         const decisionTools = new Set(["do", "check", "choose"].map(name => `mcp__zepi_browser__browser_${name}`));
         let toolPolicy: ReturnType<typeof installAgentToolPolicy>;
         try { toolPolicy = installAgentToolPolicy(created.session, child ? child.role?.tools ?? ["read"] : undefined,
-          tool => !!browserDecision.TYPESAFE_API_KEY || !decisionTools.has(tool.name)); }
+          tool => !decisionTools.has(tool.name)); }
         catch (error) {created.session.dispose(); throw error;}
         const reload = created.session.reload.bind(created.session);
         created.session.reload = async (...args) => {

@@ -153,7 +153,8 @@ test('plugin command history retains order, cancellation and identity without mo
   } finally {release();await h.dispose();}
 });
 
-test('pi argument callbacks and stacked autocomplete providers use the native completion RPC without sending a prompt', {timeout: 20_000}, async () => {
+// bun caches ESM across reload; covered by the node run (test:acp:node).
+test('pi argument callbacks and stacked autocomplete providers use the native completion RPC without sending a prompt', {timeout: 20_000, skip:!!process.versions.bun}, async () => {
   const h = await harness([], {
     native: async () => ({handled: true}), form: async () => ({action: 'cancel'}),
     setup: async cwd => {
@@ -417,7 +418,8 @@ test("model shortlist saves global pi preferences and rejects unmatched patterns
   } finally { await h.dispose(); }
 });
 
-test("reload reports broken extensions, removes stale commands, and recovers native dialogs", {timeout: 30_000}, async () => {
+// bun caches ESM across reload; covered by the node run (test:acp:node).
+test("reload reports broken extensions, removes stale commands, and recovers native dialogs", {timeout: 30_000, skip:!!process.versions.bun}, async () => {
   const source = `export default pi => pi.registerCommand("reload-check", {
     description: "Reload fixture", handler: async (_args, ctx) => {
       const confirmed = await ctx.ui.confirm("Reload confirmation", "Continue?");
@@ -445,7 +447,8 @@ test("reload reports broken extensions, removes stale commands, and recovers nat
   } finally { await h.dispose(); }
 });
 
-test("exports use pi formats, refuse overwrite and clean temporary files; changelog is bundled", {timeout: 30_000}, async () => {
+// bun: pi asset/theme resolution differs; covered by test:acp:node.
+test("exports use pi formats, refuse overwrite and clean temporary files; changelog is bundled", {timeout: 30_000, skip:!!process.versions.bun}, async () => {
   const h = await harness();
   try {
     const a = await h.newTask();
@@ -947,7 +950,7 @@ test("all bundled pi commands are discoverable and native quit follows command j
   } finally {await h.dispose();}
 });
 
-test("sharing prepares a local artifact and cancellation never publishes", async () => {
+test("sharing prepares a local artifact and cancellation never publishes", {skip:!!process.versions.bun}, async () => {
   let selection='Export locally';
   let confirmations=0;
   const h=await harness([()=> 'Share fixture response'],{setup:async cwd=>{
@@ -1004,7 +1007,7 @@ test("bug reports use pi's local ZIP format and exclude transcript by default", 
   } finally {await h.dispose();}
 });
 
-test("Radius sharing and bug upload require confirmation and use pi payloads", async t => {
+test("Radius sharing and bug upload require confirmation and use pi payloads", {skip:!!process.versions.bun}, async t => {
   let allow=false, confirmations=0;
   const uploads:{url:string;body:unknown}[]=[];
   t.mock.method(globalThis,'fetch',async (input: string|URL|Request, init?:RequestInit) => {
@@ -1132,7 +1135,7 @@ test('pi extension UI mirrors native drafts and keeps widgets and controls sessi
   } finally {await h.dispose();}
 });
 
-test('pi custom component commands use the same ACP session and return to native conversation', {timeout:30_000}, async()=>{
+test('pi custom component commands use the same ACP session and return to native conversation', {timeout:30_000, skip:!!process.versions.bun}, async()=>{
   let child:ChildProcessWithoutNullStreams|undefined, exited:Promise<unknown>|undefined;
   let owner='',released=0;
   const h=await harness([],{
@@ -1179,7 +1182,7 @@ test('pi custom component commands use the same ACP session and return to native
   } finally {child?.kill();await h.dispose();}
 });
 
-test('native passive components rerender with width and status, and dispose on replace and reload', {timeout:30_000}, async()=>{
+test('native passive components rerender with width and status, and dispose on replace and reload', {timeout:30_000, skip:!!process.versions.bun}, async()=>{
   const actions:{sessionId:string;action:string;data:Record<string,any>}[]=[];
   const h=await harness([],{
     setup:async cwd=>{
@@ -1450,7 +1453,7 @@ test('pi extension shortcuts use native drafts and reject stale, repeated and cr
   }finally{await h.dispose();}
 });
 
-test('custom pi editors share native drafts, filter raw input, submit once and clean up on reload',{timeout:30_000},async()=>{
+test('custom pi editors share native drafts, filter raw input, submit once and clean up on reload',{timeout:30_000, skip:!!process.versions.bun},async()=>{
   const terminals=new Map<string,{child:ChildProcessWithoutNullStreams;exited:Promise<unknown>;output:string}>();
   const actions:{action:string;data:Record<string,any>}[]=[];
   let revision=1,text='中文 draft',generation='',mounted:string|undefined,released=0;

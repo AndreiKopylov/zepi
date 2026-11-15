@@ -39,3 +39,4 @@ try {
   process.removeListener('SIGTERM',cancel);
   await flushRawStdout();
 }
+process.exit(0);

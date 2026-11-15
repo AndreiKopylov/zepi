@@ -1,4 +1,5 @@
-import {piDirectory, runtimeRoot as root, bundledPiEntry} from '../paths.mjs';
+import {piDirectory, runtimeRoot as root} from '../paths.mjs';
+import {DefaultPackageManager, SettingsManager, parseFrontmatter, FileSettingsStorage} from './embed.mjs';
 import {validateMcp, credentials, usesOAuth} from '../mcp/config.mjs';
 import {readMcpStatus, mcpRevision} from '../mcp/status.mjs';
 export {validateMcp, configuredMcp} from '../mcp/config.mjs';
@@ -7,9 +8,6 @@ import { renameWithRetry } from "../fs/rename.mjs";
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-const entry = bundledPiEntry;
-const { DefaultPackageManager, SettingsManager, parseFrontmatter } = await import(entry.href);
-const { FileSettingsStorage } = await import(new URL("core/settings-manager.js", entry).href);
 import lockfile from 'proper-lockfile';
 const revisionOf = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const sourceOf = value => typeof value === "string" ? value : value.source;

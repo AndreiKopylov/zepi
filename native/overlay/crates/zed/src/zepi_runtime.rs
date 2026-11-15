@@ -5,7 +5,7 @@ use std::{env, path::{Path, PathBuf}};
 /// Called from main before the application starts threads or resolves resources.
 /// A bundle carries code/resources only; all mutable state lives in user storage.
 /// Product version shown in the About window and by the installer.
-pub const PRODUCT_VERSION: &str = "0.0.1-beta6";
+pub const PRODUCT_VERSION: &str = "0.0.1-beta7";
 
 // Assign this process to a job with KILL_ON_JOB_CLOSE so the OS terminates
 // leftover children (language servers, agents, terminals) on any exit path.
@@ -68,6 +68,11 @@ pub fn configure() -> Result<Option<PathBuf>> {
             // Bundled node in <root>/deps/node and browsers in <root>/deps/browsers stay
             // with the executable; state location is resolved below.
             let exe_dir = executable.parent().expect("executable has a parent").to_path_buf();
+            let agent_exe = exe_dir.join("agent.exe");
+            if agent_exe.is_file() {
+                // SAFETY: startup is single-threaded, before GPUI/runtime worker creation.
+                unsafe { env::set_var("ZEPI_AGENT", &agent_exe); }
+            }
             // Dev checkouts (zepi-root.txt next to the exe) keep state beside the exe.
             // An installed bundle stores state in LOCALAPPDATA so updates never
             // overwrite threads and settings; runtime payload stays with the exe.
@@ -167,7 +172,12 @@ pub fn configure() -> Result<Option<PathBuf>> {
 
 pub fn prepare_settings(directory: &Path) -> Result<()> {
     let root = PathBuf::from(env::var_os("ZEPI_ROOT").context("Missing bundled runtime")?);
-    let node = env::var("ZEPI_NODE")?;
+    let node = env::var("ZEPI_NODE").ok();
+    let agent = env::var("ZEPI_AGENT").ok().filter(|p| Path::new(p).is_file()).or_else(|| {
+        let beside = root.join("agent.exe");
+        beside.is_file().then(|| beside.to_string_lossy().into_owned())
+    });
+    ensure!(node.is_some() || agent.is_some(), "Bundled agent runtime is incomplete");
     let pi = PathBuf::from(env::var_os("ZEPI_PI_CONFIG_DIR").context("Missing pi config dir")?);
     std::fs::create_dir_all(&pi)?;
     // Ship provider/model defaults with the repo; never overwrite user edits.
@@ -258,9 +268,15 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
     // zepi knobs: composer height and the office viewers
     merge(&mut settings, &json!({"zepi":{"agent":{"threadLineHeight":1.5,"composer":{"minLines":5,"maxLines":12}},
         "office":{"reloadDebounceMs":600,"raster":{"cacheCap":12,"maxPixels":6000000},"pageGap":14,"zoomStep":10,"sheet":{"fontScale":1.3333}}}}));
-    settings["node"] = json!({"path":node,"ignore_system_version":false});
-    settings["agent_servers"]["zepi-pi"] = json!({"type":"custom","command":node,
-        "args":[root.join("packages/acp/src/cli.js")],"env":{"ZEPI_ROOT":root,"PI_CODING_AGENT_DIR":env::var("ZEPI_PI_CONFIG_DIR")?}});
+    if let Some(node) = &node {
+        settings["node"] = json!({"path":node,"ignore_system_version":false});
+    }
+    settings["agent_servers"]["zepi-pi"] = match &agent {
+        Some(agent) => json!({"type":"custom","command":agent,"args":[],
+            "env":{"ZEPI_ROOT":root,"PI_CODING_AGENT_DIR":env::var("ZEPI_PI_CONFIG_DIR")?}}),
+        None => json!({"type":"custom","command":node.unwrap_or_default(),
+            "args":[root.join("packages/acp/src/cli.js")],"env":{"ZEPI_ROOT":root,"PI_CODING_AGENT_DIR":env::var("ZEPI_PI_CONFIG_DIR")?}}),
+    };
     std::fs::create_dir_all(path.parent().unwrap())?;
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
     std::fs::write(&temporary, serde_json::to_vec_pretty(&settings)?)?;

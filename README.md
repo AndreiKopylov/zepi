@@ -43,15 +43,18 @@ Settings, sessions and skills live in `%LOCALAPPDATA%\Zepi`; updates never touch
 
 - Windows 10/11 x64.
 - A model provider (any OpenAI-compatible endpoint, or one of pi's built-in providers).
-- For the agent's browser tools: a system Chrome or Edge, or install the pinned Chromium on demand from the `Browser use` settings page.
-- No system Node.js, Python or git required — everything is bundled.
+- For the agent's browser tools: a system Chrome or Edge. The browser is driven by a native
+  Rust/CDP engine (`zepi_browser`, chromiumoxide) — no Playwright or bundled Chromium download.
+- The editor and agent need no system runtime (the agent is a bundled bun binary). Optional
+  features use system tools: Node.js for language servers/preview, bun for MCP servers. Python is bundled.
 
 ## How it is built
 
 ```
 zepi.exe                 editor + agent host (Rust: Zed plus the Zepi overlay)
-packages/, node_modules/ ACP adapter and pi
-deps/node/               Node 24 for the agent
+agent.exe                bun binary: ACP adapter + pi, no Node at runtime
+zepi_browser.exe         native Rust/CDP browser, an MCP server (chromiumoxide)
+packages/                adapter/runtime sources + preview helpers
 deps/python/             CPython 3.13 with document libraries
 native/                  appearance, pi defaults, skills
 ```
@@ -120,7 +123,9 @@ Values are re-read when the file changes; no restart is needed.
   which Zepi descends.
 - [Mario Zechner](https://github.com/badlogic/pi-mono) — the pi agent and the ACP protocol.
 - [storytold](https://github.com/storytold) — gridcraft, deckcraft, wordcraft (document engines).
-- The Node.js, Playwright and crate/npm dependency communities.
+- [chromiumoxide](https://github.com/mattsse/chromiumoxide) — the Rust CDP driver behind `zepi_browser`.
+- [browser-use](https://github.com/browser-use) — the page text-model helpers (MIT).
+- The Node.js and crate/npm dependency communities.
 
 ## License
 

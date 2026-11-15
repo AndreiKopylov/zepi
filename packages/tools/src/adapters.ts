@@ -1,12 +1,6 @@
 import { existsSync, constants, accessSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { browserDirectory } from "../../runtime/src/paths.mjs";
-import { browserDecisionSettings } from "../../runtime/src/browser/config.mjs";
-
-const require = createRequire(import.meta.url);
-export const browserCachePath = browserDirectory();
 
 export interface Adapter {
   id: string;
@@ -41,37 +35,39 @@ export function findExecutable(command: string): string | undefined {
   });
 }
 
-export function browserAdapter(cwd: string, headed = false): Adapter {
-  const pkg = packageInfo("jev-browser");
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
+
+export function findZepiBrowser(): string | undefined {
+  const exe = process.platform === "win32" ? "zepi_browser.exe" : "zepi_browser";
+  const candidates = [
+    process.env.ZEPI_BROWSER_EXE,
+    join(repoRoot, "..", "zepi-build", "release-fast", exe),
+    join(repoRoot, "..", "zepi-build", "debug", exe),
+    "C:/Llm/zepi/" + exe,
+  ].filter(Boolean) as string[];
+  return candidates.find((p) => existsSync(p));
+}
+
+export function browserAdapter(cwd: string): Adapter {
   return {
-    id: "jev-browser", surface: "browser", version: pkg.version,
-    command: process.execPath,
-    args: [fileURLToPath(new URL("../../runtime/bin/browser-server.mjs", import.meta.url))], cwd,
+    id: "zepi-browser", surface: "browser", version: "chromiumoxide",
+    command: findZepiBrowser() ?? "zepi_browser",
+    args: ["serve"], cwd,
     env: {
-      JEV_BROWSER_HEADED: headed ? "1" : "0",
-      JEV_BROWSER_LOG: "0",
-      PLAYWRIGHT_BROWSERS_PATH: browserCachePath,
       ZEPI_PI_CONFIG_DIR: process.env.ZEPI_PI_CONFIG_DIR ?? fileURLToPath(new URL("../../../.local/zepi", import.meta.url)),
     },
   };
 }
 
 export async function doctor() {
-  const pkg = packageInfo("jev-browser");
-  const decision = await browserDecisionSettings(process.env.ZEPI_PI_CONFIG_DIR ?? fileURLToPath(new URL("../../../.local/zepi", import.meta.url)));
-  process.env.PLAYWRIGHT_BROWSERS_PATH = browserCachePath;
-  const module = await import(require.resolve("playwright", { paths: [pkg.root] }));
-  const playwright = module.default ?? module;
-  const chromium = playwright.chromium.executablePath() as string;
+  const binary = findZepiBrowser();
   return {
     node: process.version,
     pi: JSON.parse(readFileSync(new URL("../../acp/node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url), "utf8")).version,
     browser: {
-      package: `jev-browser@${pkg.version}`,
-      control: existsSync(chromium) ? "available_unprobed" : "missing_chromium",
-      decisionModel: decision.credential === "none" ? "configure_in_pi_settings" : "key_present_unverified",
-      decision,
-      chromium,
+      engine: "chromiumoxide",
+      binary: binary ?? "missing",
+      control: binary ? "available_unprobed" : "missing_binary",
     },
   };
 }

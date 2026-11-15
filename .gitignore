@@ -57,3 +57,7 @@ __pycache__/
 /.local/downloads/
 scripts/deploy-bundle.ps1
 packages/acp/src/cli.js
+
+# generated bun worker shims (build-agent.cmd)
+packages/acp/src/extensions/codemode/worker.ts
+packages/acp/src/utils/image-resize-worker.ts
