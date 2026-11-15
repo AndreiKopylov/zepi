@@ -16,7 +16,7 @@ use gpui::{
 };
 use gridcraft_core::{CellRef, Value};
 use gridcraft_model::style::{PatternType, StyleId};
-use gridcraft_model::workbook::Workbook;
+use gridcraft_model::workbook::{RichRun, RichString, Workbook};
 use gridcraft_model::{Cell, Formula};
 use gridcraft_numfmt::{NumberFormat, format_value};
 use gridcraft_xlsx::{read_xlsx, write_xlsx};
@@ -97,6 +97,31 @@ fn shape_width(ts: &WindowTextSystem, text: &str, font: &gpui::Font, size: Pixel
         ts.shape_line(SharedString::from(text), size, &[run], None)
             .width(),
     )
+}
+
+fn splice_runs(runs: &mut Vec<RichRun>, old: &str, new: &str) {
+    let oc: Vec<char> = old.chars().collect();
+    let nc: Vec<char> = new.chars().collect();
+    let mut p = 0;
+    while p < oc.len() && p < nc.len() && oc[p] == nc[p] { p += 1; }
+    let mut s = 0;
+    while s < oc.len() - p && s < nc.len() - p && oc[oc.len() - 1 - s] == nc[nc.len() - 1 - s] { s += 1; }
+    let mut attrs: Vec<RichRun> = Vec::new();
+    for r in runs.iter() { for _ in r.text.chars() { attrs.push(RichRun { text: String::new(), ..r.clone() }); } }
+    while attrs.len() < oc.len() { attrs.push(runs.last().cloned().unwrap_or_default()); }
+    let ins = if p > 0 { attrs[p - 1].clone() } else { attrs.first().cloned().unwrap_or_default() };
+    let mut na: Vec<RichRun> = attrs[..p].to_vec();
+    for _ in 0..(nc.len() - p - s) { na.push(ins.clone()); }
+    na.extend_from_slice(&attrs[oc.len() - s..]);
+    let mut out: Vec<RichRun> = Vec::new();
+    let mut cur: Option<RichRun> = None;
+    let mut buf = String::new();
+    for (ch, at) in nc.iter().zip(na.iter()) {
+        let same = cur.as_ref().map(|c| c.bold == at.bold && c.italic == at.italic && c.underline == at.underline && c.strike == at.strike && c.color == at.color && c.size == at.size && c.font == at.font).unwrap_or(false);
+        if same { buf.push(*ch); } else { if let Some(c) = cur.take() { if !buf.is_empty() { out.push(RichRun { text: buf.clone(), ..c }); } } buf.clear(); buf.push(*ch); cur = Some(at.clone()); }
+    }
+    if let Some(c) = cur { if !buf.is_empty() { out.push(RichRun { text: buf, ..c }); } }
+    *runs = out;
 }
 
 fn edit_font(name: &str, bold: bool, italic: bool) -> gpui::Font {
@@ -371,6 +396,8 @@ pub struct SheetView {
     search_open: bool,
     search_editor: Option<Entity<Editor>>,
     cell_editor: Option<Entity<Editor>>,
+    edit_runs: Vec<RichRun>,
+    edit_prev: String,
     focus_search_on_render: bool,
     refocus_root: bool,
     search_matches: Vec<(u32, u32, usize, usize)>,
@@ -389,6 +416,10 @@ pub struct SheetView {
     edit_font_cur: gpui::Font,
     caret_on: bool,
     edit_drag: bool,
+    edit_align: u8,
+    edit_layout: Vec<(f32, f32, Vec<(usize, usize, f32, f32, Vec<f32>)>)>,
+    edit_origin: std::sync::Arc<std::sync::Mutex<(f32, f32)>>,
+    edit_mouse: Option<(f32, f32)>,
     caret_task: Option<Task<()>>,
 }
 
@@ -425,6 +456,8 @@ impl SheetView {
             search_open: false,
             search_editor: None,
             cell_editor: None,
+            edit_runs: Vec::new(),
+            edit_prev: String::new(),
             focus_search_on_render: false,
             refocus_root: false,
             search_matches: Vec::new(),
@@ -442,6 +475,10 @@ impl SheetView {
             edit_font_cur: gpui::Font::default(),
             caret_on: true,
             edit_drag: false,
+            edit_align: 0,
+            edit_layout: Vec::new(),
+            edit_origin: std::sync::Arc::new(std::sync::Mutex::new((0.0, 0.0))),
+            edit_mouse: None,
             caret_task: None,
         };
         // Worktree events can be missed when a writer replaces the file (Office and
@@ -846,26 +883,23 @@ impl SheetView {
     }
 
     /// Caret bar position inside the edit overlay, measured by text shaping.
-    fn edit_lines(&self, inner_w: f32, window: &Window) -> Vec<gpui::WrappedLine> {
+    fn edit_lines(&self, inner_w: f32, window: &Window) -> Vec<String> {
         let ts = window.text_system();
-        let run = gpui::TextRun {
-            len: self.edit_buffer.len(),
-            font: self.edit_font_cur.clone(),
-            color: gpui::black(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        ts.shape_text(
-            SharedString::from(self.edit_buffer.clone()),
-            px(self.edit_font_px.max(6.0)),
-            &[run],
-            Some(px(inner_w.max(10.0))),
-            None,
-        )
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+        let font = &self.edit_font_cur;
+        let size = px(self.edit_font_px.max(6.0));
+        let mut out = Vec::new();
+        for para in self.edit_buffer.split('\n') {
+            let mut cur = String::new();
+            let mut curw = 0.0f32;
+            for word in para.split_inclusive(' ') {
+                let w = shape_width(ts, word, font, size);
+                if curw + w > inner_w && !cur.is_empty() { out.push(cur.clone()); cur.clear(); curw = 0.0; }
+                cur.push_str(word);
+                curw += w;
+            }
+            out.push(cur);
+        }
+        out
     }
 
     fn caret_pos(&self, left: f32, top: f32, width: f32, font_size: f32, window: &Window) -> (f32, f32) {
@@ -877,7 +911,7 @@ impl SheetView {
         let lines = self.edit_lines(inner_w, window);
         let mut pos = 0usize;
         for (idx, line) in lines.iter().enumerate() {
-            let lc = line.text.chars().count();
+            let lc = line.chars().count();
             if self.edit_caret <= pos + lc {
                 let prefix: String = self.edit_buffer.chars().skip(pos).take(self.edit_caret - pos).collect();
                 let w = shape_width(ts, &prefix, font, size);
@@ -890,31 +924,24 @@ impl SheetView {
     }
 
     /// Map a click inside the edit overlay to a caret offset using the same wrapped layout as the render.
-    fn click_caret(&self, x: f32, y: f32, width: f32, window: &Window, _cx: &App) -> usize {
-        let font_px = self.edit_font_px.max(6.0);
-        let ts = window.text_system();
-        let inner_w = (width - 6.0).max(10.0);
-        let line_h = font_px * 1.25;
-        let clicked = (((y - 1.0) / line_h).floor() as i32).max(0) as usize;
-        let lines = self.edit_lines(inner_w, window);
-        let mut pos = 0usize;
-        for (idx, line) in lines.iter().enumerate() {
-            let lc = line.text.chars().count();
-            if idx == clicked {
-                let target = (x - 3.0).max(0.0);
-                let mut lo = 0usize;
-                let mut hi = lc;
-                while lo < hi {
-                    let mid = (lo + hi) / 2;
-                    let pref: String = line.text.chars().take(mid).collect();
-                    if shape_width(ts, &pref, &self.edit_font_cur, px(font_px)) < target { lo = mid + 1; } else { hi = mid; }
+    fn click_caret(&self, x: f32, y: f32, _width: f32, _window: &Window, _cx: &App) -> usize {
+        let n = self.edit_buffer.chars().count();
+        for (ly, lh, words) in &self.edit_layout {
+            if y >= *ly && y < *ly + *lh {
+                for (cs, ce, wx, ww, xs) in words {
+                    if x >= *wx && x < *wx + *ww {
+                        let rel = x - wx;
+                        let mut k = xs.iter().rposition(|&v| v <= rel).unwrap_or(0);
+                        if k + 1 < xs.len() && (rel - xs[k]) > (xs[k + 1] - rel) { k += 1; }
+                        return (cs + k).min(*ce).min(n);
+                    }
                 }
-                return pos + lo;
+                if let Some(last) = words.last() { return last.1.min(n); }
+                if let Some(first) = words.first() { return first.0.min(n); }
             }
-            pos += lc;
-            if self.edit_buffer.chars().nth(pos) == Some('\n') { pos += 1; }
         }
-        self.edit_buffer.chars().count()
+        if y < 0.0 { return 0; }
+        n
     }
 
     fn zoom_reset(&mut self, cx: &mut Context<Self>) {
@@ -1099,7 +1126,7 @@ impl SheetView {
         let text = self.bar_text(cx);
         self.edit_row = self.sel_row;
         self.edit_col = self.sel_col;
-        self.edit_buffer = text;
+        self.edit_buffer = text.clone();
         self.edit_caret = self.edit_buffer.chars().count();
         self.edit_sel_anchor = None;
         self.caret_on = true;
@@ -1112,21 +1139,22 @@ impl SheetView {
                         .get(sheet.style_id(CellRef::new(self.edit_row, self.edit_col)));
                     self.edit_font_px = (st.font.size * 4.0 / 3.0 * self.zoom).clamp(8.0, 40.0);
                     self.edit_font_cur = edit_font(&st.font.name, st.font.bold, st.font.italic);
+                    self.edit_align = match st.align.h { gridcraft_model::style::HAlign::Center | gridcraft_model::style::HAlign::CenterAcross => 1, gridcraft_model::style::HAlign::Right | gridcraft_model::style::HAlign::Fill | gridcraft_model::style::HAlign::Justify => 2, _ => 0 };
                 }
             }
         }
-        let editor = cx.new(|cx| Editor::auto_height_unbounded(1, window, cx));
-        let t = self.edit_buffer.clone();
-        editor.update(cx, |ed, cx| {
-            ed.set_text(t, window, cx);
-            ed.set_cursor_shape(language::CursorShape::Bar, cx);
-            ed.set_use_selection_highlight(false);
-            ed.move_to_end(&editor::actions::MoveToEnd, window, cx);
-        });
-        let fh = editor.focus_handle(cx);
-        window.on_next_frame(move |window, cx| { window.focus(&fh, cx); });
-        self.cell_editor = Some(editor);
+        self.edit_runs = {
+            let item = self.item.read(cx);
+            let mut found = None;
+            if let Some(wb) = item.wb.as_ref() {
+                if let Some(rs) = wb.rich.iter().find(|r| r.text == text) { found = Some(rs.runs.clone()); }
+            }
+            found.unwrap_or_else(|| vec![RichRun { text: text.clone(), ..Default::default() }])
+        };
+        self.edit_prev = text.clone();
         self.editing = true;
+        let fh = self.focus_handle.clone();
+        window.on_next_frame(move |window, cx| { window.focus(&fh, cx); });
         cx.notify();
     }
 
@@ -1135,7 +1163,7 @@ impl SheetView {
             cx.notify();
             return;
         }
-        let text = self.cell_editor.as_ref().map(|e| e.read(cx).text(cx)).unwrap_or_else(|| self.edit_buffer.clone());
+        let text = self.edit_buffer.clone();
         self.cell_editor = None;
         self.editing = false;
         self.refocus_root = true;
@@ -1154,6 +1182,10 @@ impl SheetView {
                         let old = sheet.cell(at).cloned();
                         let new = parse_cell_text(&text, style);
                         sheet.set_cell(at, new.clone());
+                        let wb = item.wb.as_mut().unwrap();
+                        wb.rich.retain(|r| r.text != current && r.text != text);
+                        let has_ov = self.edit_runs.iter().any(|r| r.bold || r.italic || r.underline || r.strike || r.color.is_some() || r.size.is_some() || r.font.is_some());
+                        if has_ov && !text.is_empty() { wb.rich.push(RichString { text: text.clone(), runs: self.edit_runs.clone() }); }
                         self.undo_stack.push(SheetOp::Cells(vec![(at, old, Some(new))]));
                         self.redo_stack.clear();
                         item.dirty = true;
@@ -1196,6 +1228,108 @@ impl SheetView {
         self.edit_sel_anchor = Some(self.edit_caret);
         self.edit_buffer = chars.into_iter().collect();
         cx.notify();
+    }
+
+    fn edit_sel_range(&self) -> Option<(usize, usize)> {
+        self.edit_sel_anchor.map(|a| (a.min(self.edit_caret), a.max(self.edit_caret))).filter(|(a, b)| a < b)
+    }
+
+    fn edit_set_text(&mut self, new: String, caret: usize, anchor: Option<usize>, cx: &mut Context<Self>) {
+        splice_runs(&mut self.edit_runs, &self.edit_buffer, &new);
+        self.edit_prev = new.clone();
+        self.edit_buffer = new;
+        self.edit_caret = caret;
+        self.edit_sel_anchor = anchor;
+        cx.notify();
+    }
+
+    fn edit_insert(&mut self, text: &str, cx: &mut Context<Self>) {
+        let chars: Vec<char> = self.edit_buffer.chars().collect();
+        let n = chars.len();
+        let (s, e) = self.edit_sel_range().unwrap_or((self.edit_caret.min(n), self.edit_caret.min(n)));
+        let mut nc: Vec<char> = chars[..s].to_vec();
+        nc.extend(text.chars());
+        nc.extend_from_slice(&chars[e..]);
+        let caret = s + text.chars().count();
+        self.edit_set_text(nc.into_iter().collect(), caret, None, cx);
+    }
+
+    fn edit_delete(&mut self, back: bool, cx: &mut Context<Self>) {
+        let chars: Vec<char> = self.edit_buffer.chars().collect();
+        let n = chars.len();
+        let (s, e, caret) = if let Some((s, e)) = self.edit_sel_range() {
+            (s, e, s)
+        } else if back {
+            let c = self.edit_caret.min(n);
+            if c == 0 { return; }
+            (c - 1, c, c - 1)
+        } else {
+            let c = self.edit_caret.min(n);
+            if c == n { return; }
+            (c, c + 1, c)
+        };
+        let mut nc: Vec<char> = chars[..s].to_vec();
+        nc.extend_from_slice(&chars[e..]);
+        self.edit_set_text(nc.into_iter().collect(), caret, None, cx);
+    }
+
+    fn edit_move(&mut self, dir: &str, shift: bool, _window: &Window, cx: &mut Context<Self>) {
+        let n = self.edit_buffer.chars().count();
+        let mut caret = self.edit_caret.min(n);
+        let anchor = if shift { self.edit_sel_anchor.or(Some(self.edit_caret)) } else { None };
+        let lay = &self.edit_layout;
+        let cur = lay.iter().rposition(|(_, _, w)| w.first().map(|f| f.0 <= caret).unwrap_or(false)).unwrap_or(0);
+        let first = lay[cur].2.first().map(|f| f.0).unwrap_or(0);
+        let last = lay[cur].2.last().map(|f| f.1).unwrap_or(first);
+        let col = caret.saturating_sub(first);
+        match dir {
+            "left" => caret = caret.saturating_sub(1),
+            "right" => caret = (caret + 1).min(n),
+            "home" => caret = first,
+            "end" => caret = last,
+            "up" => if cur > 0 { let t = &lay[cur - 1].2; let tf = t.first().map(|f| f.0).unwrap_or(0); let tl = t.last().map(|f| f.1).unwrap_or(tf); caret = (tf + col).min(tl); },
+            "down" => if cur + 1 < lay.len() { let t = &lay[cur + 1].2; let tf = t.first().map(|f| f.0).unwrap_or(0); let tl = t.last().map(|f| f.1).unwrap_or(tf); caret = (tf + col).min(tl); },
+            _ => {}
+        }
+        self.edit_caret = caret.min(n);
+        self.edit_sel_anchor = anchor;
+        cx.notify();
+    }
+
+    fn edit_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let k = &ev.keystroke;
+        let m = k.modifiers;
+        let key = k.key.as_str();
+        if m.control || m.platform {
+            match key {
+                "a" => { self.edit_sel_anchor = Some(0); self.edit_caret = self.edit_buffer.chars().count(); cx.notify(); return true; }
+                "c" | "x" => {
+                    if let Some((s, e)) = self.edit_sel_range() {
+                        let t: String = self.edit_buffer.chars().skip(s).take(e - s).collect();
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(t));
+                        if key == "x" { self.edit_delete(false, cx); }
+                    }
+                    return true;
+                }
+                "v" => { if let Some(item) = cx.read_from_clipboard() { if let Some(t) = item.text() { self.edit_insert(&t, cx); } } return true; }
+                _ => return false,
+            }
+        }
+        match key {
+            "enter" | "tab" => { self.commit_edit(cx); true }
+            "escape" => { self.cancel_edit(cx); true }
+            "backspace" => { self.edit_delete(true, cx); true }
+            "delete" => { self.edit_delete(false, cx); true }
+            "left" | "right" | "up" | "down" | "home" | "end" => { self.edit_move(key, m.shift, window, cx); true }
+            _ => {
+                if key.chars().count() == 1 {
+                    let ch = key.chars().next().unwrap();
+                    let ch = if m.shift { ch.to_uppercase().next().unwrap_or(ch) } else { ch };
+                    self.edit_insert(&ch.to_string(), cx);
+                    true
+                } else { false }
+            }
+        }
     }
 
     fn show_toast(&self, ws: Option<Entity<Workspace>>, cx: &mut Context<Self>, message: String) {

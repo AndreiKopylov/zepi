@@ -8,84 +8,32 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Added
 
-- Excel search redesigned like Word/PowerPoint: a dedicated bar with a match counter and
-  prev/next/close buttons whose tooltips show the hotkeys, occurrence search across cells,
-  F3/Shift+F3 (and Enter/Shift+Enter) to step, Esc to close; stepping selects and scrolls to the
-  matched cell. Matches are highlighted per-character in blue without shifting the text.
-- Excel search redesigned like Word: a dedicated bar with a match counter and prev/next/close
-  buttons (tooltips show hotkeys), occurrence search across cells, Enter/Shift+Enter to step,
-  Esc to close; stepping selects and scrolls to the matched cell.
-- Local gridcraft patch, reapplied after vendor updates from
-  `scripts/gridcraft-local-patches/gridcraft-local.patch`: rich-text runs (per-run color, bold,
-  italic and size) are preserved on read and written back on save, so formatted cell text
-  survives a round-trip.
-- `ui` scrollbar gains a `thumb_color` override (overlay patch on upstream
-  `crates/ui/src/components/scrollbar.rs`): a view can set the thumb color directly, without
-  track blending, while keeping the native autohide/drag behavior.
-- Local wordcraft patch, reapplied after vendor updates from
-  `scripts/wordcraft-local-patches/wordcraft-local.patch`: Office cloud fonts
-  (`%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts`) join the scanned font folders, so a
-  document naming a cloud family (Open Sans, Aptos, Lato) draws with it like Word does.
-- Legacy `.doc` (Word 97-2003) files open in the word viewer and the office CLI, read-only,
-  through the new wordcraft `docbin` reader; `.docx` behavior is unchanged. HTML-based `.doc`
-  exports (Confluence MHTML, plain HTML) are converted to the document model (headings, lists,
-  tables, bold/italic, code) and render like the binary ones.
+- Excel search like Word/PowerPoint: match counter, prev/next, F3/Shift+F3/Enter/Esc, and a
+  per-character highlight that does not shift the text.
+- Excel in-cell editing keeps rich formatting (color/bold/italic/size) and cell alignment;
+  caret and selection track the text, selection persists, and long text grows downward like Excel.
+- utils/sheetprobe: dev-only xlsx-to-PNG renderer to calibrate the Excel view against Excel
+  without rebuilding Zed.
+- Local gridcraft patch (scripts/gridcraft-local-patches/): rich-text runs survive read/save
+  round-trips.
+- Local wordcraft patch (scripts/wordcraft-local-patches/): Office cloud fonts and a legacy
+  .doc (Word 97-2003) reader.
+- ui scrollbar thumb_color override for a track-less, editor-style thumb.
 
 ### Changed
 
-- Fixed black artifacts over cell text when selecting a letter in the in-cell editor (the gpui
-  editor's selection-occurrence highlight is disabled there); the editor no longer grows past the
-  cell row, and focus returns to the sheet after editing so search hotkeys keep working.
-- Fixed black artifacts over cell text when selecting a letter in the cell editor: the gpui
-  editor's selection-occurrence highlight is now disabled for the in-cell editor.
-- Excel viewer metric parity with Excel: respect stored row heights, render blank lines
-  (black/red paragraph gap), pt-to-px 4/3, hyphen wrap, column text padding and GDI-style
-  integer glyph advances so long lines wrap like Excel.
-- Excel viewer renders merged cells, wrapped text, per-run rich text (color/size/italic) and cell
-  borders like Excel, and auto-fits row heights to wrapped text. The in-cell editor is a real text
-  editor (caret, mouse/shift selection, Ctrl+A/Z/C/X/V, auto-grow) instead of the hand-rolled one.
-- Zepi settings are grouped into `zepi.agent` and `zepi.office` (see README); the spreadsheet font
-  calibration is exposed as `zepi.office.sheet.fontScale`. Old flat keys are migrated on startup.
-- Resizing a row/column no longer auto-saves: it marks the sheet dirty (blue dot) and persists only
-  on explicit save.
-- Word-family lists (`w:rFonts="Open Sans;Arial"`) go through Word's own substitution table before
-  the list walk: Word never parses a `;` list and substitutes Segoe UI for it, while a bare
-  `Open Sans` keeps the cloud font. Line pitch and page breaks of such documents now match Word
-  (`.docx` page 4 no longer swallows two extra lines).
-- Binary `.doc`: paragraph spacing is summed (`space_after` + `space_before`) as Word does for
-  Word 97-2003 files, and table cell margins come from `sprmTCellPadding`/`sprmTCellPaddingDefault`
-  (plus the table style's TAPX). Text after a table no longer drifts up by 5.65 pt per row.
-- Word viewer tape sizes every page from its own section instead of the first page's: landscape
-  pages (an A4 wide table, page 22 of the deployment guide) keep their box, and paging, scroll and
-  prefetch are computed from the real page heights.
-- wordcraft engine updated from rev 9c72ddf5 to 10e5bb8b; craft-i18n language data is vendored
-  and embedded via CRAFT_I18N_DIR so hyphenation (incl. Russian) survives the update.
-- Office viewers load system fonts and apply Word-style family substitutions (Liberation
-  Serif -> Times New Roman, Liberation Sans -> Arial, DejaVu -> Windows equivalents), so documents
-  referencing non-Windows fonts render with familiar metrics instead of the bundled fallback.
-- HTML-based .doc import now honors inline CSS like Word: body/heading fonts and colors,
-  dark code blocks with per-token syntax colors (spans preserved line by line), horizontal
-  rules; headings render black serif instead of the blue built-in style. HTML tables inside
-  thead/tbody/tfoot render, and code blocks are a single shaded paragraph (no per-line seams)
-  with inner padding taken from CSS padding/border. Office rasters account for the display scale factor (crisp on HiDPI).
-- Office viewers (Excel, Word, PowerPoint) share one editor-style scrollbar: a mid-gray thumb
-  (`#808080`) that reads on both light pages/slides and the dark tape, autohiding like the code
-  editor instead of staying on screen. Excel uses the native Zed scrollbar (Editor style) with
-  the new `thumb_color` override, so the thumb shows without a full-length track and appears on
-  hover/scroll; Word/PowerPoint thumbs are widened to 15px flush with the edge, and the
-  PowerPoint scrollbar uses an arrow cursor instead of the slide crosshair.
+- Excel rendering parity: stored row heights, blank-line gaps, pt-to-px 4/3, hyphen wrap, text
+  padding and integer glyph advances; merged cells, borders and per-run rich text.
+- Office viewers (Excel/Word/PowerPoint) share one editor-style autohiding scrollbar.
+- Settings grouped into zepi.agent / zepi.office with a sheet.fontScale knob; row/column
+  resize marks the sheet dirty without auto-saving.
+- Word parity: Word's font-substitution table, .doc paragraph spacing and table margins, and
+  per-page (landscape) geometry.
+
 ### Fixed
 
-- Headings no longer show a stray bullet dot: a numbering level with numFmt none and an empty
-  label renders no marker (docx), and the binary .doc reader no longer invents a default bullet
-  for none-format levels; the hanging indent is kept.
-- PowerShell tool rows no longer render broken: multi-line commands are collapsed to a
-  single-line summary (the row has a fixed height), a title that glues the command onto the
-  tool name without a separator shows just the tool name, and multi-line Execute titles are
-  cut to their first line.
-- The model-written shell description schema now also covers pi's `powershell` tool (it only
-  patched `bash`/`pwsh` before), so new sessions show a short description instead of the raw
-  command in the row.
+- Headings with an empty numbering label no longer show a stray bullet dot.
+- Agent tool rows collapse multi-line shell commands to a single-line summary.
 
 ## [0.0.1-beta5] - 2026-11-12
 
