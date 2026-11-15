@@ -1,4 +1,5 @@
 mod driver;
+mod log;
 mod mcp;
 mod scripts;
 
@@ -12,7 +13,7 @@ async fn main() -> Result<()> {
         return mcp::serve().await;
     }
     let url = args.get(2).cloned().unwrap_or_else(|| "about:blank".into());
-    let (_browser, page) = driver::launch().await?;
+    let (_browser, page, _profile) = driver::launch().await?;
     if url != "about:blank" {
         driver::navigate(&page, &url).await?;
     }

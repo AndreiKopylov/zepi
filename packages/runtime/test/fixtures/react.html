@@ -1,0 +1,46 @@
+<!doctype html><html><body><div id="root"></div>
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/material-ui.production.min.js"></script>
+<script>
+const {useState}=React;
+const {TextField,Select,MenuItem,Checkbox,Button,Tabs,Tab,FormControl,InputLabel,FormControlLabel,Switch,Slider,RadioGroup,Radio}=MaterialUI;
+const Rating = MaterialUI.Rating || null;
+const OPTIONS=Array.from({length:40},(_,i)=>'Region-'+(i+1));
+const h=React.createElement;
+function App(){
+  const [tab,setTab]=useState(0);
+  const [name,setName]=useState('');
+  const [secret,setSecret]=useState('');
+  const [region,setRegion]=useState('');
+  const [agree,setAgree]=useState(false);
+  const [notify,setNotify]=useState(false);
+  const [vol,setVol]=useState(30);
+  const [date,setDate]=useState('');
+  const [country,setCountry]=useState('ru');
+  const [radio,setRadio]=useState('r1');
+  const [done,setDone]=useState(false);
+  return h('div',null,
+    h(Tabs,{value:tab,onChange:(e,v)=>setTab(v)},h(Tab,{label:'Main'}),h(Tab,{label:'Choices'})),
+    tab===0 && h('div',null,
+      h(TextField,{label:'Name',value:name,onChange:e=>setName(e.target.value)}),
+      h(TextField,{label:'Secret',type:'password',value:secret,onChange:e=>setSecret(e.target.value)})),
+    tab===1 && h('div',null,
+      h(FormControl,{style:{minWidth:240}},
+        h(InputLabel,{id:'reg-label'},'Region'),
+        h(Select,{labelId:'reg-label',value:region,onChange:e=>setRegion(e.target.value),'aria-label':'Region'},
+          OPTIONS.map(o=>h(MenuItem,{key:o,value:o},o)))),
+      h(FormControlLabel,{control:h(Switch,{checked:notify,onChange:e=>setNotify(e.target.checked),'aria-label':'Notify'}),label:'Notify'}),
+      h(Slider,{value:vol,onChange:(e,v)=>setVol(v),'aria-label':'Vol'}),
+      Rating?h(Rating,{value:0,'aria-label':'Rate'}):null,
+      h(TextField,{label:'Date',type:'date',value:date,onChange:e=>setDate(e.target.value),InputLabelProps:{shrink:true},'aria-label':'Date'}),
+      h('select',{'aria-label':'Country',value:country,onChange:e=>setCountry(e.target.value)},h('option',{value:'ru'},'RU'),h('option',{value:'us'},'US')),
+      h(RadioGroup,{value:radio,onChange:e=>setRadio(e.target.value),'aria-label':'Radio'},
+        h(FormControlLabel,{value:'r1',control:h(Radio,{'aria-label':'R1'}),label:'R1'}),
+        h(FormControlLabel,{value:'r2',control:h(Radio,{'aria-label':'R2'}),label:'R2'})),
+      h(FormControlLabel,{control:h(Checkbox,{checked:agree,onChange:e=>setAgree(e.target.checked),'aria-label':'Agree'}),label:'Agree'}),
+      h(Button,{variant:'contained',onClick:()=>setDone(true)},done?'Done':'Submit')));
+}
+ReactDOM.render(h(App),document.getElementById('root'));
+window.__ready=true;
+</script></body></html>
