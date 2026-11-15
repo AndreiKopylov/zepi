@@ -4,8 +4,8 @@ rem Uses the pinned bun (native/bun.json) so the build is machine-independent.
 set "BUN=%~dp0..\.local\bun\bun.exe"
 if not exist "%BUN%" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0prepare-bun.ps1"
 cd /d "%~dp0..\packages\acp"
-rem npm pi lacks the monorepo src worker entrypoints; the sandbox resolves them as
-rem ./src/... from the binary root, so shim them under src/ to match the embedded key.
+rem npm pi lacks the monorepo src worker entrypoints; shim them so the embedded key
+rem matches the sandbox's relative resolution (see HOST below for codemode).
 set "PI=node_modules/@earendil-works/pi-coding-agent"
 mkdir "src\extensions\codemode" 2>nul
 > "src\extensions\codemode\worker.ts" echo // @ts-nocheck
@@ -13,7 +13,7 @@ mkdir "src\extensions\codemode" 2>nul
 mkdir "src\utils" 2>nul
 > "src\utils\image-resize-worker.ts" echo // @ts-nocheck
 >> "src\utils\image-resize-worker.ts" echo import "../../%PI%/dist/utils/image-resize-worker.js";
-rem host.js resolves ./src/... relative to its own dir (pi-codemode/dist/runtime); embed the worker there.
+rem The sandbox resolves ./src/... from two bases (binary root and host.js dir); embed both.
 set "HOST=node_modules\@earendil-works\pi-codemode\dist\runtime"
 mkdir "%HOST%\src\extensions\codemode" 2>nul
 > "%HOST%\src\extensions\codemode\worker.ts" echo // @ts-nocheck

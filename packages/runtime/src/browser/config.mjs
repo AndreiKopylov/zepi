@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { browserDirectory } from "../paths.mjs";
 
 const globalSettings = async directory => JSON.parse(await readFile(join(directory, "settings.json"), "utf8").catch(error => {
   if (error.code === "ENOENT") return "{}"; throw error;
@@ -9,23 +8,12 @@ const globalSettings = async directory => JSON.parse(await readFile(join(directo
 const settings = async directory => (await globalSettings(directory)).zepi ?? {};
 
 // Chromium-family executables usable without downloading anything, in preference order.
-function probeCache(dir) {
-  if (!dir || !existsSync(dir)) return undefined;
-  const revisions = readdirSync(dir).filter(name => name.startsWith("chromium-") && !name.includes("headless")).sort().reverse();
-  for (const revision of revisions)
-    for (const rel of ["chrome-win/chrome.exe", "chrome-win64/chrome.exe"])
-      if (existsSync(join(dir, revision, rel))) return join(dir, revision, rel);
-  return undefined;
-}
-
 function detected(env) {
   // MCP children run with a reduced environment: derive the usual roots when they are missing.
   const drive = env.SYSTEMDRIVE || env.WINDIR?.slice(0, 2) || env.USERPROFILE?.slice(0, 2) || "C:";
   const local = env.LOCALAPPDATA || (env.USERPROFILE ? join(env.USERPROFILE, "AppData", "Local") : undefined);
   const programFiles = [env["ProgramFiles(x86)"] || join(drive + "\\", "Program Files (x86)"), env.ProgramFiles || join(drive + "\\", "Program Files")];
   const out = [];
-  const bundled = probeCache(browserDirectory(undefined, env));
-  if (bundled) out.push({ path: bundled, source: "zepi" });
   const systemPaths = [
     ...programFiles.map(pf => join(pf, "Google", "Chrome", "Application", "chrome.exe")),
     local && join(local, "Google", "Chrome", "Application", "chrome.exe"),
