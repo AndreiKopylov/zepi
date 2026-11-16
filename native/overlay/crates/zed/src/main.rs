@@ -6,6 +6,7 @@ mod zepi_runtime;
 mod office_cli;
 mod watcher_debug;
 mod zed;
+mod pi_commands;
 
 // Ensure the binary name stays in sync with APP_NAME so that the paths used
 // at runtime (data dir, config dir, etc.) match what the binary is called.
@@ -716,6 +717,7 @@ fn main() {
         Client::set_global(client.clone(), cx);
 
         zed::init(cx);
+        pi_commands::init(cx);
         #[cfg(target_os = "macos")]
         zed::move_to_applications::init(cx);
         project::Project::init(&client, cx);

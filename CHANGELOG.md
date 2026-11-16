@@ -8,6 +8,11 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [0.0.1-beta9] - 2026-11-16
 
+### Added
+
+- Command palette `pi:` commands: open settings / mcp / models / models-store files, and
+  `pi: update models` (provider refresh + store regen) with a git-pull-style status toast.
+
 ### Fixed
 
 - Agent thread scrollbar is stable: accurate total via measure_all; during a resize the
