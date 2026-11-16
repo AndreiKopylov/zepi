@@ -394,9 +394,9 @@ fn main() {
 
     let (open_listener, mut open_rx) = OpenListener::new();
 
-    let failed_single_instance_check = if *zed_env_vars::ZED_STATELESS
-        || *release_channel::RELEASE_CHANNEL == ReleaseChannel::Dev
-    {
+    // Zepi is a product: single-instance so a second launch opens a new window in the
+    // first process (Zed model) instead of a competing process that hangs on shared state.
+    let failed_single_instance_check = if *zed_env_vars::ZED_STATELESS {
         false
     } else {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -419,6 +419,24 @@ fn main() {
         println!("zed is already running");
         return;
     }
+
+    // Watchdog before app.run: a startup that never shows a window must self-exit so it
+    // cannot hold the mutex/resources and poison the next launch.
+    #[cfg(windows)]
+    std::thread::spawn(|| {
+        let start = std::time::Instant::now();
+        let mut seen_window = false;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if visible_window_count() > 0 { seen_window = true; }
+            else if seen_window {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                std::process::exit(0);
+            } else if start.elapsed() > std::time::Duration::from_secs(15) {
+                std::process::exit(0);
+            }
+        }
+    });
 
     if std::env::var_os("ZEPI_INSTALLED_RUNTIME").is_some() {
         if let Some(directory) = args.user_data_dir.as_deref() {
@@ -548,11 +566,15 @@ fn main() {
         #[cfg(windows)]
         std::thread::spawn(|| {
             let mut seen_window = false;
+            let start = std::time::Instant::now();
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 if visible_window_count() > 0 { seen_window = true; }
                 else if seen_window {
                     std::thread::sleep(std::time::Duration::from_secs(2));
+                    std::process::exit(0);
+                } else if start.elapsed() > std::time::Duration::from_secs(10) {
+                    // never managed to show a window (stale first instance): release the mutex
                     std::process::exit(0);
                 }
             }

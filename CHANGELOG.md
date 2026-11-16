@@ -6,6 +6,22 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.1-beta9] - 2026-11-16
+
+### Fixed
+
+- Agent thread scrollbar no longer oscillates: measure all entry heights for an accurate
+  total (measure_all) and debounce the width-change re-measure until a resize settles.
+- Launch/relaunch is stable: single-instance with a handshake timeout and a startup watchdog,
+  so a stale windowless process can no longer block new windows; Ctrl+Shift+N opens a second
+  window in the same process (Zed model) without hangs on real projects.
+- browser-ladder test cleans up its temp stub dirs (no more be-*/bp-* litter in %TEMP%).
+
+### Changed
+
+- Installer prefers a compact release-installer profile (line-tables-only debug) when built
+  and now ships zepi_browser.exe; dev builds keep full debug.
+
 ## [0.0.1-beta8] - 2026-11-15
 
 ### Changed
