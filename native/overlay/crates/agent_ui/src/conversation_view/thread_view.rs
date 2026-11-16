@@ -1429,7 +1429,7 @@ impl ThreadView {
             mode_selector,
             model_selector,
             profile_selector,
-            list_state,
+            list_state: list_state.measure_all(),
             session_capabilities,
             resumed_without_history,
             _subscriptions: subscriptions,

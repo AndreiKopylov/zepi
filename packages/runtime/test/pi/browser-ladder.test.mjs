@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveBrowserExecutable } from '../../src/browser/config.mjs';
@@ -12,10 +12,11 @@ const exeAt = async (root, rel) => {
   return path;
 };
 
-test('browser ladder: setting wins, then system Chrome, then Edge, then none', async () => {
+test('browser ladder: setting wins, then system Chrome, then Edge, then none', async (t) => {
   const local = await mkdtemp(join(tmpdir(), 'bl-'));
   const pf = await mkdtemp(join(tmpdir(), 'bp-'));
   const empty = await mkdtemp(join(tmpdir(), 'be-'));
+  t.after(() => Promise.all([local, pf, empty].map((d) => rm(d, { recursive: true, force: true }))));
   const env = { LOCALAPPDATA: local, ProgramFiles: pf, 'ProgramFiles(x86)': empty };
 
   const setting = join(empty, 'my-chrome.exe');
