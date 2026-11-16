@@ -71,6 +71,9 @@ struct StateInner {
     scroll_handler: Option<Box<dyn FnMut(&ListScrollEvent, &mut Window, &mut App)>>,
     scrollbar_drag_start_height: Option<Pixels>,
     resize_pending: Option<(Pixels, Instant)>,
+    resize_release: bool,
+    resize_frozen_height: Option<Pixels>,
+    resize_frozen_offset: Option<Pixels>,
     measuring_behavior: ListMeasuringBehavior,
     item_measurement_ready: Option<Box<dyn Fn(usize, &App) -> bool>>,
     follow_state: FollowState,
@@ -324,6 +327,9 @@ impl ListState {
             reset: false,
             scrollbar_drag_start_height: None,
             resize_pending: None,
+            resize_release: false,
+            resize_frozen_height: None,
+            resize_frozen_offset: None,
             measuring_behavior: ListMeasuringBehavior::default(),
             item_measurement_ready: None,
             follow_state: FollowState::default(),
@@ -785,6 +791,13 @@ impl ListState {
     pub fn scroll_px_offset_for_scrollbar(&self) -> Point<Pixels> {
         let state = &self.0.borrow();
 
+        let resizing = state.resize_pending.is_some() || state.resize_release;
+        if resizing {
+            if let Some(off) = state.resize_frozen_offset {
+                return Point::new(px(0.), off);
+            }
+        }
+
         if state.scroll_anchor.is_none() && state.alignment == ListAlignment::Bottom {
             return Point::new(px(0.), -state.max_scroll_offset());
         }
@@ -848,8 +861,10 @@ impl ListState {
 impl StateInner {
     fn max_scroll_offset(&self) -> Pixels {
         let bounds = self.last_layout_bounds.unwrap_or_default();
+        let resizing = self.resize_pending.is_some() || self.resize_release;
         let height = self
             .scrollbar_drag_start_height
+            .or_else(|| if resizing { self.resize_frozen_height } else { None })
             .unwrap_or_else(|| self.items.summary().height);
         (height - bounds.size.height).max(px(0.))
     }
@@ -1566,6 +1581,14 @@ impl Element for List {
             .last_layout_bounds
             .is_none_or(|last_bounds| last_bounds.size.width != bounds.size.width);
         if width_changed {
+            // Freeze the scrollbar at its pre-resize size/position until it fully settles.
+            if state.resize_frozen_height.is_none() {
+                state.resize_frozen_height = Some(state.items.summary().height);
+                let top = state.logical_scroll_top();
+                let mut cursor = state.items.cursor::<ListItemSummary>(());
+                let summary: ListItemSummary = cursor.summary(&Count(top.item_ix), Bias::Right);
+                state.resize_frozen_offset = Some(-(summary.height + top.offset_in_item));
+            }
             let new_pending = state
                 .resize_pending
                 .map_or(true, |(w, _)| w != bounds.size.width);
@@ -1581,6 +1604,9 @@ impl Element for List {
         }
         if let Some((w, t)) = state.resize_pending {
             if w == bounds.size.width && now.duration_since(t) >= RESIZE_DEBOUNCE {
+                // Resize ended: invalidate all heights and do ONE full re-measure at the
+                // new width (measure_all reuses cached sizes, so we must unmeasure first).
+                // The scrollbar stays frozen until every item is measured, then releases.
                 let new_items = SumTree::from_iter(
                     state.items.iter().map(|item| ListItem::Unmeasured {
                         size_hint: None,
@@ -1589,8 +1615,9 @@ impl Element for List {
                     (),
                 );
                 state.items = new_items;
-                state.measuring_behavior.reset();
                 state.resize_pending = None;
+                state.measuring_behavior = ListMeasuringBehavior::Measure(false);
+                state.resize_release = true;
             }
         }
 
@@ -1614,6 +1641,12 @@ impl Element for List {
                 }
             }
         };
+
+        if state.resize_release && state.items.summary().unrendered_count == 0 {
+            state.resize_release = false;
+            state.resize_frozen_height = None;
+            state.resize_frozen_offset = None;
+        }
 
         state.last_layout_bounds = Some(bounds);
         state.last_padding = Some(padding);

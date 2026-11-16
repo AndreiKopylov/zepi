@@ -10,8 +10,8 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Fixed
 
-- Agent thread scrollbar no longer oscillates: measure all entry heights for an accurate
-  total (measure_all) and debounce the width-change re-measure until a resize settles.
+- Agent thread scrollbar is stable: accurate total via measure_all; during a resize the
+  scrollbar is frozen and heights re-measure once at the end (no oscillation, no bottom wall).
 - Launch/relaunch is stable: single-instance with a handshake timeout and a startup watchdog,
   so a stale windowless process can no longer block new windows; Ctrl+Shift+N opens a second
   window in the same process (Zed model) without hangs on real projects.
