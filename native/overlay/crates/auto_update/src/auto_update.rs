@@ -1270,25 +1270,12 @@ async fn cleanup_windows() -> Result<()> {
 }
 
 async fn install_release_windows(downloaded_installer: &Path) -> Result<Option<PathBuf>> {
-    let mut cmd = new_command(downloaded_installer);
-    cmd.arg("/verysilent")
-        .arg("/update=true")
-        .arg("/MERGETASKS=!desktopicon");
-    let output = cmd.output().await?;
-    anyhow::ensure!(
-        output.status.success(),
-        "failed to start installer: {:?}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    // We return the path to the update helper program, because it will
-    // perform the final steps of the update process, copying the new binary,
-    // deleting the old one, and launching the new binary.
-    let helper_path = std::env::current_exe()?
-        .parent()
-        .context("No parent dir for Zed.exe")?
-        .join("tools")
-        .join("auto_update_helper.exe");
-    Ok(Some(helper_path))
+    // Launch detached via explorer (ShellExecute) so the installer survives the app it
+    // is about to close; it shows its UI, handles UAC and relaunches the app itself.
+    let mut cmd = new_command("explorer.exe");
+    cmd.arg(downloaded_installer);
+    cmd.spawn().context("failed to launch installer")?;
+    Ok(None)
 }
 
 pub async fn finalize_auto_update_on_quit() {
