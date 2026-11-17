@@ -71,7 +71,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#StagingDir}\zepi.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StagingDir}\agent.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StagingDir}\zepi_browser.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#StagingDir}\tools\auto_update_helper.exe"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "{#StagingDir}\pi\*"; DestDir: "{app}\pi"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\photon\*"; DestDir: "{app}\photon"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\packages\*"; DestDir: "{app}\packages"; Flags: ignoreversion recursesubdirs createallsubdirs
