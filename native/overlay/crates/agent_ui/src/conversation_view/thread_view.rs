@@ -1160,7 +1160,7 @@ impl ThreadView {
             if this.zepi_was_generating && !generating {
                 let count = this.list_state.item_count();
                 this.list_state.remeasure_items(count.saturating_sub(2)..count);
-                if this.list_state.is_scrolled_to_end().unwrap_or(true) {
+                if this.list_state.is_near_end(gpui::px(64.)).unwrap_or(true) {
                     this.list_state.scroll_to_end();
                 }
             }
@@ -2795,7 +2795,7 @@ impl ThreadView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let zepi_follow_tail = self.list_state.is_scrolled_to_end().unwrap_or(true);
+        let zepi_follow_tail = self.list_state.is_near_end(gpui::px(64.)).unwrap_or(true);
         let session_id = self.thread.read(cx).session_id().clone();
         let parent_session_id = self.thread.read(cx).parent_session_id().cloned();
         let agent_telemetry_id = self.thread.read(cx).connection().telemetry_id();

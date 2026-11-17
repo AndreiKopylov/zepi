@@ -12,6 +12,8 @@ actions!(
         OpenMcpFile,
         OpenModelsFile,
         OpenModelsStoreFile,
+        OpenSystemPromptFile,
+        OpenAppendSystemFile,
         UpdateModels,
     ]
 );
@@ -30,7 +32,8 @@ fn open_pi_file(name: &str, cx: &mut App) {
     let path = dir.join(name);
     if !path.exists() {
         let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(&path, "{}\n");
+        let seed = if name.ends_with(".md") { "" } else { "{}\n" };
+        let _ = std::fs::write(&path, seed);
     }
     let Some(app_state) = AppState::try_global(cx) else { return };
     workspace::open_paths(&[path], app_state, OpenOptions::default(), cx).detach();
@@ -60,6 +63,8 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &OpenMcpFile, cx| open_pi_file("mcp.json", cx));
     cx.on_action(|_: &OpenModelsFile, cx| open_pi_file("models.json", cx));
     cx.on_action(|_: &OpenModelsStoreFile, cx| open_pi_file("models-store.json", cx));
+    cx.on_action(|_: &OpenSystemPromptFile, cx| open_pi_file("AGENTS.md", cx));
+    cx.on_action(|_: &OpenAppendSystemFile, cx| open_pi_file("APPEND_SYSTEM.md", cx));
 
     cx.on_action(|_: &UpdateModels, cx| {
         let Some(agent) = std::env::current_exe()

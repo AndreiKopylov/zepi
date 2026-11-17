@@ -5,7 +5,7 @@ use std::{env, path::{Path, PathBuf}};
 /// Called from main before the application starts threads or resolves resources.
 /// A bundle carries code/resources only; all mutable state lives in user storage.
 /// Product version shown in the About window and by the installer.
-pub const PRODUCT_VERSION: &str = "0.0.1-beta9";
+pub const PRODUCT_VERSION: &str = "0.0.1";
 
 // Assign this process to a job with KILL_ON_JOB_CLOSE so the OS terminates
 // leftover children (language servers, agents, terminals) on any exit path.
@@ -234,7 +234,8 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
         }
     }
     merge(&mut settings, &defaults);
-    merge(&mut settings, &json!({"telemetry":{"metrics":false,"diagnostics":false},"auto_update":false,
+    let installed = std::env::var("ZEPI_INSTALLED_RUNTIME").is_ok();
+    merge(&mut settings, &json!({"telemetry":{"metrics":false,"diagnostics":false},"auto_update":installed,
         "disable_ai":false,"auto_install_extensions":{"html":false}}));
     // migrate legacy flat zepi knobs to the grouped agent/office layout (keep user values)
     if let Some(z) = settings.get_mut("zepi").and_then(|v| v.as_object_mut()) {

@@ -1,4 +1,4 @@
-import {connectDefaultMcpClient} from '../adapter/src/mcp-bridge.js';
+import {connectManagedMcpClient} from '../adapter/src/mcp-bridge.js';
 import {realSleep, type PiAcpDeps} from '../adapter/src/deps.js';
 import {authenticatedMcpFetch, MCP_FETCH, MCP_OPTIONS, registeredMcp} from '../../runtime/src/mcp/config.mjs';
 import {createMcpStatus, MCP_STATUS} from '../../runtime/src/mcp/status.mjs';
@@ -10,7 +10,7 @@ export const connectMcp: PiAcpDeps['connectMcpClient'] = async (server, signal, 
   Object.defineProperty(server, MCP_FETCH, {value:auth.fetch, configurable:true});
   try {
     const timeoutMs = options?.timeoutMs ?? 60_000;
-    const handle = await connectDefaultMcpClient(server, signal, timeoutMs, realSleep, binding);
+    const handle = await connectManagedMcpClient(server, signal, timeoutMs, realSleep, binding);
     const close = handle.close.bind(handle);
     handle.close = async()=>{try {await close();}finally {await auth.settled();}};
     return handle;

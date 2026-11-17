@@ -477,6 +477,12 @@ impl ListState {
     /// Whether the list is scrolled to the end, or `None` if the list is
     /// not scrollable or the total content height is not yet known.
     pub fn is_scrolled_to_end(&self) -> Option<bool> {
+        self.is_near_end(px(0.))
+    }
+
+    /// Like [`Self::is_scrolled_to_end`] but treats "within `tolerance` of the bottom" as
+    /// the end, so small height changes (generating indicator) don't flip follow-tail.
+    pub fn is_near_end(&self, tolerance: Pixels) -> Option<bool> {
         let state = self.0.borrow();
         let bounds = state.last_layout_bounds?;
         let summary = state.items.summary();
@@ -490,7 +496,7 @@ impl ListState {
             return None;
         }
         let scroll_top = state.scroll_top(&state.logical_scroll_top());
-        Some(scroll_top >= scroll_max)
+        Some(scroll_top >= scroll_max - tolerance)
     }
 
     /// Inform the list state that the items in `old_range` have been replaced

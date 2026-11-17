@@ -1,6 +1,8 @@
 // Adapted for Zepi from @automatalabs/pi-acp 0.9.4 (Apache-2.0). See ../LICENSE.
 // Zepi MCP configuration v1
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { spawn as spawnChild } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { getMcpToolExposure } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/mcp-servers.js";
 import { toToolExposure, createMcpResultSchema } from "../../node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.js";
 // Zepi MCP exposure v1
@@ -298,6 +300,121 @@ export class CloseSignallingTransport {
         }
     }
 }
+function killProcessTree(pid) {
+    if (!pid) return;
+    try {
+        if (process.platform === "win32") {
+            const child = spawnChild("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore", windowsHide: true });
+            child.on("error", () => undefined);
+            child.unref();
+        } else {
+            process.kill(-pid, "SIGKILL");
+        }
+    } catch { /* already gone */ }
+}
+function configHash(server) {
+    const json = JSON.stringify([server.command, server.args, server.url, server.type]);
+    let h = 5381;
+    for (let i = 0; i < json.length; i++) h = ((h << 5) + h + json.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+}
+function cacheDir() {
+    const base = process.env.ZEPI_PI_CONFIG_DIR
+        ?? join(process.env.LOCALAPPDATA ?? "", "Zepi", "pi");
+    return join(base, "mcp-cache");
+}
+function readCache(name, hash) {
+    try { return JSON.parse(readFileSync(join(cacheDir(), `${name}-${hash}.json`), "utf8")); } catch { /* fall back to any cache for this server */ }
+    try {
+        const file = readdirSync(cacheDir()).find(f => f.startsWith(`${name}-`) && f.endsWith(".json"));
+        if (file) return JSON.parse(readFileSync(join(cacheDir(), file), "utf8"));
+    } catch { /* no cache */ }
+    return null;
+}
+function writeCache(name, hash, data) {
+    try { mkdirSync(cacheDir(), { recursive: true }); writeFileSync(join(cacheDir(), `${name}-${hash}.json`), JSON.stringify(data)); } catch { /* best effort */ }
+}
+function lazyEligible(server) {
+    return !("type" in server);
+}
+function makeLazyHandle(server, hash, signal, timeoutMs, sleep, binding, cache) {
+    let real;
+    let connecting;
+    let toolsChangedHandler;
+    let disabledHandler;
+    let lastUsed = Date.now();
+    let active = 0;
+    let idleTimer;
+    const idleMs = 15 * 60_000;
+    const arm = () => {
+        if (server.name === "zepi_browser") return;
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+            if (active > 0 || Date.now() - lastUsed < idleMs) { arm(); return; }
+            if (real) { const r = real; real = undefined; connecting = undefined; void r.close().catch(() => undefined); }
+        }, idleMs);
+        idleTimer.unref?.();
+    };
+    const ensure = () => {
+        connecting ??= (async () => {
+            const handle = await connectDefaultMcpClient(server, signal, timeoutMs, sleep, binding);
+            real = handle;
+            if (toolsChangedHandler) handle.setToolsChangedHandler(toolsChangedHandler);
+            if (disabledHandler) handle.setDisabledHandler(disabledHandler);
+            lastUsed = Date.now(); arm();
+            try {
+                const listed = await handle.listTools(undefined, signal, timeoutMs);
+                writeCache(server.name, hash, { tools: listed.tools, instructions: handle.getInstructions?.() });
+            } catch { /* keep old cache */ }
+            return handle;
+        })();
+        return connecting;
+    };
+    const delegate = (method) => async (...args) => (await ensure())[method](...args);
+    return {
+        async listTools() { return { tools: cache.tools, nextCursor: undefined, raw: { tools: cache.tools } }; },
+        async callTool(...args) {
+            active++; lastUsed = Date.now();
+            try { return await delegate("callTool")(...args); }
+            finally { active--; lastUsed = Date.now(); arm(); }
+        },
+        ping: async (...a) => { if (real) await real.ping(...a); },
+        getCapabilities: () => ({ tools: { listChanged: true } }),
+        getInstructions: () => cache.instructions,
+        setLoggingLevel: async (...a) => { if (real) await real.setLoggingLevel(...a); },
+        listResources: delegate("listResources"),
+        listResourceTemplates: delegate("listResourceTemplates"),
+        readResource: delegate("readResource"),
+        subscribeResource: delegate("subscribeResource"),
+        unsubscribeResource: delegate("unsubscribeResource"),
+        listPrompts: delegate("listPrompts"),
+        getPrompt: delegate("getPrompt"),
+        complete: delegate("complete"),
+        setToolsChangedHandler(handler) { toolsChangedHandler = handler; if (real) real.setToolsChangedHandler(handler); },
+        setDisabledHandler(handler) { disabledHandler = handler; if (real) real.setDisabledHandler(handler); },
+        getPeerSignal: () => new AbortController().signal,
+        jsonSchemaValidator: new AjvJsonSchemaValidator(),
+        closeIsBounded: true,
+        async close() {
+            clearTimeout(idleTimer);
+            if (real) await real.close();
+        },
+    };
+}
+// Per-session connection: pi owns reload reuse; we only add lazy codemode + schema cache.
+export async function connectManagedMcpClient(server, signal, timeoutMs, sleep, binding) {
+    const hash = configHash(server);
+    const cache = lazyEligible(server) ? readCache(server.name, hash) : null;
+    if (cache) return makeLazyHandle(server, hash, signal, timeoutMs, sleep, binding, cache);
+    const handle = await connectDefaultMcpClient(server, signal, timeoutMs, sleep, binding);
+    if (lazyEligible(server)) {
+        try {
+            const listed = await handle.listTools(undefined, signal, timeoutMs);
+            writeCache(server.name, hash, { tools: listed.tools, instructions: handle.getInstructions?.() });
+        } catch { /* cache optional */ }
+    }
+    return handle;
+}
 function safeToken(value) {
     const sanitized = value.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/_+/g, "_");
     return sanitized || "_";
@@ -306,6 +423,7 @@ function createTransport(server, serverToken, sleep, fatal, timeoutMs) {
     const fetch = server[Symbol.for("zepi.pi.mcp.fetch")] ?? globalThis.fetch;
     let raw;
     let terminate;
+    let stdioEntry;
     if (!("type" in server)) {
         raw = new StdioClientTransport({
             command: server.command,
@@ -313,6 +431,7 @@ function createTransport(server, serverToken, sleep, fatal, timeoutMs) {
             args: server.args,
             env: Object.fromEntries(server.env.map(({ name, value }) => [name, value])),
         });
+        stdioEntry = { raw };
     }
     else if (server.type === "http") {
         let open = true;
@@ -377,6 +496,15 @@ function createTransport(server, serverToken, sleep, fatal, timeoutMs) {
         fatal();
         void wrapper.close();
     }, timeoutMs, sleep, serverToken);
+    if (stdioEntry) {
+        const origClose = wrapper.close.bind(wrapper);
+        wrapper.close = async () => {
+            const pid = stdioEntry.raw.pid;
+            try { await origClose(); } finally {
+                killProcessTree(pid);
+            }
+        };
+    }
     return wrapper;
 }
 let elicitationCounter = 0n;

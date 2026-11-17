@@ -1168,11 +1168,12 @@ debug = "full"
 lto = false
 codegen-units = 16
 
-# Installer-only profile: line-tables-only keeps panic backtraces readable but drops
-# full DWARF, shrinking zepi.exe ~150MB. Dev builds stay on release-fast (full debug).
+# Installer-only profile: inherits release (thin LTO + codegen-units=1) for a smaller
+# binary; release-fast disables LTO for fast dev iteration. Dev builds stay release-fast.
 [profile.release-installer]
-inherits = "release-fast"
+inherits = "release"
 debug = "line-tables-only"
+strip = "symbols"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "allow" }

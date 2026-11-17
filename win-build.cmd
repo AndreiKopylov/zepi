@@ -1,8 +1,11 @@
 @echo off
 rem Zepi Windows build: target lives outside the repo, profile release-fast.
+rem `win-build.cmd installer` builds the compact release-installer profile (thin LTO + strip).
 rem INCLUDE/LIB/PATH are set manually because the C++ workload (vcvars64) is not installed.
 rem Keep this file ASCII-only: cmd.exe reads .bat in OEM codepage and non-ASCII breaks parsing.
 setlocal
+set PROFILE=release-fast
+if "%1"=="installer" set PROFILE=release-installer
 set REPO=%~dp0
 set REPO=%REPO:~0,-1%
 set MSVC=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207
@@ -24,7 +27,9 @@ set LIB=%MSVC%\lib\x64;%SDK%\Lib\10.0.26100.0\ucrt\x64;%SDK%\Lib\10.0.26100.0\um
 if "%ZEPI_EXTRA_PATH%"=="" set ZEPI_EXTRA_PATH=%REPO%\..\tools\cmake-3.30.5-windows-x86_64\bin;%REPO%\..\tools\nasm-2.16.03
 set PATH=%MSVC%\bin\Hostx64\x64;%ZEPI_EXTRA_PATH%;%PATH%
 cd /d %REPO%\.local\upstream\zed
-cargo build --target-dir "%CARGO_TARGET_DIR%" -p zed --bin zepi --profile release-fast --features gpui_platform/runtime_shaders %*
+cargo build --target-dir "%CARGO_TARGET_DIR%" -p zed --bin zepi --profile %PROFILE% --features gpui_platform/runtime_shaders %*
 if errorlevel 1 exit /b 1
-echo|set /p="%REPO%"> "%CARGO_TARGET_DIR%\release-fast\zepi-root.txt"
-echo BUILD_OK binary=%CARGO_TARGET_DIR%\release-fast\zepi.exe
+cargo build --target-dir "%CARGO_TARGET_DIR%" -p auto_update_helper --profile %PROFILE%
+if errorlevel 1 exit /b 1
+echo|set /p="%REPO%"> "%CARGO_TARGET_DIR%\%PROFILE%\zepi-root.txt"
+echo BUILD_OK binary=%CARGO_TARGET_DIR%\%PROFILE%\zepi.exe

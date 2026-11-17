@@ -924,7 +924,12 @@ impl SlidesView {
     fn ensure(&mut self, ix: usize, cx: &mut Context<Self>) {
         let key = raster_key(self.zoom);
         let slot = (ix, key);
-        if self.cache.contains_key(&slot) || self.pending.contains(&slot) {
+        if self.pending.contains(&slot) {
+            return;
+        }
+        if self.cache.contains_key(&slot) {
+            self.order.retain(|s| *s != slot);
+            self.order.push(slot);
             return;
         }
         if ix >= self.slide_count(cx) {

@@ -6,6 +6,24 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-11-16
+
+### Added
+
+- Command palette `pi: open AGENTS.md` and `pi: open APPEND_SYSTEM.md`.
+
+### Changed
+
+- MCP stdio servers (incl. browser and direct-exposure) are lazy: they spawn on first tool
+  use, with an on-disk schema cache; idle servers close after 15 min and process trees are
+  killed on close, so idle threads hold no MCP processes and no orphans remain.
+- The agent binary is spawned directly (no pwsh wrapper / conhost per agent).
+- Word/slides raster cache evicts least-recently-used instead of oldest-inserted.
+
+### Fixed
+
+- Follow-tail uses a tolerance so fast small output no longer jitters the thread scroll.
+
 ## [0.0.1-beta9] - 2026-11-16
 
 ### Added
