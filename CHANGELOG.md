@@ -46,6 +46,12 @@ All notable changes to Zepi are documented here. The format follows
 - `win-build.cmd`, `win-check.cmd` and `win-test-zepiui.cmd` read the Zed pin (commit and Rust
   toolchain) from `native/zed.json` instead of hardcoding it — the check/test scripts had
   already drifted to a stale commit. Their job count now honors `ZEPI_JOBS`.
+- Test repair: the packages/runtime suite silently ran zero tests on Windows (cmd does not
+  expand the glob in its test script); it now uses bun auto-discovery. Stale tests of the
+  removed native browser (fullAccess, window/keepOpen, the exe ladder, the `access` entry
+  point) were deleted or rewritten against current operations, plus a new test covers the
+  browse settings validation. The dead `test:browser` script (its files left with `zepi_browser`)
+  is removed and `test:preview` no longer names a deleted file.
 
 ### Security
 

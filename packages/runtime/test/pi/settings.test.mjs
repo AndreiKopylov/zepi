@@ -223,30 +223,15 @@ test("update detection compares registry versions without installing packages", 
   assert.equal(failed.status,"error"); assert.ok(!JSON.stringify(failed).includes("private-network-error"));
 });
 
-
-test("Full Access persists globally, validates booleans and survives model setting writes", async t => {
+test("browser settings are global and validated", async t => {
   const f = await fixture(t);
-  assert.equal((await f.bridge.status()).fullAccess, false);
-  assert.equal((await f.bridge.execute({operation:"access", fullAccess:true})).fullAccess, true);
-  assert.deepEqual((await f.get(f.target,"settings.json")).customSetting, {retain:true});
-  await f.bridge.execute({operation:"defaults", provider:"zepi-fixture", model:"test-model", thinking:"off"});
-  assert.equal((await f.bridge.status()).fullAccess, true);
-  await assert.rejects(f.bridge.execute({operation:"access", fullAccess:"true"}));
-  assert.equal((await f.bridge.status()).fullAccess, true);
-  assert.equal((await f.bridge.execute({operation:"access", fullAccess:false})).fullAccess, false);
+  const saved = await f.bridge.execute({operation:'browser-set', backend:'browse', browseTools:'execute', browseCli:'  C:\\tools\\browse\\  '});
+  assert.equal(saved.browser.backend, 'browse');
+  assert.equal(saved.browser.browseTools, 'execute');
+  assert.equal(saved.browser.browseCli, 'C:\\tools\\browse\\');
+  assert.equal(saved.browser.browseDir, join(f.target, 'browse'));
+  await assert.rejects(f.bridge.execute({operation:'browser-set', backend:'chromium'}));
+  assert.deepEqual((await f.get(f.target,'settings.json')).zepi.browser,
+    {backend:'browse', browseTools:'execute', browseCli:'C:\\tools\\browse\\'});
   await assertPrivateMode(join(f.target,"settings.json"));
-});
-
-test("browser window and keep-open settings are global and validated", async t => {
-  const f = await fixture(t);
-  const {browserEnvironment} = await import('../../src/browser/config.mjs');
-  const saved = await f.bridge.execute({operation:'browser-set', window:'maximized', keepOpen:true});
-  assert.equal(saved.browser.window,'maximized');
-  assert.equal(saved.browser.keepOpen,true);
-  const env = await browserEnvironment(f.target);
-  assert.equal(env.window,'maximized'); assert.equal(env.keepOpen,true);
-  await assert.rejects(f.bridge.execute({operation:'browser-set', window:'huge'}));
-  await assert.rejects(f.bridge.execute({operation:'browser-set', keepOpen:'yes'}));
-  assert.equal((await f.get(f.target,'settings.json')).zepi.browser.window,'maximized');
-  await assertPrivateMode(join(f.target,'settings.json'));
 });

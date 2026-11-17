@@ -10,7 +10,7 @@
     "bin"
   ],
   "scripts": {
-    "test": "bun test test/*.test.mjs test/pi/*.test.mjs"
+    "test": "bun test"
   },
   "dependencies": {
     "proper-lockfile": "4.1.2",
