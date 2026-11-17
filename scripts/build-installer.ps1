@@ -1,7 +1,7 @@
 # Builds the Zepi installer: stages the repo + build + payload into dist, then runs Inno Setup.
 # Nothing is taken from a working bundle: dist\staging is rebuilt from its sources every time.
 param(
-    [string]$Version = '0.0.1-beta1',
+    [string]$Version = '',
     [string]$Repo = '',
     [string]$Exe = '',
     [string]$Payload = '',
@@ -11,6 +11,13 @@ param(
 $ErrorActionPreference = 'Stop'
 # Paths are derived from this script's location, so nothing machine-specific is committed.
 if (-not $Repo) { $Repo = Split-Path $PSScriptRoot -Parent }
+if (-not $Version) {
+    # Single source of truth: PRODUCT_VERSION in zepi_runtime.rs (same value shown in About).
+    $rt = Get-Content (Join-Path $Repo 'native\overlay\crates\zed\src\zepi_runtime.rs') -Raw
+    $m = [regex]::Match($rt, 'PRODUCT_VERSION:\s*&str\s*=\s*"([^"]+)"')
+    if ($m.Success) { $Version = $m.Groups[1].Value }
+    else { throw 'cannot read PRODUCT_VERSION from zepi_runtime.rs; pass -Version explicitly' }
+}
 $buildRoot = Join-Path (Split-Path $Repo -Parent) 'zepi-build'
 if (-not $Exe) {
     # Prefer the compact installer profile when built; dev release-fast stays full-debug.

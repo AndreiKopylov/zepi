@@ -18,6 +18,14 @@ All notable changes to Zepi are documented here. The format follows
 - Browser tools default to **execute** (code) mode: the agent drives the page with
   Playwright-style JavaScript in one call instead of many discrete tool calls; plain mode
   remains selectable. Relay tools-mode is enforced on session start.
+- Installer version is derived from `PRODUCT_VERSION` (single source of truth, same value as
+  About); `build-installer.ps1 -Version` is now an optional override.
+- Faster session start: the local model-catalog rebuild is skipped when models/settings/auth are
+  unchanged, and browse self-heal / relay-mode enforcement moved off the new-session path
+  (runs at startup and on settings change).
+- Stability: a failing MCP server now backs off (circuit breaker with cooldown) instead of being
+  retried in a tight loop, and recovers once the cooldown passes; a dead browse relay is revived on
+  session start (endpoint probe) with a restart backoff, no polling.
 
 ### Removed
 

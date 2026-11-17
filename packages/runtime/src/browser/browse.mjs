@@ -92,13 +92,28 @@ export async function restartBrowseRelay(dir) {
 }
 
 // The relay bakes OPENCODE_BROWSER_TOOLS at startup; `browse restart` re-reads it from env.
+// Also revives a dead relay (endpoint unreachable) on session start, with a restart backoff.
+let lastRelayRestart = 0;
+async function relayAlive() {
+  try {
+    await fetch("http://127.0.0.1:19988/", { signal: AbortSignal.timeout(1500) });
+    return true; // any HTTP response means the relay is up
+  } catch { return false; }
+}
 export async function ensureRelayMode(dir, tools) {
   const manifest = await readManifest(dir);
-  if (!manifest || manifest.relayTools === tools) return;
+  if (!manifest) return;
+  const modeChanged = manifest.relayTools !== tools;
+  const alive = await relayAlive();
+  if (!modeChanged && alive) return;
+  if (!alive && Date.now() - lastRelayRestart < 30_000) return; // crash-loop guard
+  lastRelayRestart = Date.now();
   const relay = join(dir, "node_modules", "@opencode", "browse-windows-x64", "bin", "browse.exe");
-  try { spawn(relay, ["restart"], { env: { ...process.env, OPENCODE_BROWSER_TOOLS: tools }, detached: true, stdio: "ignore" }).unref(); } catch { /* relay absent */ }
-  manifest.relayTools = tools;
-  await writeFile(join(dir, "browse.json"), JSON.stringify(manifest, null, 2) + "\n");
+  try { spawn(relay, [modeChanged ? "restart" : "serve"], { env: { ...process.env, OPENCODE_BROWSER_TOOLS: tools }, detached: true, stdio: "ignore" }).unref(); } catch { /* relay absent */ }
+  if (modeChanged) {
+    manifest.relayTools = tools;
+    await writeFile(join(dir, "browse.json"), JSON.stringify(manifest, null, 2) + "\n");
+  }
 }
 
 export async function browseStatus(dir, tools = "plain") {

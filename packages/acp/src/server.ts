@@ -9,6 +9,7 @@ import {nativeUiAction} from './native-ui.ts';
 import { runAcp } from "../adapter/src/lib.js";
 import { createAgentSession, ModelRuntime, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
+import { stat } from "node:fs/promises";
 import { ndJsonStream, type AgentContext, type McpServer, type Stream } from "@agentclientprotocol/sdk";
 import {Readable, Writable} from 'node:stream';
 import { editorTools } from "./editor-tools.ts";
@@ -33,6 +34,23 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   let supportsNativeUi = false;
   const subagents = createSubagents(agentDir, sessionDir);
   const mcp = createMcpConnector(agentDir);
+  // Skip the per-session local catalog rebuild when models/settings/auth are unchanged.
+  let catalogKey = "";
+  const browseSelfHeal = async () => {
+    const cfg = await browserEnvironment(agentDir);
+    if (cfg.backend !== "browse") return;
+    await ensureBrowseMcp(agentDir, cfg.browseDir, cfg.browseTools);
+    await ensureRelayMode(cfg.browseDir, cfg.browseTools);
+  };
+  const refreshModelsIfChanged = async () => {
+    const key = (await Promise.all(["models.json", "settings.json", "auth.json"].map(async f => {
+      try { return (await stat(join(agentDir, f))).mtimeMs; } catch { return 0; }
+    }))).join(":");
+    if (key === catalogKey) return;
+    catalogKey = key;
+    await runtime.refresh({ allowNetwork: false });
+    void browseSelfHeal().catch(e => console.error("browse self-heal failed", e));
+  };
   const deliveries = new Map<string, ReturnType<typeof createDeliveryLedger>>();
   const clientReady = new Promise<AgentContext>(resolve => { connectClient = resolve; });
   // The transport can receive initialize/new while asynchronous Zepi setup is
@@ -64,7 +82,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         const shell = createShell(options.cwd, join(agentDir, "commands"), options.sessionManager.getSessionId(), client);
         // Settings are owned by pi. New tasks see credentials/models changed in
         // Zepi's settings without replacing the model of an active conversation.
-        await runtime.refresh({ allowNetwork: false });
+        await refreshModelsIfChanged();
         // Let pi resolve explicit lists, +/- modifiers, pending registrations and
         // reload additions. Only the absent-setting fallback is Zepi-specific.
         if (options.settingsManager) {
@@ -208,12 +226,11 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
     try {configured = await configuredMcp(agentDir, context.params.cwd);}
     catch { /* The bridge reports invalid configuration after the task opens. */ }
     const backendCfg = await browserEnvironment(agentDir);
-    // Self-heal: browse is managed by Zepi; restore its MCP entry if it was deleted.
-    if (backendCfg.backend === 'browse') {
+    // Self-heal runs at startup / on settings change; only restore a missing entry here.
+    if (backendCfg.backend === 'browse' && !configured.some(s => s.name === 'browse')) {
       if (await ensureBrowseMcp(agentDir, backendCfg.browseDir, backendCfg.browseTools)) {
         configured = await configuredMcp(agentDir, context.params.cwd);
       }
-      await ensureRelayMode(backendCfg.browseDir, backendCfg.browseTools);
     }
     const bundled = [...(context.params.mcpServers ?? []).filter(server => server.name !== 'zepi_computer')];
     const servers = [...bundled, ...configured.filter(server => !bundled.some(s => s.name === server.name))];
@@ -225,6 +242,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   connectClient(server.connection.client);
   void refreshModelCatalogs(runtime).then(() => server.agent.refreshGlobalModelScope())
     .catch((error: unknown) => console.error("background model catalog refresh failed", error));
+  void browseSelfHeal().catch((error: unknown) => console.error("browse self-heal failed", error));
   admitRequests();
   return server;
 }
