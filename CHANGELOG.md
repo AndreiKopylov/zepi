@@ -31,6 +31,27 @@ All notable changes to Zepi are documented here. The format follows
 
 - `zepi_browser` crate, binary and its installer/bundle references; native browser settings
   (executable path, keep-open, window mode) and native browser tests.
+- Dead `npm run native:build` / `native:run` and the macOS-era code behind them (the `Zepi.app`
+  bundling, the node+tsx dev-agent launch, the `native-build.json` build record): they never
+  worked on Windows, which expects `zepi.exe` and builds via `win-build.cmd`. `npm run dev` now
+  runs `scripts/win-run.py` directly.
+
+### Fixed
+
+- Spreadsheet save is now atomic: the workbook is written to a hidden `~$…` temp file
+  (Excel-style, random suffix) next to the target and renamed over it, so a crash or full disk
+  mid-save no longer truncates the file.
+- First-start config writes (pi `settings.json`, the stale node-path patch, the keymap and theme
+  seeds) now go through temp-file + rename, so a crash mid-write can no longer corrupt them.
+- `win-build.cmd`, `win-check.cmd` and `win-test-zepiui.cmd` read the Zed pin (commit and Rust
+  toolchain) from `native/zed.json` instead of hardcoding it — the check/test scripts had
+  already drifted to a stale commit. Their job count now honors `ZEPI_JOBS`.
+
+### Security
+
+- browse components are now downloaded with integrity verification: the bun zip against a
+  sha256 pinned in the repo, the relay/cli npm tarballs against the registry's SRI hash. A
+  corrupted or tampered download is deleted and never installed.
 
 ## [0.0.1] - 2026-11-16
 

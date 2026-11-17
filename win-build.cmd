@@ -10,7 +10,8 @@ set REPO=%~dp0
 set REPO=%REPO:~0,-1%
 set MSVC=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207
 set SDK=C:\Program Files (x86)\Windows Kits\10
-set RUSTUP_TOOLCHAIN=1.98.1-x86_64-pc-windows-msvc
+rem Zed pin (commit, Rust toolchain) is read from native/zed.json, the single source of truth.
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "(Get-Content '%REPO%\native\zed.json' | ConvertFrom-Json).rust + '-x86_64-pc-windows-msvc'"`) do set RUSTUP_TOOLCHAIN=%%I
 if "%CARGO_TARGET_DIR%"=="" set CARGO_TARGET_DIR=%REPO%\..\zepi-build
 set CARGO_NET_OFFLINE=true
 set CARGO_NET_GIT_FETCH_WITH_CLI=true
@@ -19,7 +20,7 @@ if "%ZEPI_JOBS%"=="" set ZEPI_JOBS=6
 set CARGO_BUILD_JOBS=%ZEPI_JOBS%
 rem ZEPI_DEBUG=1 switches debug info to line-tables-only (smaller target, full rebuild).
 if "%ZEPI_DEBUG%"=="1" set CARGO_PROFILE_RELEASE_FAST_DEBUG=line-tables-only
-set ZED_COMMIT_SHA=e8bc16acee5ae1937600d571d441c4b5d7b0d288-zepi-local
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "(Get-Content '%REPO%\native\zed.json' | ConvertFrom-Json).commit + '-zepi-local'"`) do set ZED_COMMIT_SHA=%%I
 set LK_CUSTOM_WEBRTC=%REPO%\.local\upstream\zed\.webrtc-sys\webrtc-0001d84-4\win-x64-release
 set CRAFT_I18N_DIR=%REPO%\native\overlay\vendor\craft-i18n
 set INCLUDE=%MSVC%\include;%SDK%\Include\10.0.26100.0\ucrt;%SDK%\Include\10.0.26100.0\um;%SDK%\Include\10.0.26100.0\shared;%SDK%\Include\10.0.26100.0\winrt;%SDK%\Include\10.0.26100.0\cppwinrt;%REPO%\.local\msvc-shim

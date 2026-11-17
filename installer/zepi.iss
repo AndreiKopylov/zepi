@@ -72,6 +72,7 @@ Source: "{#StagingDir}\zepi.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StagingDir}\agent.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StagingDir}\pi\*"; DestDir: "{app}\pi"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\photon\*"; DestDir: "{app}\photon"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StagingDir}\icons\*"; DestDir: "{app}\icons"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\packages\*"; DestDir: "{app}\packages"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\native\*"; DestDir: "{app}\native"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\deps\python\*"; DestDir: "{app}\deps\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: office

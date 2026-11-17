@@ -1747,6 +1747,7 @@ impl ConversationView {
             .agent_server_store
             .read(cx)
             .agent_display_name(&agent_id.clone())
+            .or_else(|| crate::zepi_pi_label(agent_id.as_ref()))
             .unwrap_or_else(|| agent_id.0.clone());
 
         let agent_icon = self.agent.logo();
@@ -1761,7 +1762,8 @@ impl ConversationView {
                         .agent(&self.agent.agent_id())
                         .and_then(|a| a.icon_path().cloned())
                 })
-            });
+            })
+            .or_else(|| crate::zepi_pi_icon(self.agent.agent_id().as_ref()));
 
         let weak = cx.weak_entity();
         cx.new(|cx| {

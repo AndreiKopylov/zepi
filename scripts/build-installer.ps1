@@ -79,6 +79,9 @@ if (-not $SkipStaging) {
     Copy-Item (Join-Path $Repo 'packages\acp\node_modules\@earendil-works\pi-coding-agent\package.json') $piDest -Force
     $phDest = Join-Path $staging 'photon'; New-Item -ItemType Directory $phDest -Force | Out-Null
     Copy-Item (Join-Path $Repo 'packages\acp\node_modules\@earendil-works\pi-coding-agent\node_modules\@silvia-odwyer\photon-node\photon_rs_bg.wasm') $phDest -Force
+    # pi logo shown for the bundled agent (read from disk by the UI)
+    $icoDest = Join-Path $staging 'icons'; New-Item -ItemType Directory $icoDest -Force | Out-Null
+    Copy-Item (Join-Path $Repo 'native\overlay\assets\icons\pi.svg') $icoDest -Force
     foreach ($item in $fromPayload) { Copy-Tree (Join-Path $Payload $item) (Join-Path $staging "deps\$item") }
     # Node and Python build leftovers add nothing to the install
     Get-ChildItem (Join-Path $staging 'deps\python') -Filter __pycache__ -Directory -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force

@@ -1,18 +1,33 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, writeFile, mkdir, rename, rm, copyFile, access } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 const exec = promisify(execFile);
 const BUN_VERSION = "1.4.4";
+// sha256 hex of bun-windows-x64.zip 1.4.4: cd2c0fccc78f3ede1f50ca827a15f063eda13d4d150a3d0674f4f6e323d864a5
+const BUN_SHA256 = "sha256-zSwPzMePPt4fUMqCehXwY+2hPU0VCj0GdPT24yPYZKU=";
 const EXTENSION_URL = "https://chromewebstore.google.com/detail/mfnicocicmmlkpjnaffgihfjhdgjkdjg";
 
 const npmLatest = async name => {
   const res = await fetch(`https://registry.npmjs.org/${name}/latest`);
   if (!res.ok) throw new Error(`npm registry unreachable for ${name}.`);
   const d = await res.json();
-  return { version: d.version, tarball: d.dist.tarball };
+  if (!d.version || !d.dist?.tarball || !d.dist?.integrity?.startsWith("sha512-"))
+    throw new Error(`npm metadata for ${name} is incomplete.`);
+  return { version: d.version, tarball: d.dist.tarball, integrity: d.dist.integrity };
 };
+
+// The artifact must match what its source serves for that exact version before anything is installed.
+export async function verifyDownload(name, file, sri) {
+  const [algorithm, expected] = sri.split("-");
+  const actual = createHash(algorithm).update(await readFile(file)).digest("base64");
+  if (actual !== expected) {
+    await rm(file, { force: true });
+    throw new Error(`${name} failed integrity verification. Download it again.`);
+  }
+}
 const download = (url, dest) => exec("curl", ["-fsSL", "--retry", "2", "-o", dest, url], { timeout: 600000 });
 const systemTar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
 const extractTgz = async (tgz, dest) => { await mkdir(dest, { recursive: true }); await exec(systemTar, ["-xzf", tgz, "-C", dest]); };
@@ -37,6 +52,7 @@ async function fetchParts(dir, want) {
     if (want.bun) {
       const zip = join(tmp, "bun.zip");
       await download(`https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-windows-x64.zip`, zip);
+      await verifyDownload(`bun ${BUN_VERSION}`, zip, BUN_SHA256);
       await extractZip(zip, tmp);
       await copyFile(join(tmp, "bun-windows-x64", "bun.exe"), join(dir, "bun.exe"));
       manifest.bun = BUN_VERSION;
@@ -45,6 +61,7 @@ async function fetchParts(dir, want) {
       const meta = await npmLatest("@opencode/browse-windows-x64");
       const tgz = join(tmp, "relay.tgz");
       await download(meta.tarball, tgz);
+      await verifyDownload(`@opencode/browse-windows-x64@${meta.version}`, tgz, meta.integrity);
       await extractTgz(tgz, join(tmp, "relay"));
       const dest = join(dir, "node_modules", "@opencode", "browse-windows-x64");
       await mkdir(join(dest, "bin"), { recursive: true });
@@ -56,6 +73,7 @@ async function fetchParts(dir, want) {
       const meta = await npmLatest("@opencode/browse");
       const tgz = join(tmp, "cli.tgz");
       await download(meta.tarball, tgz);
+      await verifyDownload(`@opencode/browse@${meta.version}`, tgz, meta.integrity);
       await extractTgz(tgz, join(tmp, "cli"));
       await copyFile(join(tmp, "cli", "package", "dist", "cli.mjs"), join(dir, "cli.mjs"));
       manifest.cli = meta.version;

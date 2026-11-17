@@ -23705,6 +23705,8 @@ dependencies = [
  "theme",
  "ui",
  "util",
+ "uuid",
+ "windows 0.62.2",
  "wordcraft-doc",
  "wordcraft-docbin",
  "wordcraft-docx",
