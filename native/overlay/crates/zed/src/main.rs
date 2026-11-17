@@ -348,7 +348,8 @@ fn main() {
     let version = option_env!("ZED_BUILD_ID");
     let app_commit_sha =
         option_env!("ZED_COMMIT_SHA").map(|commit_sha| AppCommitSha::new(commit_sha.to_string()));
-    let app_version = AppVersion::load(env!("CARGO_PKG_VERSION"), version, app_commit_sha.clone());
+    let app_version =
+        AppVersion::load(zepi_runtime::PRODUCT_VERSION, version, app_commit_sha.clone());
 
     if args.system_specs {
         let system_specs = system_specs::SystemSpecs::new_stateless(

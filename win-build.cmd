@@ -29,5 +29,7 @@ set PATH=%MSVC%\bin\Hostx64\x64;%ZEPI_EXTRA_PATH%;%PATH%
 cd /d %REPO%\.local\upstream\zed
 cargo build --target-dir "%CARGO_TARGET_DIR%" -p zed --bin zepi --profile %PROFILE% --features gpui_platform/runtime_shaders %*
 if errorlevel 1 exit /b 1
+cargo build --target-dir "%CARGO_TARGET_DIR%" -p auto_update_helper --profile %PROFILE%
+if errorlevel 1 exit /b 1
 echo|set /p="%REPO%"> "%CARGO_TARGET_DIR%\%PROFILE%\zepi-root.txt"
 echo BUILD_OK binary=%CARGO_TARGET_DIR%\%PROFILE%\zepi.exe

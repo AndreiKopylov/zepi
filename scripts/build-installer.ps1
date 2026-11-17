@@ -56,6 +56,10 @@ if (-not $SkipStaging) {
     Copy-Tree $Exe (Join-Path $staging 'zepi.exe')
     Copy-Item $agent (Join-Path $staging 'agent.exe') -Force
     if (Test-Path $browser) { Copy-Item $browser (Join-Path $staging 'zepi_browser.exe') -Force }
+    $helper = Join-Path $buildRoot 'release-fast\auto-update-helper.exe'
+    if (-not (Test-Path $helper)) { throw ('no auto_update_helper: ' + $helper + ' (run win-build.cmd)') }
+    New-Item -ItemType Directory (Join-Path $staging 'tools') -Force | Out-Null
+    Copy-Item $helper (Join-Path $staging 'tools\auto_update_helper.exe') -Force
     foreach ($item in $fromRepo) { Copy-Tree (Join-Path $Repo $item) (Join-Path $staging $item) }
     Get-ChildItem (Join-Path $staging 'packages') -Recurse -Directory -Filter 'node_modules' | Remove-Item -Recurse -Force
     # Dev-only trees and bins replaced by agent.exe subcommands are not shipped.
