@@ -25,10 +25,13 @@ zepi/
 ├── scripts/
 │   ├── native.py              # prepare: Zed tarball per pin + overlay + removals
 │   ├── win-run.py             # run: seeds configs, launches the release-fast exe
+│   ├── build-agent.cmd        # bun build --compile cli.ts -> agent.exe (pinned bun 1.4.4)
+│   ├── build-installer.ps1    # staging + Inno Setup; version read from PRODUCT_VERSION
 │   ├── zed-update.py          # price a new Zed version in a scratch tree, overlay untouched
 │   ├── zed-port-matrix.py     # port cost per overlay file: PORT/KEEP/NEW/DROP
 │   └── zed-port-merge.py      # 3-way merge of an overlay file (ours/base/theirs)
-├── win-build.cmd              # cargo build -p zed --bin zepi --profile release-fast
+├── installer/zepi.iss         # Inno Setup script (per-machine, AppMutex, /DAppVersion)
+├── win-build.cmd              # cargo build -p zed --bin zepi --profile release-fast (or `installer`)
 ├── win-run.sh                 # launcher: win-build.cmd outside MSYS path conversion
 └── .local/                    # ignored: tarballs, upstream zed tree, build logs
 ```
@@ -36,7 +39,9 @@ zepi/
 ## Stack
 
 - Native: Rust 1.98.1, Zed v1.28.1 (tarball by pin, sha256 verified), gpui; `release-fast` cargo
-  profile (debug is unusable: laggy UI); target dir outside the repo.
+  profile (debug is unusable: laggy UI); `release-installer` (strip, thin-LTO) for the installer only;
+  target dir outside the repo. Auto-update rides Zed's mechanism (GitHub releases/latest redirect,
+  detached non-silent Inno installer). Version single source: `PRODUCT_VERSION` in `zepi_runtime.rs`.
 - Agent: single bun binary (agent.exe), TypeScript, ACP; browser on **browse** (opencode,
   MIT): a Rust relay + Chromium extension driving the user's real browser (logins/SSO),
   installed on demand from Settings > Browser.
@@ -50,7 +55,9 @@ zepi/
 npm ci
 python scripts\native.py prepare   :: REQUIRED after any native/overlay change
 win-build.cmd                       :: set ZEPI_JOBS=3 when memory is tight
+scripts\build-agent.cmd             :: agent.exe (bun); needed after packages/acp|runtime changes
 scripts\win-run.py                 :: run with seeded configs
+scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PRODUCT_VERSION)
 ```
 
 - TS tests: `npm run test:acp` (clean env: unset OPENCODE_API_KEY), types: `npm run check`.
@@ -94,9 +101,14 @@ scripts\win-run.py                 :: run with seeded configs
 - wordcraft vendor carries a local patch (scripts/wordcraft-local-patches/wordcraft-local.patch):
   reapply it after any vendor update; rationale and Word measurements live in the team wiki
   (7-zepi/патчи-wordcraft).
+- browse relay bakes OPENCODE_BROWSER_TOOLS at startup: changing tools mode needs `browse restart`
+  with the env (ensureRelayMode); a dead relay is revived on session start with a restart backoff.
+- Updating browse while running hits EBUSY on browse.exe: stopBrowse (taskkill) before copying.
+- photon_rs_bg.wasm must sit next to agent.exe (photon/): the bun binary bakes the build-machine
+  path, pi redirects the read to the exe-dir fallback.
 
 ## Documentation
 
 README.md — intro, distribution layout, licenses; `native/zed.json` — Zed pin;
-`vendor/*/VENDOR.md`, `ATTRIBUTION.md`, `NOTICE` — vendored code provenance;
+`vendor/*/VENDOR.md`, `NOTICE` — vendored code provenance;
 `LICENSE` — GPL-3.0-or-later.
