@@ -3,7 +3,7 @@
 #define AppExeName "zepi.exe"
 #define AppPublisher "Zepi"
 #ifndef AppVersion
-  #define AppVersion "0.0.1"
+  #define AppVersion "0.0.2"
 #endif
 #define AppId "{{6F1D6E5A-8F14-4E2C-9B7A-2E4C9F0B31D7}"
 #define StagingDir "..\dist\staging"
@@ -70,7 +70,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#StagingDir}\zepi.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StagingDir}\agent.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#StagingDir}\zepi_browser.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StagingDir}\pi\*"; DestDir: "{app}\pi"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\photon\*"; DestDir: "{app}\photon"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StagingDir}\packages\*"; DestDir: "{app}\packages"; Flags: ignoreversion recursesubdirs createallsubdirs

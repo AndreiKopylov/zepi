@@ -43,8 +43,9 @@ openpyxl, python-pptx, pypdf и Pillow. Ставить ничего не нуж�
 
 - Windows 10/11 x64.
 - Провайдер моделей (любой OpenAI-совместимый endpoint или один из встроенных в pi).
-- Для браузерных инструментов агента: системный Chrome или Edge. Браузером управляет нативный
-  Rust/CDP-движок (`zepi_browser`, chromiumoxide) — без Playwright и докачки Chromium.
+- Для браузерных инструментов агента: Chromium-браузер с расширением **browse** (opencode, MIT).
+  browse водит ваш реальный браузер (логины/SSO) через Rust-relay; ставится по требованию из
+  Settings > Browser.
 - Редактору и агенту системный рантайм не нужен (агент — bun-бинарь в поставке). Опциональные
   функции используют системные инструменты: Node.js для language servers/превью, bun для MCP. Python в поставке.
 
@@ -53,7 +54,6 @@ openpyxl, python-pptx, pypdf и Pillow. Ставить ничего не нуж�
 ```
 zepi.exe                 редактор + хост агента (Rust: Zed плюс оверлей Zepi)
 agent.exe                bun-бинарь: ACP-адаптер + pi, без Node в рантайме
-zepi_browser.exe         нативный Rust/CDP-браузер, MCP-сервер (chromiumoxide)
 packages/                исходники адаптера/runtime + превью-хелперы
 deps/python/             CPython 3.13 с документными библиотеками
 native/                  внешний вид, дефолты pi, скиллы
@@ -124,7 +124,7 @@ Zepi читает собственные параметры из секции `z
   от которой Zepi ведёт происхождение.
 - [Mario Zechner](https://github.com/badlogic/pi-mono) — агент pi и протокол ACP.
 - [storytold](https://github.com/storytold) — gridcraft, deckcraft, wordcraft (движки документов).
-- [chromiumoxide](https://github.com/mattsse/chromiumoxide) — Rust CDP-драйвер для `zepi_browser`.
+- [browse](https://github.com/anomalyco/browse) (opencode, MIT) — автоматизация реального браузера: Rust-relay + Chromium-расширение.
 - [browser-use](https://github.com/browser-use) — хелперы текстовой модели страницы (MIT).
 - Сообщества Node.js и зависимостей из `Cargo.toml`/`package.json`.
 

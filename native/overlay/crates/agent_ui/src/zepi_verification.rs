@@ -161,7 +161,7 @@ pub(crate) fn rows<'a>(threads: impl IntoIterator<Item = &'a AcpThread>) -> Vec<
             if name != "preview"
                 && !matches!(
                     name,
-                    "mcp__zepi_browser__browser_navigate" | "mcp__zepi_browser__browser_snapshot"
+                    "mcp__browse__navigate" | "mcp__browse__snapshot"
                 )
             {
                 continue;

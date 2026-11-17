@@ -61,7 +61,7 @@ export function createMcpStatus(directory, heartbeatMs = 30_000) {
         owner.rows = rows.map(({server, state, toolCount}) => {
           const options = server[Symbol.for('zepi.pi.mcp.options')];
           return {name:server.name, state, toolCount, updatedAt:new Date().toISOString(),
-            origin:options?.origin ?? (server.name === 'zepi_browser' ? 'builtin' : 'client'),
+            origin:options?.origin ?? 'client',
             ...(options?.extensionPath ? {plugin:basename(options.extensionPath)} : {}),
             ...(options?.config ? {revision:mcpRevision(options.config, options.autoEnableCodemode)} : {})};
         });

@@ -347,7 +347,7 @@ function makeLazyHandle(server, hash, signal, timeoutMs, sleep, binding, cache) 
     let idleTimer;
     const idleMs = 15 * 60_000;
     const arm = () => {
-        if (server.name === "zepi_browser") return;
+        if (server.name === "browse") return;
         clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
             if (active > 0 || Date.now() - lastUsed < idleMs) { arm(); return; }
@@ -786,7 +786,7 @@ export async function connectDefaultMcpClient(server, signal, timeoutMs, sleep, 
     // Its progress keeps the outer tool call alive; turn/session cancellation
     // still settles the incoming request immediately.
     installClientHandlers(client, binding, token, validator, timeoutMs, sleep,
-        server.name === "zepi_browser" ? 30 * 60_000 : timeoutMs);
+        server.name === "browse" ? 30 * 60_000 : timeoutMs);
     const capabilityDiagnostic = (method) => binding?.emitDiagnostic(`[mcp:${token}] ${method}`);
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
         const caps = client.getServerCapabilities();

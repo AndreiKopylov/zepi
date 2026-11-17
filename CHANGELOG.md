@@ -6,6 +6,24 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-11-17
+
+### Changed
+
+- Browser engine replaced: the native Rust/CDP `zepi_browser` is removed in favour of
+  **browse** (opencode, MIT) — a Rust relay + Chromium extension driving the user's real
+  browser (logins/SSO). Installed/updated on demand from Settings > Browser (folder choice,
+  pairing code, extension link, behavior and tools-mode settings); the MCP entry self-heals
+  if deleted.
+- Browser tools default to **execute** (code) mode: the agent drives the page with
+  Playwright-style JavaScript in one call instead of many discrete tool calls; plain mode
+  remains selectable. Relay tools-mode is enforced on session start.
+
+### Removed
+
+- `zepi_browser` crate, binary and its installer/bundle references; native browser settings
+  (executable path, keep-open, window mode) and native browser tests.
+
 ## [0.0.1] - 2026-11-16
 
 ### Added

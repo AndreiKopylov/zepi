@@ -1,0 +1,11 @@
+export function installBrowse(dir: string): Promise<Record<string, unknown>>;
+export function updateBrowse(dir: string): Promise<Record<string, unknown>>;
+export function checkBrowseUpdate(dir: string): Promise<{ current: string; latest: string; updateAvailable: boolean }>;
+export function browseStatus(dir: string): Promise<Record<string, unknown>>;
+export function pairBrowse(dir: string): Promise<string>;
+export function setBrowseSettings(dir: string, changes: Record<string, unknown>): Promise<Record<string, unknown>>;
+export function writeBrowseMcp(directory: string, dir: string, tools: string): Promise<void>;
+export function removeBrowseMcp(directory: string): Promise<void>;
+export function ensureBrowseMcp(directory: string, dir: string, tools: string): Promise<boolean>;
+export function ensureRelayMode(dir: string, tools: string): Promise<void>;
+export function restartBrowseRelay(dir: string): Promise<void>;

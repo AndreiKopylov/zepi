@@ -26,7 +26,7 @@ export function resolveAgentTools(selectors: string[] | undefined, tools: ToolIn
     const matches = available.filter(tool => {
       if (selector === "extensions") return !tool.sourceInfo.path.startsWith("<") && !tool.sourceInfo.path.startsWith('builtin:');
       if (selector === "mcp") return tool.sourceInfo.path === mcpPath;
-      if (selector === "browser") return tool.sourceInfo.path === mcpPath && tool.name.startsWith("mcp__zepi_browser__");
+      if (selector === "browser") return tool.sourceInfo.path === mcpPath && tool.name.startsWith("mcp__browse__");
       if (selector.startsWith("mcp:")) return tool.sourceInfo.path === mcpPath && tool.name.startsWith(`mcp__${selector.slice(4)}__`);
       if (selector === "read") return ["read", "find", "grep", "ls"].includes(tool.name) && tool.sourceInfo.source === "sdk";
       return tool.name === selector.replace(/^tool:/, "");

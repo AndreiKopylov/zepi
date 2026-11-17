@@ -96,8 +96,7 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
     const mcp = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
     const active = await activeRuntimes();
     const running = await readMcpStatus(directory, active);
-    const servers = [{name: "zepi_browser", enabled: true, builtin: true, detail: "Built-in browser automation"},
-      ...Object.entries(mcp.mcpServers).map(([name, s]) => ({name, enabled: s.enabled !== false, builtin: false, oauth: usesOAuth(s), signedIn: usesOAuth(s) && !!credentials(directory).tokens(name, s.url), detail: s.command ? "Local process" : s.type === "sse" ? "SSE server" : "HTTP server"}))];
+    const servers = [...Object.entries(mcp.mcpServers).map(([name, s]) => ({name, enabled: s.enabled !== false, builtin: false, oauth: usesOAuth(s), signedIn: usesOAuth(s) && !!credentials(directory).tokens(name, s.url), detail: s.command ? "Local process" : s.type === "sse" ? "SSE server" : "HTTP server"}))];
     for (const state of running) if (!servers.some(server => server.name === state.name)) {
       servers.push({name:state.name, enabled:true, builtin:false, runtimeOnly:true,
         detail:state.origin === 'plugin' ? `Registered by pi plugin${state.plugin ? ` · ${state.plugin}` : ''}` : 'Retained by an open task'});

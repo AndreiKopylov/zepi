@@ -133,6 +133,7 @@ export declare function mapMcpSamplingResult(message: AssistantMessage, stopSequ
     stopReason: "maxTokens" | "endTurn" | "stopSequence";
 };
 export declare function connectDefaultMcpClient(server: McpServer, signal: AbortSignal, timeoutMs: number, sleep: PiAcpDeps["sleep"], binding?: McpSessionBinding): Promise<McpClientHandle>;
+export declare function connectManagedMcpClient(server: McpServer, signal: AbortSignal, timeoutMs: number, sleep: PiAcpDeps["sleep"], binding?: McpSessionBinding): Promise<McpClientHandle>;
 export declare function allocateAlias(server: string, tool: string, used: Set<string>): string;
 export declare function convertMcpContent(content: ContentBlock): {
     type: "text";

@@ -10085,21 +10085,8 @@ exit 7
 }
 
 fn mcp_servers_for_project(project: &Entity<Project>, cx: &App) -> Vec<acp::McpServer> {
-    // zepi: the browser bridge replaces project MCP servers inside the product.
-    if let Some(root) = std::env::var_os("ZEPI_ROOT") {
-        // Architecture B: prefer the Rust chromiumoxide browser next to the exe.
-        let bin_name = if cfg!(windows) { "zepi_browser.exe" } else { "zepi_browser" };
-        if let Some(bin) = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join(bin_name)))
-            .filter(|p| p.is_file())
-        {
-            return vec![acp::McpServer::Stdio(
-                acp::McpServerStdio::new("zepi_browser", bin).args(vec!["serve".to_string()]),
-            )];
-        }
-        let _ = root;
-        log::error!("Zepi browser tools require zepi_browser.exe next to the editor executable");
+    // zepi: the product uses pi-managed MCP servers (browse); no native browser bridge.
+    if std::env::var_os("ZEPI_ROOT").is_some() {
         return Vec::new();
     }
     mcp_configurations_for_project(project, cx)

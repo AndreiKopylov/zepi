@@ -37,7 +37,6 @@ $fromPayload = @('python')
 if (-not (Test-Path $Exe)) { throw ('no build output: ' + $Exe + ' (run win-build.cmd first)') }
 $agent = Join-Path $buildRoot 'release-fast\agent.exe'
 if (-not (Test-Path $agent)) { throw ('no agent binary: ' + $agent + ' (run scripts\build-agent.cmd first)') }
-$browser = Join-Path $buildRoot 'release-fast\zepi_browser.exe'
 foreach ($item in $fromRepo) { if (-not (Test-Path (Join-Path $Repo $item))) { throw ('repo is missing ' + $item) } }
 if (-not (Test-Path (Join-Path $Repo 'native\pi-defaults'))) { throw 'repo is missing native/pi-defaults' }
 foreach ($item in $fromPayload) { if (-not (Test-Path (Join-Path $Payload $item))) { throw ('payload is missing ' + (Join-Path $Payload $item) + ' (scripts/prepare-python.ps1)') } }
@@ -55,7 +54,6 @@ if (-not $SkipStaging) {
     New-Item -ItemType Directory $staging -Force | Out-Null
     Copy-Tree $Exe (Join-Path $staging 'zepi.exe')
     Copy-Item $agent (Join-Path $staging 'agent.exe') -Force
-    if (Test-Path $browser) { Copy-Item $browser (Join-Path $staging 'zepi_browser.exe') -Force }
     foreach ($item in $fromRepo) { Copy-Tree (Join-Path $Repo $item) (Join-Path $staging $item) }
     Get-ChildItem (Join-Path $staging 'packages') -Recurse -Directory -Filter 'node_modules' | Remove-Item -Recurse -Force
     # Dev-only trees and bins replaced by agent.exe subcommands are not shipped.
