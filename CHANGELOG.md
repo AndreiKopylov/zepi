@@ -26,6 +26,9 @@ All notable changes to Zepi are documented here. The format follows
 - Stability: a failing MCP server now backs off (circuit breaker with cooldown) instead of being
   retried in a tight loop, and recovers once the cooldown passes; a dead browse relay is revived on
   session start (endpoint probe) with a restart backoff, no polling.
+- The bundled agent is presented as **pi** with the pi logo (agent menu and thread header) instead
+  of the internal `zepi-pi` id and a generic sparkle; the gray-to-black gradient fade in the agent
+  panel header was removed to match Zed.
 
 ### Removed
 
@@ -38,6 +41,11 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Fixed
 
+- Office viewers' "send to agent" now appends to the **displayed** workspace and its active thread.
+  Previously it resolved the first workspace and the root thread, so with several projects open the
+  selection landed in a different (higher) session than the one being viewed.
+- Corrected the `slides_viewer` `emoji_offsets` test expectation: a single emoji in the haystack
+  yields one match, not two.
 - Spreadsheet save is now atomic: the workbook is written to a hidden `~$…` temp file
   (Excel-style, random suffix) next to the target and renamed over it, so a crash or full disk
   mid-save no longer truncates the file.

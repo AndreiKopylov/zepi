@@ -4073,7 +4073,7 @@ impl AgentPanel {
         }
     }
 
-    pub(crate) fn visible_conversation_view(&self) -> Option<&Entity<ConversationView>> {
+    pub fn visible_conversation_view(&self) -> Option<&Entity<ConversationView>> {
         match self.visible_surface() {
             VisibleSurface::AgentThread(conversation_view) => Some(conversation_view),
             _ => None,
