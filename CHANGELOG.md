@@ -29,6 +29,9 @@ All notable changes to Zepi are documented here. The format follows
 - The bundled agent is presented as **pi** with the pi logo (agent menu and thread header) instead
   of the internal `zepi-pi` id and a generic sparkle; the gray-to-black gradient fade in the agent
   panel header was removed to match Zed.
+- Auto-update is now diagnosable and more robust: it logs the resolved release tag, installed vs
+  fetched version and the newer/up-to-date decision, busts edge/proxy caches on `releases/latest`,
+  and launches the installer via `Start-Process -Verb RunAs` (reliable UAC) instead of `explorer.exe`.
 
 ### Removed
 
@@ -46,6 +49,8 @@ All notable changes to Zepi are documented here. The format follows
   selection landed in a different (higher) session than the one being viewed.
 - Corrected the `slides_viewer` `emoji_offsets` test expectation: a single emoji in the haystack
   yields one match, not two.
+- Spreadsheet cell editing accepts the space bar: gpui reports it as the `space` keystroke, which
+  the single-character insert fallback previously dropped.
 - Spreadsheet save is now atomic: the workbook is written to a hidden `~$…` temp file
   (Excel-style, random suffix) next to the target and renamed over it, so a crash or full disk
   mid-save no longer truncates the file.

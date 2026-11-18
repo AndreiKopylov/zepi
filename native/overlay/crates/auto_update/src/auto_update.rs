@@ -673,10 +673,17 @@ impl AutoUpdater {
 
         let _ = (release_channel, version, asset, os, arch);
         let http_client = client.http_client();
-        // Public releases/latest redirect (no API key, no rate limit).
-        let request = Request::get("https://github.com/AndreiKopylov/zepi/releases/latest")
-            .follow_redirects(RedirectPolicy::NoFollow)
-            .body(Default::default())?;
+        // Public releases/latest redirect (no API key, no rate limit). The query param
+        // busts edge/proxy caches that would otherwise keep pointing at the previous tag.
+        let bust = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let request = Request::get(format!(
+            "https://github.com/AndreiKopylov/zepi/releases/latest?cb={bust}"
+        ))
+        .follow_redirects(RedirectPolicy::NoFollow)
+        .body(Default::default())?;
         let response = http_client.send(request).await?;
         let location = response
             .headers()
@@ -689,6 +696,7 @@ impl AutoUpdater {
             .context("unexpected releases/latest redirect")?
             .trim_end_matches('/')
             .to_string();
+        log::info!("auto-update: releases/latest resolved tag={tag}");
         Ok(ReleaseAsset {
             version: tag.trim_start_matches('v').to_string(),
             url: format!("https://github.com/AndreiKopylov/zepi/releases/download/{tag}/zepi-{tag}-setup.exe"),
@@ -718,6 +726,7 @@ impl AutoUpdater {
             Self::get_release_asset(&this, release_channel, None, "zed", OS, ARCH, cx).await?;
         let fetched_version = fetched_release_data.clone().version;
         let app_commit_sha = Ok(cx.update(|cx| AppCommitSha::try_global(cx).map(|sha| sha.full())));
+        log::info!("auto-update: installed={} fetched={}", installed_version, fetched_version);
         let newer_version = Self::check_if_fetched_version_is_newer(
             release_channel,
             app_commit_sha,
@@ -725,6 +734,7 @@ impl AutoUpdater {
             fetched_version,
             previous_status.clone(),
         )?;
+        log::info!("auto-update: newer={:?}", newer_version);
 
         let Some(newer_version) = newer_version else {
             this.update(cx, |this, cx| {
@@ -756,6 +766,7 @@ impl AutoUpdater {
         let target_path = Self::target_path(&installer_dir).await?;
         let progress_entity = this.clone();
         let mut progress_cx = cx.clone();
+        log::info!("auto-update: downloading {}", fetched_release_data.url);
         download_release(
             &target_path,
             fetched_release_data,
@@ -1270,11 +1281,15 @@ async fn cleanup_windows() -> Result<()> {
 }
 
 async fn install_release_windows(downloaded_installer: &Path) -> Result<Option<PathBuf>> {
-    // Launch detached via explorer (ShellExecute) so the installer survives the app it
-    // is about to close; it shows its UI, handles UAC and relaunches the app itself.
-    let mut cmd = new_command("explorer.exe");
-    cmd.arg(downloaded_installer);
+    // ShellExecute with RunAs (via Start-Process) reliably shows the installer UI and the
+    // UAC prompt and survives the app it is about to close; explorer.exe <file> is unreliable
+    // (it may just open the containing folder). Per-machine installs need elevation.
+    let path = downloaded_installer.display().to_string().replace('\'', "''");
+    let ps = format!("Start-Process -LiteralPath '{path}' -Verb RunAs");
+    let mut cmd = new_command("powershell.exe");
+    cmd.args(["-NoProfile", "-Command", ps.as_str()]);
     cmd.spawn().context("failed to launch installer")?;
+    log::info!("auto-update: launched installer (RunAs): {}", downloaded_installer.display());
     Ok(None)
 }
 

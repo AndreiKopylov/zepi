@@ -1376,6 +1376,7 @@ impl SheetView {
             "enter" | "tab" => { self.commit_edit(cx); true }
             "escape" => { self.cancel_edit(cx); true }
             "backspace" => { self.edit_delete(true, cx); true }
+            "space" => { self.edit_insert(" ", cx); true }
             "delete" => { self.edit_delete(false, cx); true }
             "left" | "right" | "up" | "down" | "home" | "end" => { self.edit_move(key, m.shift, window, cx); true }
             _ => {
