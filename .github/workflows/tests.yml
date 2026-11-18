@@ -23,6 +23,7 @@ jobs:
       - name: Install
         run: |
           npm ci
+          npm --prefix packages/acp ci
           npm --prefix packages/runtime ci
       - name: Types
         run: npm run check
