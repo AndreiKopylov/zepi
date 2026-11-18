@@ -29,7 +29,6 @@
     "probe": "tsx scripts/tools.ts probe",
     "smoke": "node scripts/smoke.mjs",
     "test:native": "python3 scripts/native.py test-native",
-    "test:preview": "bun test packages/acp/test/preview-dependencies.test.ts",
     "test:ecosystem": "bun test packages/acp/test/ecosystem.test.ts",
     "package:app": "python3 scripts/package-app.py",
     "test:runtime-install": "node --test packages/runtime/test/lifecycle.test.mjs",

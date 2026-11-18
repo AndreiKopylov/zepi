@@ -14,8 +14,6 @@ import { ndJsonStream, type AgentContext, type McpServer, type Stream } from "@a
 import {Readable, Writable} from 'node:stream';
 import { editorTools } from "./editor-tools.ts";
 import { editorQueryTools } from "./editor-query.ts";
-import { createPreview } from "./preview.ts";
-import { browserLifecycle } from "./browser-lifecycle.ts";
 import { accessPolicy } from "./access-policy.ts";
 import { installPiCommands } from "./pi-commands.ts";
 import { createSubagents } from "./subagents.ts";
@@ -75,10 +73,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         if (!options.cwd || !options.sessionManager) throw new Error("Missing ACP session context.");
         const client = await clientReady;
         let liveSession:AgentSession|undefined;
-        let browserForce: (() => void) | undefined;
-        const browserDecision = await browserEnvironment(agentDir);
         const images = codemodeImages();
-        const preview = createPreview(options.cwd, join(agentDir, "previews"), options.sessionManager.getSessionId(), client);
         const shell = createShell(options.cwd, join(agentDir, "commands"), options.sessionManager.getSessionId(), client);
         // Settings are owned by pi. New tasks see credentials/models changed in
         // Zepi's settings without replacing the model of an active conversation.
@@ -93,7 +88,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
           const getExtensions = options.resourceLoader.getExtensions.bind(options.resourceLoader);
           options.resourceLoader.getExtensions = () => {
             const loaded = getExtensions();
-            return { ...loaded, extensions: [...loaded.extensions, preview.extension, shell.extension, accessPolicy(()=>liveSession,name=>browser.track(name),{backend:browserDecision.backend,tools:browserDecision.browseTools})] };
+            return { ...loaded, extensions: [...loaded.extensions, shell.extension, accessPolicy()] };
           };
           const append = options.resourceLoader.getAppendSystemPrompt.bind(options.resourceLoader);
           options.resourceLoader.getAppendSystemPrompt = () => [...append(),
@@ -105,7 +100,6 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
             "Bundled (the default): `python`, `python3` or `$env:ZEPI_PYTHON`, living in `<ZEPI_ROOT>\\deps\\python`. Has python-docx, openpyxl, python-pptx, pypdf and Pillow, and no pip. Use it for every .docx/.xlsx/.pptx task; never invent a path under %LOCALAPPDATA% and never try `pip` here.",
             "System: reachable only through `py` or `py -3`, if the machine has Python at all. It has pip but none of the Office libraries. Use it for anything else (pandas, requests, scraping) and always create a project venv (`.venv`) with `py -3 -m venv .venv`, installing into the venv rather than the global interpreter. If `py` is not found, tell the user the task needs a system Python instead of silently switching to the bundled one.",
             "fetch_content fetches http(s) URLs only. Local files are read with the read tool.",
-            `For development verification, use preview start with explicit editor files, including unsaved changes. For static HTML/CSS/JS supply an HTML entry. For projects supply commands for checks/builds and a server command; select installed dependency directories to copy into the captured project. Read the project configuration before choosing commands. Commands run in a copy and do not update source buffers. Open its exact URL with the bundled browser tools, observe, interact, then observe the actual result. After a failure, read and repair the files, start a new preview and repeat the check. Capture a screenshot when visual inspection matters. Before reporting completion, use preview status; a stale or unknown input state does not verify current edits. Include the run ID and tested criteria in the result. Preview status and successful browser calls are not acceptance passes. Evidence covers only captured files and copied dependencies. Successful check exits and server reachability alone do not demonstrate correct behavior. Commands that modify captured source invalidate freshness; repair editor buffers and recapture instead. Never install missing dependencies without user authorization. Re-observe after cancellation or user takeover. Stop preview when finished. Project commands and servers also stop automatically when this turn ends. browse keeps agent tabs in the user's real browser (idle-closed); re-observe the page in a later turn. If the target cannot be started with available tools, report missing verification instead of claiming success.`
           ];
         }
         const created = await createAgentSession({
@@ -116,7 +110,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
           noTools: undefined,
           customTools: [...[...editorTools(options.cwd, options.sessionManager.getSessionId(), client, images.get),
             ...editorQueryTools(options.cwd, options.sessionManager.getSessionId(), client)]
-            .map(tool => ({...tool, defaultActive: false})), preview.tool, shell.tool,
+            .map(tool => ({...tool, defaultActive: false})), shell.tool,
             ...(subagents.enabled ? [subagents.tool(options.sessionManager.getSessionId(), client)] : [])],
         });
         liveSession=created.session;
@@ -147,9 +141,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         deliveries.set(created.session.sessionId, ledger);
         Object.defineProperty(created.session, DELIVERY, {value:ledger});
         const dispose = created.session.dispose.bind(created.session);
-        created.session.dispose = () => { browserForce?.(); disposeImages(); ledger.dispose(); if(deliveries.get(created.session.sessionId)===ledger)deliveries.delete(created.session.sessionId); dispose(); };
-        const browser = browserLifecycle(created.session, {backend: browserDecision.backend});
-        browserForce = () => { void browser.close(true).catch(error => console.error("Zepi browser cleanup failed:", error)); };
+        created.session.dispose = () => { disposeImages(); ledger.dispose(); if(deliveries.get(created.session.sessionId)===ledger)deliveries.delete(created.session.sessionId); dispose(); };
         const prompt = created.session.prompt.bind(created.session);
         created.session.prompt = async (...args) => {
           try {
@@ -160,7 +152,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
             await created.session.waitForIdle();
             return result;
           } finally {
-            const cleanup = await Promise.allSettled([browser.close(), preview.finishTurn(!!child), shell.finishTurn()]);
+            const cleanup = await Promise.allSettled([shell.finishTurn()]);
             const failed = cleanup.find(result => result.status === "rejected");
             if (failed?.status === "rejected") throw failed.reason;
           }
@@ -170,13 +162,13 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         const abort = created.session.abort.bind(created.session);
         created.session.abort = async () => {
           try { await abort(); } finally {
-            const results = await Promise.allSettled([preview.finishTurn(true), shell.finishTurn(), browser.close()]);
+            const results = await Promise.allSettled([shell.finishTurn()]);
             const failed = results.find(result => result.status === "rejected");
             if (failed?.status === "rejected") throw failed.reason;
           }
         };
         // The SDK bash override uses current editor captures and the same native
-        // process supervisor as preview. Role restrictions apply after discovery.
+        // process supervisor as the shell. Role restrictions apply after discovery.
         const child = subagents.register(created.session);
         const decisionTools = new Set<string>();
         let toolPolicy: ReturnType<typeof installAgentToolPolicy>;

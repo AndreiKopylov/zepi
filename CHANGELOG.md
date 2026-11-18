@@ -41,6 +41,14 @@ All notable changes to Zepi are documented here. The format follows
   bundling, the node+tsx dev-agent launch, the `native-build.json` build record): they never
   worked on Windows, which expects `zepi.exe` and builds via `win-build.cmd`. `npm run dev` now
   runs `scripts/win-run.py` directly.
+- The `preview` development-verification tool (captured frontend copy + vite/static dev server +
+  browser evidence) is removed, along with its helper processes, tests and smoke leg. The `bash`
+  tool keeps the captured-copy + keep/review workflow but now executes commands **in-process**
+  (direct spawn with timeout and process-tree kill), eliminating the supervisor/runner helper
+  chain and its Node/bun runtime; the app no longer auto-starts Node beyond Zed's LSP mechanics
+  and user-configured MCP servers.
+- The injected browser usage "guidelines" (`browserGuidance`) and the no-op browser lifecycle
+  stubs are removed from the system prompt; only the clickable file-link guidance remains.
 
 ### Fixed
 

@@ -5,7 +5,7 @@ import {dirname, join} from 'node:path';
 import {methods, type AgentContext} from '@agentclientprotocol/sdk';
 import {defineTool} from '@earendil-works/pi-coding-agent';
 import {Type} from 'typebox';
-import {createPreview} from './preview.ts';
+import {createCapture} from './capture.ts';
 import {EDITOR_QUERY} from './editor-query.ts';
 import {workspacePath} from './workspace-path.ts';
 
@@ -28,7 +28,7 @@ const shellSpec=process.platform==='win32'?winShell():{command:'/bin/bash',args:
 type Snapshot={content:string;disk:string|null;buffer:string|null};
 type Change={path:string;kind:'modified'|'created'|'deleted'|'unsupported';status:'applied'|'review'|'preserved';reason?:string;artifact?:string;reviewId?:string};
 
-/** Commands share preview's native terminal, process supervisor and cleanup.
+/** Commands use the captured-workspace native terminal, process supervisor and cleanup.
  * The copy is an execution directory, not a security sandbox. Only conditional
  * native writes can merge its text output back into the user's live buffers.
  */
@@ -48,10 +48,10 @@ export function createShell(cwd:string, storage:string, sessionId:string, client
     const value=Reflect.get(target,key,target);
     return typeof value==='function'?value.bind(target):value;
   }});
-  const runner=createPreview(cwd,storage,sessionId,forwarded,'shell');
+  const runner=createCapture(cwd,storage,sessionId,forwarded);
   const tool=defineTool({
     name:'bash',label:'Shell',defaultActive:false,executionMode:'sequential',
-    description:'Execute a bash command in a captured workspace including current unsaved editor contents and binary files. Supports pipes, redirects and shell syntax. Optional files selects inputs (max 512, 16 MiB); otherwise captures all visible workspace files and fails if incomplete. Optional dependencies copies installed dependency/asset directories (max 256 MiB). This is a local process, not an OS sandbox; use relative paths inside the capture. No packages are installed automatically. Changed, new and deleted files stay inside that copy: nothing is written back to the project, so results that must persist are produced with the write or edit tool, not by a command. Commands and descendants stop on completion, failure, timeout and cancellation. For long-running browser verification use preview with a server. Timeout defaults to 60 seconds, max 300.',
+    description:'Execute a bash command in a captured workspace including current unsaved editor contents and binary files. Supports pipes, redirects and shell syntax. Optional files selects inputs (max 512, 16 MiB); otherwise captures all visible workspace files and fails if incomplete. Optional dependencies copies installed dependency/asset directories (max 256 MiB). This is a local process, not an OS sandbox; use relative paths inside the capture. No packages are installed automatically. Changed, new and deleted files stay inside that copy: nothing is written back to the project, so results that must persist are produced with the write or edit tool, not by a command. Commands and descendants stop on completion, failure, timeout and cancellation. Timeout defaults to 60 seconds, max 300.',
     promptSnippet:'Run shell commands on current editor contents and review resulting changes',
     parameters:Type.Object({command:Type.String({minLength:1,maxLength:16384}),timeout:Type.Optional(Type.Integer({minimum:1,maximum:300})),
       files:Type.Optional(Type.Array(Type.String(),{maxItems:512})),dependencies:Type.Optional(Type.Array(Type.String(),{maxItems:16}))}),
