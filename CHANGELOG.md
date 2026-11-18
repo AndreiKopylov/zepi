@@ -6,6 +6,34 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-11-19
+
+### Changed
+
+- Much faster Rust dev builds: `release-fast` defaults to line-tables-only debug info
+  (`ZEPI_DEBUG=full` restores full), workspace crates compile incrementally (a warm rebuild
+  after an overlay edit is ~3.5 min instead of ~40), and sccache caches registry deps and
+  C/C++ build scripts when installed under `tools/`. New `scripts/win-build-bg.cmd` builds
+  detached on a core mask (default 10 of 16) at below-normal priority, so a full rebuild does
+  not freeze the desktop; single-crate type-checks live in `scripts/win-check.cmd [crate]`.
+- The `preview` development tool is removed; the `bash` tool keeps the captured-copy +
+  keep/review workflow but runs commands in-process (no supervisor/runner helper chain, no
+  auto-started Node). The injected browser usage "guidelines" and no-op lifecycle stubs are
+  gone from the system prompt.
+- Auto-update is diagnosable and more robust: it logs the resolved release tag and the
+  newer/up-to-date decision, busts edge/proxy caches on `releases/latest`, and launches the
+  installer via `Start-Process -Verb RunAs` instead of `explorer.exe`.
+
+### Fixed
+
+- Fresh installs enable auto-update: installed builds are detected by the absent dev marker
+  (`zepi-root.txt` next to the exe), not the `ZEPI_INSTALLED_RUNTIME` env var real installs
+  never had.
+- `win-build.cmd installer` consumes its argument instead of forwarding `installer` to cargo.
+- Spreadsheet cell editing accepts the space bar (gpui reports it as the `space` keystroke).
+- No flashing npm/cmd console at session start: Zed's language-server version check runs npm
+  as `node npm-cli.js` instead of a visible `npm.cmd`.
+
 ## [0.0.2] - 2026-11-17
 
 ### Changed
@@ -29,9 +57,6 @@ All notable changes to Zepi are documented here. The format follows
 - The bundled agent is presented as **pi** with the pi logo (agent menu and thread header) instead
   of the internal `zepi-pi` id and a generic sparkle; the gray-to-black gradient fade in the agent
   panel header was removed to match Zed.
-- Auto-update is now diagnosable and more robust: it logs the resolved release tag, installed vs
-  fetched version and the newer/up-to-date decision, busts edge/proxy caches on `releases/latest`,
-  and launches the installer via `Start-Process -Verb RunAs` (reliable UAC) instead of `explorer.exe`.
 
 ### Removed
 
@@ -41,14 +66,6 @@ All notable changes to Zepi are documented here. The format follows
   bundling, the node+tsx dev-agent launch, the `native-build.json` build record): they never
   worked on Windows, which expects `zepi.exe` and builds via `win-build.cmd`. `npm run dev` now
   runs `scripts/win-run.py` directly.
-- The `preview` development-verification tool (captured frontend copy + vite/static dev server +
-  browser evidence) is removed, along with its helper processes, tests and smoke leg. The `bash`
-  tool keeps the captured-copy + keep/review workflow but now executes commands **in-process**
-  (direct spawn with timeout and process-tree kill), eliminating the supervisor/runner helper
-  chain and its Node/bun runtime; the app no longer auto-starts Node beyond Zed's LSP mechanics
-  and user-configured MCP servers.
-- The injected browser usage "guidelines" (`browserGuidance`) and the no-op browser lifecycle
-  stubs are removed from the system prompt; only the clickable file-link guidance remains.
 
 ### Fixed
 
@@ -57,11 +74,6 @@ All notable changes to Zepi are documented here. The format follows
   selection landed in a different (higher) session than the one being viewed.
 - Corrected the `slides_viewer` `emoji_offsets` test expectation: a single emoji in the haystack
   yields one match, not two.
-- Spreadsheet cell editing accepts the space bar: gpui reports it as the `space` keystroke, which
-  the single-character insert fallback previously dropped.
-- The flashing npm/cmd console on session start is gone: with a system Node, Zed's language-server
-  version check ran `npm.cmd` through a visible cmd.exe; it now runs npm as `node npm-cli.js`
-  (like the bundled runtime), which stays hidden.
 - Spreadsheet save is now atomic: the workbook is written to a hidden `~$…` temp file
   (Excel-style, random suffix) next to the target and renamed over it, so a crash or full disk
   mid-save no longer truncates the file.
@@ -70,9 +82,6 @@ All notable changes to Zepi are documented here. The format follows
 - `win-build.cmd`, `win-check.cmd` and `win-test-zepiui.cmd` read the Zed pin (commit and Rust
   toolchain) from `native/zed.json` instead of hardcoding it — the check/test scripts had
   already drifted to a stale commit. Their job count now honors `ZEPI_JOBS`.
-- Faster Rust builds: `release-fast` now defaults to line-tables-only debug info (smaller PDB,
-  quicker rustc/link; `ZEPI_DEBUG=full` restores full debug), and `win-build.cmd check <crate>`
-  type-checks a single overlay crate without linking the binary.
 - Test repair: the packages/runtime suite silently ran zero tests on Windows (cmd does not
   expand the glob in its test script); it now uses bun auto-discovery. Stale tests of the
   removed native browser (fullAccess, window/keepOpen, the exe ladder, the `access` entry
