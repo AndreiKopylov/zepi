@@ -31,7 +31,8 @@ zepi/
 │   ├── zed-port-matrix.py     # port cost per overlay file: PORT/KEEP/NEW/DROP
 │   └── zed-port-merge.py      # 3-way merge of an overlay file (ours/base/theirs)
 ├── installer/zepi.iss         # Inno Setup script (per-machine, AppMutex, /DAppVersion)
-├── win-build.cmd              # cargo build -p zed --bin zepi --profile release-fast (or `installer`)
+├── win-build.cmd              # cargo build -p zed --bin zepi --profile release-fast (or `installer`,
+│                                or `check <crate>` for a link-free type-check of one overlay crate)
 ├── win-run.sh                 # launcher: win-build.cmd outside MSYS path conversion
 └── .local/                    # ignored: tarballs, upstream zed tree, build logs
 ```
@@ -55,6 +56,10 @@ zepi/
 npm ci
 python scripts\native.py prepare   :: REQUIRED after any native/overlay change
 win-build.cmd                       :: set ZEPI_JOBS=3 when memory is tight
+                                    :: dev builds emit line-tables-only PDB (fast rustc/link);
+                                    :: ZEPI_DEBUG=full restores full debug info (one-off full rebuild);
+                                    :: per-build timing report lands in .local/upstream/zed/cargo-timing.html
+win-build.cmd check <crate>         :: fast inner loop: type-check one overlay crate, no binary link
 scripts\build-agent.cmd             :: agent.exe (bun); needed after packages/acp|runtime changes
 scripts\win-run.py                 :: run with seeded configs
 scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PRODUCT_VERSION)

@@ -59,6 +59,9 @@ All notable changes to Zepi are documented here. The format follows
   yields one match, not two.
 - Spreadsheet cell editing accepts the space bar: gpui reports it as the `space` keystroke, which
   the single-character insert fallback previously dropped.
+- The flashing npm/cmd console on session start is gone: with a system Node, Zed's language-server
+  version check ran `npm.cmd` through a visible cmd.exe; it now runs npm as `node npm-cli.js`
+  (like the bundled runtime), which stays hidden.
 - Spreadsheet save is now atomic: the workbook is written to a hidden `~$…` temp file
   (Excel-style, random suffix) next to the target and renamed over it, so a crash or full disk
   mid-save no longer truncates the file.
@@ -67,6 +70,9 @@ All notable changes to Zepi are documented here. The format follows
 - `win-build.cmd`, `win-check.cmd` and `win-test-zepiui.cmd` read the Zed pin (commit and Rust
   toolchain) from `native/zed.json` instead of hardcoding it — the check/test scripts had
   already drifted to a stale commit. Their job count now honors `ZEPI_JOBS`.
+- Faster Rust builds: `release-fast` now defaults to line-tables-only debug info (smaller PDB,
+  quicker rustc/link; `ZEPI_DEBUG=full` restores full debug), and `win-build.cmd check <crate>`
+  type-checks a single overlay crate without linking the binary.
 - Test repair: the packages/runtime suite silently ran zero tests on Windows (cmd does not
   expand the glob in its test script); it now uses bun auto-discovery. Stale tests of the
   removed native browser (fullAccess, window/keepOpen, the exe ladder, the `access` entry
