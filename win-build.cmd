@@ -1,7 +1,7 @@
 @echo off
 rem Zepi Windows build: target lives outside the repo, profile release-fast.
 rem `win-build.cmd installer` builds the compact release-installer profile (thin LTO + strip).
-rem `win-build.cmd check <crate>` type-checks one overlay crate without linking the binary.
+rem For a link-free type-check use scripts\win-check.cmd [crate].
 rem INCLUDE/LIB/PATH are set manually because the C++ workload (vcvars64) is not installed.
 rem Keep this file ASCII-only: cmd.exe reads .bat in OEM codepage and non-ASCII breaks parsing.
 setlocal
@@ -9,16 +9,6 @@ set PROFILE=release-fast
 if "%1"=="installer" (
   set PROFILE=release-installer
   shift
-)
-set MODE=build
-set PKG=zed
-if "%1"=="check" (
-  if "%2"=="" (
-    echo Usage: win-build.cmd check ^<crate^>
-    exit /b 1
-  )
-  set MODE=check
-  set PKG=%2
 )
 set REPO=%~dp0
 set REPO=%REPO:~0,-1%
@@ -29,29 +19,31 @@ for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "(Get-Content 
 if "%CARGO_TARGET_DIR%"=="" set CARGO_TARGET_DIR=%REPO%\..\zepi-build
 set CARGO_NET_OFFLINE=true
 set CARGO_NET_GIT_FETCH_WITH_CLI=true
-rem Low parallelism: 12 rustc with debug=full exhausted RAM (OOM -> rustc 0xC0000409).
-rem line-tables-only (the dev default) uses much less memory; ZEPI_JOBS can be raised then.
+rem 6 jobs keeps the desktop responsive: 10+ saturates all 16 cores and freezes the UI.
+rem Memory is no longer the limit since line-tables-only became the default.
 if "%ZEPI_JOBS%"=="" set ZEPI_JOBS=6
 set CARGO_BUILD_JOBS=%ZEPI_JOBS%
 rem Dev default: line-tables-only debug info (PDB shrinks from 3.6 GB, rustc and the MSVC
 rem link get much faster). ZEPI_DEBUG=full restores full debug info for crash debugging;
 rem switching either way is a one-off full rebuild.
 if "%ZEPI_DEBUG%"=="full" (set CARGO_PROFILE_RELEASE_FAST_DEBUG=full) else (set CARGO_PROFILE_RELEASE_FAST_DEBUG=line-tables-only)
+rem Incremental for workspace crates: a small edit in project (15 min front-end) rebuilds
+rem in minutes. Registry deps get no incremental, so sccache keeps caching them.
+rem ZEPI_INCREMENTAL=0 disables; switching is a one-off full rebuild.
+if not "%ZEPI_INCREMENTAL%"=="0" set CARGO_PROFILE_RELEASE_FAST_INCREMENTAL=true
+rem sccache (deps/cold rebuilds): auto-on when the tools copy exists; ZEPI_NO_SCCACHE=1 bypasses.
+if exist "%REPO%\..\tools\sccache\sccache-v0.10.0-x86_64-pc-windows-msvc\sccache.exe" (
+  if not "%ZEPI_NO_SCCACHE%"=="1" set RUSTC_WRAPPER=sccache
+)
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "(Get-Content '%REPO%\native\zed.json' | ConvertFrom-Json).commit + '-zepi-local'"`) do set ZED_COMMIT_SHA=%%I
 set LK_CUSTOM_WEBRTC=%REPO%\.local\upstream\zed\.webrtc-sys\webrtc-0001d84-4\win-x64-release
 set CRAFT_I18N_DIR=%REPO%\native\overlay\vendor\craft-i18n
 set INCLUDE=%MSVC%\include;%SDK%\Include\10.0.26100.0\ucrt;%SDK%\Include\10.0.26100.0\um;%SDK%\Include\10.0.26100.0\shared;%SDK%\Include\10.0.26100.0\winrt;%SDK%\Include\10.0.26100.0\cppwinrt;%REPO%\.local\msvc-shim
 set LIB=%MSVC%\lib\x64;%SDK%\Lib\10.0.26100.0\ucrt\x64;%SDK%\Lib\10.0.26100.0\um\x64
-if "%ZEPI_EXTRA_PATH%"=="" set ZEPI_EXTRA_PATH=%REPO%\..\tools\cmake-3.30.5-windows-x86_64\bin;%REPO%\..\tools\nasm-2.16.03
+if "%ZEPI_EXTRA_PATH%"=="" set ZEPI_EXTRA_PATH=%REPO%\..\tools\cmake-3.30.5-windows-x86_64\bin;%REPO%\..\tools\nasm-2.16.03;%REPO%\..\tools\sccache\sccache-v0.10.0-x86_64-pc-windows-msvc
 set PATH=%MSVC%\bin\Hostx64\x64;%ZEPI_EXTRA_PATH%;%PATH%
 cd /d %REPO%\.local\upstream\zed
-if "%MODE%"=="check" goto :check
 cargo build --target-dir "%CARGO_TARGET_DIR%" -p zed --bin zepi --profile %PROFILE% --features gpui_platform/runtime_shaders --timings
 if errorlevel 1 exit /b 1
 echo|set /p="%REPO%"> "%CARGO_TARGET_DIR%\%PROFILE%\zepi-root.txt"
 echo BUILD_OK binary=%CARGO_TARGET_DIR%\%PROFILE%\zepi.exe
-exit /b 0
-:check
-cargo check --target-dir "%CARGO_TARGET_DIR%" -p %PKG%
-if errorlevel 1 exit /b 1
-echo CHECK_OK crate=%PKG%

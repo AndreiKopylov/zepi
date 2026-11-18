@@ -55,11 +55,17 @@ zepi/
 ```bat
 npm ci
 python scripts\native.py prepare   :: REQUIRED after any native/overlay change
-win-build.cmd                       :: set ZEPI_JOBS=3 when memory is tight
+win-build.cmd                       :: ZEPI_JOBS=6 keeps the desktop responsive; raise for
+                                    :: unattended builds only (10+ freezes the UI on 16 cores)
                                     :: dev builds emit line-tables-only PDB (fast rustc/link);
                                     :: ZEPI_DEBUG=full restores full debug info (one-off full rebuild);
-                                    :: per-build timing report lands in .local/upstream/zed/cargo-timing.html
-win-build.cmd check <crate>         :: fast inner loop: type-check one overlay crate, no binary link
+                                    :: workspace crates build incremental, deps go through sccache
+                                    :: (auto-on; ZEPI_INCREMENTAL=0 / ZEPI_NO_SCCACHE=1 to disable);
+                                    :: warm rebuild after a small overlay edit: ~3-4 min (project included);
+                                    :: per-build timing report lands in <target>\cargo-timings\cargo-timing.html
+scripts\win-build-bg.cmd             :: background full build: affinity 0x3FF + below-normal priority
+                                    :: (desktop stays responsive; log in .local\zbuild.log)
+scripts\win-check.cmd [crate]       :: fast inner loop: link-free type-check (defaults to whole zed)
 scripts\build-agent.cmd             :: agent.exe (bun); needed after packages/acp|runtime changes
 scripts\win-run.py                 :: run with seeded configs
 scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PRODUCT_VERSION)
@@ -85,7 +91,8 @@ scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PR
 ## Gotchas (verified the hard way)
 
 - Without `native.py prepare`, cargo builds the STALE overlay from `.local/upstream/zed`.
-- Full rebuilds at high job counts hit rustc OOM/stack overrun: use `ZEPI_JOBS=3`.
+- ZEPI_JOBS=6 is a desktop-responsiveness limit, not a memory one (line-tables-only uses much
+  less RAM). 12 was fatal under debug=full; 10+ saturates all cores and freezes Windows.
 - `default-windows.json` is JSONC with comments; `json.load` is not a validity check.
 - A new office hotkey touches three places: overlay keymap, the seed in
   `zepi_runtime::prepare_settings`, and the live user keymap.json of existing profiles.
