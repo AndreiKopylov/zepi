@@ -52,6 +52,10 @@ All notable changes to Zepi are documented here. The format follows
   point) were deleted or rewritten against current operations, plus a new test covers the
   browse settings validation. The dead `test:browser` script (its files left with `zepi_browser`)
   is removed and `test:preview` no longer names a deleted file.
+- Line-ending policy is now explicit in `.gitattributes`: `.cmd`/`.bat`/`.ps1` always check
+  out CRLF, `.sh` LF, and vendored code, patch files and test fixtures stay byte-exact so
+  `wordcraft-local.patch` keeps matching its LF targets on every machine. Vendored sources were
+  left CRLF-free in the working tree to match the (already LF) index.
 
 ### Security
 
