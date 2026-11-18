@@ -1,7 +1,7 @@
 # Builds the Zepi installer: stages the repo + build + payload into dist, then runs Inno Setup.
 # Nothing is taken from a working bundle: dist\staging is rebuilt from its sources every time.
 param(
-    [string]$Version = '0.0.1-beta1',
+    [string]$Version = '',
     [string]$Repo = '',
     [string]$Exe = '',
     [string]$Payload = '',
@@ -11,6 +11,13 @@ param(
 $ErrorActionPreference = 'Stop'
 # Paths are derived from this script's location, so nothing machine-specific is committed.
 if (-not $Repo) { $Repo = Split-Path $PSScriptRoot -Parent }
+if (-not $Version) {
+    # Single source of truth: PRODUCT_VERSION in zepi_runtime.rs (same value shown in About).
+    $rt = Get-Content (Join-Path $Repo 'native\overlay\crates\zed\src\zepi_runtime.rs') -Raw
+    $m = [regex]::Match($rt, 'PRODUCT_VERSION:\s*&str\s*=\s*"([^"]+)"')
+    if ($m.Success) { $Version = $m.Groups[1].Value }
+    else { throw 'cannot read PRODUCT_VERSION from zepi_runtime.rs; pass -Version explicitly' }
+}
 $buildRoot = Join-Path (Split-Path $Repo -Parent) 'zepi-build'
 if (-not $Exe) {
     # Prefer the compact installer profile when built; dev release-fast stays full-debug.
@@ -37,7 +44,6 @@ $fromPayload = @('python')
 if (-not (Test-Path $Exe)) { throw ('no build output: ' + $Exe + ' (run win-build.cmd first)') }
 $agent = Join-Path $buildRoot 'release-fast\agent.exe'
 if (-not (Test-Path $agent)) { throw ('no agent binary: ' + $agent + ' (run scripts\build-agent.cmd first)') }
-$browser = Join-Path $buildRoot 'release-fast\zepi_browser.exe'
 foreach ($item in $fromRepo) { if (-not (Test-Path (Join-Path $Repo $item))) { throw ('repo is missing ' + $item) } }
 if (-not (Test-Path (Join-Path $Repo 'native\pi-defaults'))) { throw 'repo is missing native/pi-defaults' }
 foreach ($item in $fromPayload) { if (-not (Test-Path (Join-Path $Payload $item))) { throw ('payload is missing ' + (Join-Path $Payload $item) + ' (scripts/prepare-python.ps1)') } }
@@ -55,11 +61,6 @@ if (-not $SkipStaging) {
     New-Item -ItemType Directory $staging -Force | Out-Null
     Copy-Tree $Exe (Join-Path $staging 'zepi.exe')
     Copy-Item $agent (Join-Path $staging 'agent.exe') -Force
-    if (Test-Path $browser) { Copy-Item $browser (Join-Path $staging 'zepi_browser.exe') -Force }
-    $helper = Join-Path $buildRoot 'release-fast\auto-update-helper.exe'
-    if (-not (Test-Path $helper)) { throw ('no auto_update_helper: ' + $helper + ' (run win-build.cmd)') }
-    New-Item -ItemType Directory (Join-Path $staging 'tools') -Force | Out-Null
-    Copy-Item $helper (Join-Path $staging 'tools\auto_update_helper.exe') -Force
     foreach ($item in $fromRepo) { Copy-Tree (Join-Path $Repo $item) (Join-Path $staging $item) }
     Get-ChildItem (Join-Path $staging 'packages') -Recurse -Directory -Filter 'node_modules' | Remove-Item -Recurse -Force
     # Dev-only trees and bins replaced by agent.exe subcommands are not shipped.
@@ -78,6 +79,9 @@ if (-not $SkipStaging) {
     Copy-Item (Join-Path $Repo 'packages\acp\node_modules\@earendil-works\pi-coding-agent\package.json') $piDest -Force
     $phDest = Join-Path $staging 'photon'; New-Item -ItemType Directory $phDest -Force | Out-Null
     Copy-Item (Join-Path $Repo 'packages\acp\node_modules\@earendil-works\pi-coding-agent\node_modules\@silvia-odwyer\photon-node\photon_rs_bg.wasm') $phDest -Force
+    # pi logo shown for the bundled agent (read from disk by the UI)
+    $icoDest = Join-Path $staging 'icons'; New-Item -ItemType Directory $icoDest -Force | Out-Null
+    Copy-Item (Join-Path $Repo 'native\overlay\assets\icons\pi.svg') $icoDest -Force
     foreach ($item in $fromPayload) { Copy-Tree (Join-Path $Payload $item) (Join-Path $staging "deps\$item") }
     # Node and Python build leftovers add nothing to the install
     Get-ChildItem (Join-Path $staging 'deps\python') -Filter __pycache__ -Directory -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force

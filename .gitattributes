@@ -1,2 +1,14 @@
 # Unified diff context lines must retain their leading space, even when empty.
 native/patches/*.patch whitespace=-blank-at-eol
+
+# Line endings: index stays LF; checkouts follow the platform (autocrlf), except:
+* text=auto
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.sh text eol=lf
+# Vendored code and patches stay byte-exact so local patch context
+# (scripts/wordcraft-local-patches) keeps matching its LF targets everywhere.
+*.patch -text
+native/overlay/vendor/** -text
+packages/runtime/test/fixtures/vendor/** -text

@@ -6,6 +6,71 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-11-17
+
+### Changed
+
+- Browser engine replaced: the native Rust/CDP `zepi_browser` is removed in favour of
+  **browse** (opencode, MIT) — a Rust relay + Chromium extension driving the user's real
+  browser (logins/SSO). Installed/updated on demand from Settings > Browser (folder choice,
+  pairing code, extension link, behavior and tools-mode settings); the MCP entry self-heals
+  if deleted.
+- Browser tools default to **execute** (code) mode: the agent drives the page with
+  Playwright-style JavaScript in one call instead of many discrete tool calls; plain mode
+  remains selectable. Relay tools-mode is enforced on session start.
+- Installer version is derived from `PRODUCT_VERSION` (single source of truth, same value as
+  About); `build-installer.ps1 -Version` is now an optional override.
+- Faster session start: the local model-catalog rebuild is skipped when models/settings/auth are
+  unchanged, and browse self-heal / relay-mode enforcement moved off the new-session path
+  (runs at startup and on settings change).
+- Stability: a failing MCP server now backs off (circuit breaker with cooldown) instead of being
+  retried in a tight loop, and recovers once the cooldown passes; a dead browse relay is revived on
+  session start (endpoint probe) with a restart backoff, no polling.
+- The bundled agent is presented as **pi** with the pi logo (agent menu and thread header) instead
+  of the internal `zepi-pi` id and a generic sparkle; the gray-to-black gradient fade in the agent
+  panel header was removed to match Zed.
+
+### Removed
+
+- `zepi_browser` crate, binary and its installer/bundle references; native browser settings
+  (executable path, keep-open, window mode) and native browser tests.
+- Dead `npm run native:build` / `native:run` and the macOS-era code behind them (the `Zepi.app`
+  bundling, the node+tsx dev-agent launch, the `native-build.json` build record): they never
+  worked on Windows, which expects `zepi.exe` and builds via `win-build.cmd`. `npm run dev` now
+  runs `scripts/win-run.py` directly.
+
+### Fixed
+
+- Office viewers' "send to agent" now appends to the **displayed** workspace and its active thread.
+  Previously it resolved the first workspace and the root thread, so with several projects open the
+  selection landed in a different (higher) session than the one being viewed.
+- Corrected the `slides_viewer` `emoji_offsets` test expectation: a single emoji in the haystack
+  yields one match, not two.
+- Spreadsheet save is now atomic: the workbook is written to a hidden `~$…` temp file
+  (Excel-style, random suffix) next to the target and renamed over it, so a crash or full disk
+  mid-save no longer truncates the file.
+- First-start config writes (pi `settings.json`, the stale node-path patch, the keymap and theme
+  seeds) now go through temp-file + rename, so a crash mid-write can no longer corrupt them.
+- `win-build.cmd`, `win-check.cmd` and `win-test-zepiui.cmd` read the Zed pin (commit and Rust
+  toolchain) from `native/zed.json` instead of hardcoding it — the check/test scripts had
+  already drifted to a stale commit. Their job count now honors `ZEPI_JOBS`.
+- Test repair: the packages/runtime suite silently ran zero tests on Windows (cmd does not
+  expand the glob in its test script); it now uses bun auto-discovery. Stale tests of the
+  removed native browser (fullAccess, window/keepOpen, the exe ladder, the `access` entry
+  point) were deleted or rewritten against current operations, plus a new test covers the
+  browse settings validation. The dead `test:browser` script (its files left with `zepi_browser`)
+  is removed and `test:preview` no longer names a deleted file.
+- Line-ending policy is now explicit in `.gitattributes`: `.cmd`/`.bat`/`.ps1` always check
+  out CRLF, `.sh` LF, and vendored code, patch files and test fixtures stay byte-exact so
+  `wordcraft-local.patch` keeps matching its LF targets on every machine. Vendored sources were
+  left CRLF-free in the working tree to match the (already LF) index.
+
+### Security
+
+- browse components are now downloaded with integrity verification: the bun zip against a
+  sha256 pinned in the repo, the relay/cli npm tarballs against the registry's SRI hash. A
+  corrupted or tampered download is deleted and never installed.
+
 ## [0.0.1] - 2026-11-16
 
 ### Added

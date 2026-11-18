@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
-import datetime
 import json
 import importlib.util
 import os
-import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -186,7 +184,7 @@ def source_fingerprint():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['prepare', 'fetch', 'check', 'build', 'run', 'test-acp', 'test-native'])
+    parser.add_argument('command', choices=['prepare', 'fetch', 'check', 'test-acp', 'test-native'])
     command = parser.parse_args().command
     if command == 'fetch':
         fetch_dependencies()
@@ -198,99 +196,27 @@ def main():
     env['CARGO_NET_OFFLINE'] = 'true'
     if not STATE.exists():
         raise RuntimeError('Run npm run native:prepare first')
-    fingerprint = source_fingerprint()
+    source_fingerprint()
     env['LK_CUSTOM_WEBRTC'] = str(native_assets())
     env['LK_DEBUG_WEBRTC'] = 'false'
-    if command == 'run':
-        if not (ROOT / 'packages/acp/node_modules/@earendil-works/pi-coding-agent/dist/index.js').is_file():
-            raise RuntimeError('ACP dependencies are missing; run npm run setup:acp')
-        record_path = LOCAL / 'native-build.json'
-        if not record_path.exists() or json.loads(record_path.read_text())['sourceFingerprint'] != fingerprint:
-            raise RuntimeError('No verified build for the current native source; run npm run native:build')
-        executable = LOCAL / 'native-target/debug/zepi'
-        if not executable.exists():
-            raise RuntimeError('Run npm run native:build first')
-        if digest(executable) != json.loads(record_path.read_text())['binarySha256']:
-            raise RuntimeError('Native binary differs from its build record; rebuild before running')
-        config = LOCAL / 'native-config'
-        config.mkdir(parents=True, exist_ok=True)
-        settings = config / 'config/settings.json'
-        settings.parent.mkdir(parents=True, exist_ok=True)
-        configuration = json.loads(settings.read_text()) if settings.exists() else {}
-        # Product appearance defaults do not overwrite user-selected preferences.
-        appearance = json.loads((ROOT / 'native/appearance.json').read_text())
-        for key, value in appearance.items():
-            if isinstance(value, dict) and isinstance(configuration.get(key, {}), dict):
-                target = configuration.setdefault(key, {})
-                for option, default in value.items():
-                    target.setdefault(option, default)
-            else:
-                configuration.setdefault(key, value)
-        configuration.update({
-            'telemetry': {'metrics': False, 'diagnostics': False},
-            'auto_update': False,
-            'disable_ai': False,
-            'auto_install_extensions': {'html': False},
-            'node': {'path': env['ZEPI_NODE'], 'ignore_system_version': False},
-        })
-        configuration.setdefault('enable_language_server', False)
-        configuration.setdefault('agent_servers', {})['zepi-pi'] = {
-            'type': 'custom',
-            'command': env['ZEPI_NODE'],
-            'args': ['--import', str(ROOT / 'node_modules/tsx/dist/loader.mjs'), str(ROOT / 'packages/acp/src/cli.ts')],
-            'env': {'ZEPI_ROOT': str(ROOT), 'PI_CODING_AGENT_DIR': str(LOCAL / 'zepi')},
-        }
-        settings.write_text(json.dumps(configuration, indent=2) + '\n')
-        bundle = LOCAL / 'native-app/Zepi.app/Contents'
-        bundle_executable = bundle / 'MacOS/zepi'
-        bundle_executable.parent.mkdir(parents=True, exist_ok=True)
-        if bundle_executable.exists():
-            bundle_executable.unlink()
-        try:
-            os.link(executable, bundle_executable)
-        except OSError:
-            shutil.copy2(executable, bundle_executable)
-        bundle_resources = bundle / 'Resources'
-        bundle_resources.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / 'native/branding/Zepi.icns', bundle_resources / 'Zepi.icns')
-        with (bundle / 'Info.plist').open('wb') as stream:
-            plistlib.dump({
-                'CFBundleExecutable': 'zepi',
-                'CFBundleIdentifier': 'dev.zepi.local',
-                'CFBundleName': 'Zepi',
-                'CFBundleIconFile': 'Zepi.icns',
-                'CFBundleDisplayName': 'Zepi',
-                'CFBundlePackageType': 'APPL',
-                'CFBundleShortVersionString': '0.0.1',
-                'CFBundleVersion': '4',
-                'NSHighResolutionCapable': True,
-            }, stream)
-        executable = bundle_executable
-        subprocess.run([str(executable), '--user-data-dir', str(config), str(ROOT)], env=env, cwd=SOURCE, check=True)
-    else:
-        cargo_command = command
-        targets = ['-p', 'zepi_ui'] if command == 'check' else ['-p', 'zed', '--bin', 'zepi']
-        if command in ('test-acp', 'test-native'):
-            cargo_command = 'test'
-            targets = ['-p', 'acp_thread', '--lib', 'test_zepi_', '--features', 'db/test-support']
-            if command == 'test-native':
-                targets = ['-p', 'acp_thread', '-p', 'action_log', '-p', 'agent_servers', '-p', 'settings', '-p', 'agent_ui', '-p', 'workspace', '-p', 'gpui_platform', '-p', 'extensions_ui', '--lib', 'test_zepi_', '--features', ','.join([*BUILD_FEATURES, 'db/test-support'])]
-            env.pop('ZEPI_ROOT', None)
-        if command == 'build':
-            targets += ['--features', ','.join(BUILD_FEATURES)]
-        log_path = LOCAL / ('native-' + command + '.log')
-        with log_path.open('w') as log:
-            process = subprocess.Popen(['cargo', cargo_command, '--offline', '--locked', *targets], env=env, cwd=SOURCE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            for line in process.stdout:
-                log.write(line)
-                log.flush()
-                sys.stdout.write(line)
-                sys.stdout.flush()
-            if process.wait() != 0:
-                raise RuntimeError('Native ' + command + ' failed; see ' + str(log_path))
-        if command == 'build':
-            binary = LOCAL / 'native-target/debug/zepi'
-            (LOCAL / 'native-build.json').write_text(json.dumps({'sourceFingerprint': fingerprint, 'binarySha256': digest(binary), 'upstream': json.loads(MANIFEST.read_text()), 'features': BUILD_FEATURES, 'builtAt': datetime.datetime.now(datetime.timezone.utc).isoformat()}, indent=2))
+    cargo_command = command
+    targets = ['-p', 'zepi_ui']
+    if command in ('test-acp', 'test-native'):
+        cargo_command = 'test'
+        targets = ['-p', 'acp_thread', '--lib', 'test_zepi_', '--features', 'db/test-support']
+        if command == 'test-native':
+            targets = ['-p', 'acp_thread', '-p', 'action_log', '-p', 'agent_servers', '-p', 'settings', '-p', 'agent_ui', '-p', 'workspace', '-p', 'gpui_platform', '-p', 'extensions_ui', '--lib', 'test_zepi_', '--features', ','.join([*BUILD_FEATURES, 'db/test-support'])]
+        env.pop('ZEPI_ROOT', None)
+    log_path = LOCAL / ('native-' + command + '.log')
+    with log_path.open('w') as log:
+        process = subprocess.Popen(['cargo', cargo_command, '--offline', '--locked', *targets], env=env, cwd=SOURCE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in process.stdout:
+            log.write(line)
+            log.flush()
+            sys.stdout.write(line)
+            sys.stdout.flush()
+        if process.wait() != 0:
+            raise RuntimeError('Native ' + command + ' failed; see ' + str(log_path))
 
 
 if __name__ == '__main__':

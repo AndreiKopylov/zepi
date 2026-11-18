@@ -5,7 +5,7 @@ use std::{env, path::{Path, PathBuf}};
 /// Called from main before the application starts threads or resolves resources.
 /// A bundle carries code/resources only; all mutable state lives in user storage.
 /// Product version shown in the About window and by the installer.
-pub const PRODUCT_VERSION: &str = "0.0.1";
+pub const PRODUCT_VERSION: &str = "0.0.2";
 
 // Assign this process to a job with KILL_ON_JOB_CLOSE so the OS terminates
 // leftover children (language servers, agents, terminals) on any exit path.
@@ -170,6 +170,13 @@ pub fn configure() -> Result<Option<PathBuf>> {
     Ok(Some(data.join("native")))
 }
 
+/// User config writes go through a temp file, so a crash mid-write cannot corrupt them.
+fn write_config_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    std::fs::write(&temporary, bytes)?;
+    std::fs::rename(temporary, path)
+}
+
 pub fn prepare_settings(directory: &Path) -> Result<()> {
     let root = PathBuf::from(env::var_os("ZEPI_ROOT").context("Missing bundled runtime")?);
     let node = env::var("ZEPI_NODE").ok();
@@ -207,7 +214,7 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
                     }
                 };
                 if changed {
-                    std::fs::write(&pi_settings, serde_json::to_vec_pretty(&value)?)?;
+                    write_config_atomic(&pi_settings, &serde_json::to_vec_pretty(&value)?)?;
                 }
             }
         }
@@ -219,7 +226,7 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
         let raw = std::fs::read_to_string(&path)?;
         let patched = raw.replace(STALE_NODE_PATH, CURRENT_NODE_PATH);
         if patched != raw {
-            std::fs::write(&path, patched)?;
+            write_config_atomic(&path, patched.as_bytes())?;
         }
         return Ok(());
     }
@@ -284,15 +291,13 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
         settings["agent_servers"]["zepi-pi"]["default_config_options"] = prev_options;
     }
     std::fs::create_dir_all(path.parent().unwrap())?;
-    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    std::fs::write(&temporary, serde_json::to_vec_pretty(&settings)?)?;
-    std::fs::rename(temporary, path)?;
+    write_config_atomic(&path, &serde_json::to_vec_pretty(&settings)?)?;
     // user-editable overrides for the slides viewer hotkeys
     let keymap = directory.join("config/keymap.json");
     if !keymap.exists() {
-        std::fs::write(
+        write_config_atomic(
             &keymap,
-            serde_json::to_vec_pretty(&json!([
+            &serde_json::to_vec_pretty(&json!([
                 {"context": "OfficeView", "bindings": {
                     "up": "office_viewer::PagePrev",
                     "down": "office_viewer::PageNext",
@@ -342,8 +347,7 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
                     "escape": "office_viewer::ToggleSearch",
                     "enter": "office_viewer::SearchNext"
                 }}
-            ]))?
-            .to_vec(),
+            ]))?,
         )?;
     }
     Ok(())
@@ -386,7 +390,7 @@ fn sync_themes(root: &Path, pi: &Path) -> Result<()> {
         }
         let to = target.join(from.file_name().expect("file has a name"));
         if std::fs::read(&from).ok() != std::fs::read(&to).ok() {
-            std::fs::copy(&from, &to)?;
+            write_config_atomic(&to, &std::fs::read(&from)?)?;
         }
     }
     Ok(())

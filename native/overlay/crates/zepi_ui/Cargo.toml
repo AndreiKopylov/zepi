@@ -51,7 +51,11 @@ settings.workspace = true
 terminal_view.workspace = true
 ui.workspace = true
 util.workspace = true
+uuid.workspace = true
 workspace.workspace = true
 
 [dev-dependencies]
 db = { workspace = true, features = ["test-support"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows.workspace = true

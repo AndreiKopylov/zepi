@@ -9,6 +9,7 @@ import {nativeUiAction} from './native-ui.ts';
 import { runAcp } from "../adapter/src/lib.js";
 import { createAgentSession, ModelRuntime, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
+import { stat } from "node:fs/promises";
 import { ndJsonStream, type AgentContext, type McpServer, type Stream } from "@agentclientprotocol/sdk";
 import {Readable, Writable} from 'node:stream';
 import { editorTools } from "./editor-tools.ts";
@@ -21,6 +22,7 @@ import { createSubagents } from "./subagents.ts";
 import { installAgentToolPolicy } from "./agent-tools.ts";
 import { configuredMcp } from "../../runtime/src/pi/extensions.mjs";
 import { browserEnvironment } from "../../runtime/src/browser/config.mjs";
+import { ensureBrowseMcp, ensureRelayMode } from "../../runtime/src/browser/browse.mjs";
 import {codemodeImages} from './codemode-images.ts';
 
 export async function startZepiAgent(agentDir: string, sessionDir: string, stream?: Stream, modelRuntime?: ModelRuntime) {
@@ -32,6 +34,23 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   let supportsNativeUi = false;
   const subagents = createSubagents(agentDir, sessionDir);
   const mcp = createMcpConnector(agentDir);
+  // Skip the per-session local catalog rebuild when models/settings/auth are unchanged.
+  let catalogKey = "";
+  const browseSelfHeal = async () => {
+    const cfg = await browserEnvironment(agentDir);
+    if (cfg.backend !== "browse") return;
+    await ensureBrowseMcp(agentDir, cfg.browseDir, cfg.browseTools);
+    await ensureRelayMode(cfg.browseDir, cfg.browseTools);
+  };
+  const refreshModelsIfChanged = async () => {
+    const key = (await Promise.all(["models.json", "settings.json", "auth.json"].map(async f => {
+      try { return (await stat(join(agentDir, f))).mtimeMs; } catch { return 0; }
+    }))).join(":");
+    if (key === catalogKey) return;
+    catalogKey = key;
+    await runtime.refresh({ allowNetwork: false });
+    void browseSelfHeal().catch(e => console.error("browse self-heal failed", e));
+  };
   const deliveries = new Map<string, ReturnType<typeof createDeliveryLedger>>();
   const clientReady = new Promise<AgentContext>(resolve => { connectClient = resolve; });
   // The transport can receive initialize/new while asynchronous Zepi setup is
@@ -63,7 +82,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         const shell = createShell(options.cwd, join(agentDir, "commands"), options.sessionManager.getSessionId(), client);
         // Settings are owned by pi. New tasks see credentials/models changed in
         // Zepi's settings without replacing the model of an active conversation.
-        await runtime.refresh({ allowNetwork: false });
+        await refreshModelsIfChanged();
         // Let pi resolve explicit lists, +/- modifiers, pending registrations and
         // reload additions. Only the absent-setting fallback is Zepi-specific.
         if (options.settingsManager) {
@@ -74,7 +93,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
           const getExtensions = options.resourceLoader.getExtensions.bind(options.resourceLoader);
           options.resourceLoader.getExtensions = () => {
             const loaded = getExtensions();
-            return { ...loaded, extensions: [...loaded.extensions, preview.extension, shell.extension, accessPolicy(()=>liveSession,name=>browser.track(name))] };
+            return { ...loaded, extensions: [...loaded.extensions, preview.extension, shell.extension, accessPolicy(()=>liveSession,name=>browser.track(name),{backend:browserDecision.backend,tools:browserDecision.browseTools})] };
           };
           const append = options.resourceLoader.getAppendSystemPrompt.bind(options.resourceLoader);
           options.resourceLoader.getAppendSystemPrompt = () => [...append(),
@@ -86,7 +105,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
             "Bundled (the default): `python`, `python3` or `$env:ZEPI_PYTHON`, living in `<ZEPI_ROOT>\\deps\\python`. Has python-docx, openpyxl, python-pptx, pypdf and Pillow, and no pip. Use it for every .docx/.xlsx/.pptx task; never invent a path under %LOCALAPPDATA% and never try `pip` here.",
             "System: reachable only through `py` or `py -3`, if the machine has Python at all. It has pip but none of the Office libraries. Use it for anything else (pandas, requests, scraping) and always create a project venv (`.venv`) with `py -3 -m venv .venv`, installing into the venv rather than the global interpreter. If `py` is not found, tell the user the task needs a system Python instead of silently switching to the bundled one.",
             "fetch_content fetches http(s) URLs only. Local files are read with the read tool.",
-            `For development verification, use preview start with explicit editor files, including unsaved changes. For static HTML/CSS/JS supply an HTML entry. For projects supply commands for checks/builds and a server command; select installed dependency directories to copy into the captured project. Read the project configuration before choosing commands. Commands run in a copy and do not update source buffers. Open its exact URL with the bundled browser tools, observe, interact, then observe the actual result. After a failure, read and repair the files, start a new preview and repeat the check. Capture a screenshot when visual inspection matters. Before reporting completion, use preview status; a stale or unknown input state does not verify current edits. Include the run ID and tested criteria in the result. Preview status and successful browser calls are not acceptance passes. Evidence covers only captured files and copied dependencies. Successful check exits and server reachability alone do not demonstrate correct behavior. Commands that modify captured source invalidate freshness; repair editor buffers and recapture instead. Never install missing dependencies without user authorization. Re-observe after cancellation or user takeover. Stop preview when finished. Project commands and servers also stop automatically when this turn ends. ${browserDecision.keepOpen ? "The task browser stays open between turns so a later turn can continue the same page state; it closes when the task closes." : "Zepi automatically closes the task browser when this turn ends or is cancelled; reopen and re-observe in a later turn."} If the target cannot be started with available tools, report missing verification instead of claiming success.`
+            `For development verification, use preview start with explicit editor files, including unsaved changes. For static HTML/CSS/JS supply an HTML entry. For projects supply commands for checks/builds and a server command; select installed dependency directories to copy into the captured project. Read the project configuration before choosing commands. Commands run in a copy and do not update source buffers. Open its exact URL with the bundled browser tools, observe, interact, then observe the actual result. After a failure, read and repair the files, start a new preview and repeat the check. Capture a screenshot when visual inspection matters. Before reporting completion, use preview status; a stale or unknown input state does not verify current edits. Include the run ID and tested criteria in the result. Preview status and successful browser calls are not acceptance passes. Evidence covers only captured files and copied dependencies. Successful check exits and server reachability alone do not demonstrate correct behavior. Commands that modify captured source invalidate freshness; repair editor buffers and recapture instead. Never install missing dependencies without user authorization. Re-observe after cancellation or user takeover. Stop preview when finished. Project commands and servers also stop automatically when this turn ends. browse keeps agent tabs in the user's real browser (idle-closed); re-observe the page in a later turn. If the target cannot be started with available tools, report missing verification instead of claiming success.`
           ];
         }
         const created = await createAgentSession({
@@ -129,7 +148,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         Object.defineProperty(created.session, DELIVERY, {value:ledger});
         const dispose = created.session.dispose.bind(created.session);
         created.session.dispose = () => { browserForce?.(); disposeImages(); ledger.dispose(); if(deliveries.get(created.session.sessionId)===ledger)deliveries.delete(created.session.sessionId); dispose(); };
-        const browser = browserLifecycle(created.session, {keepOpen: browserDecision.keepOpen});
+        const browser = browserLifecycle(created.session, {backend: browserDecision.backend});
         browserForce = () => { void browser.close(true).catch(error => console.error("Zepi browser cleanup failed:", error)); };
         const prompt = created.session.prompt.bind(created.session);
         created.session.prompt = async (...args) => {
@@ -159,7 +178,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         // The SDK bash override uses current editor captures and the same native
         // process supervisor as preview. Role restrictions apply after discovery.
         const child = subagents.register(created.session);
-        const decisionTools = new Set(["do", "check", "choose"].map(name => `mcp__zepi_browser__browser_${name}`));
+        const decisionTools = new Set<string>();
         let toolPolicy: ReturnType<typeof installAgentToolPolicy>;
         try { toolPolicy = installAgentToolPolicy(created.session, child ? child.role?.tools ?? ["read"] : undefined,
           tool => !decisionTools.has(tool.name)); }
@@ -206,11 +225,15 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
     let configured: McpServer[] = [];
     try {configured = await configuredMcp(agentDir, context.params.cwd);}
     catch { /* The bridge reports invalid configuration after the task opens. */ }
+    const backendCfg = await browserEnvironment(agentDir);
+    // Self-heal runs at startup / on settings change; only restore a missing entry here.
+    if (backendCfg.backend === 'browse' && !configured.some(s => s.name === 'browse')) {
+      if (await ensureBrowseMcp(agentDir, backendCfg.browseDir, backendCfg.browseTools)) {
+        configured = await configuredMcp(agentDir, context.params.cwd);
+      }
+    }
     const bundled = [...(context.params.mcpServers ?? []).filter(server => server.name !== 'zepi_computer')];
-    const servers = [...bundled, ...configured.filter(server => !bundled.some(s => s.name === server.name))].map(server =>
-      server.name === "zepi_browser" && "command" in server
-        ? {...server, env: [...server.env?.filter(entry => entry.name !== "ZEPI_PI_CONFIG_DIR") ?? [], {name: "ZEPI_PI_CONFIG_DIR", value: agentDir}]}
-        : server);
+    const servers = [...bundled, ...configured.filter(server => !bundled.some(s => s.name === server.name))];
     return {...context, params: {...context.params, mcpServers: servers}};
   };
   const create = server.agent.newSession.bind(server.agent), load = server.agent.loadSession.bind(server.agent);
@@ -219,6 +242,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   connectClient(server.connection.client);
   void refreshModelCatalogs(runtime).then(() => server.agent.refreshGlobalModelScope())
     .catch((error: unknown) => console.error("background model catalog refresh failed", error));
+  void browseSelfHeal().catch((error: unknown) => console.error("browse self-heal failed", error));
   admitRequests();
   return server;
 }

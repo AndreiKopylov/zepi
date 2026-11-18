@@ -3,7 +3,7 @@ import {ModelRuntime, SettingsManager, readStoredCredential, FileSettingsStorage
 import { readFile, writeFile, mkdir, chmod, rename, mkdtemp, rm, access } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { browserCandidates, resolveBrowserExecutable } from "../browser/config.mjs";
+import { installBrowse, updateBrowse, checkBrowseUpdate, browseStatus, pairBrowse, setBrowseSettings, writeBrowseMcp, removeBrowseMcp, ensureBrowseMcp, restartBrowseRelay } from "../browser/browse.mjs";
 import {runtimeSettings, mergeRuntimeSettings, modelSettings, mergeModelSettings, PiRuntimeSettingsError} from './runtime-settings.mjs';
 import {httpProxyStatus, mergeHttpProxy, PiHttpSettingsError} from './http-settings.mjs';
 import {refreshModelCatalogs} from './model-catalog.mjs';
@@ -65,9 +65,7 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
 
   async function browserStatus() {
     const config = (await readJson(join(directory, "settings.json"), {})).zepi?.browser ?? {};
-    const resolved = resolveBrowserExecutable(config.executablePath || '');
-    const window = ["normal", "maximized", "fullscreen"].includes(config.window) ? config.window : "fullscreen";
-    return { executablePath: config.executablePath ?? "", path: resolved.path ?? "", source: resolved.source, keepOpen: config.keepOpen === true, window, candidates: browserCandidates() };
+    return { backend: "browse", browseCli: config.browseCli ?? "", browseDir: config.browseDir ?? join(directory, "browse"), browseTools: config.browseTools === "plain" ? "plain" : "execute" };
   }
 
   async function status(refreshModels = false) {
@@ -140,20 +138,69 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       });
       await chmod(join(directory, 'settings.json'), 0o600);
     } else if (operation === "browser-set") {
-      const keepOpen = request.keepOpen, executablePath = request.executablePath, windowMode = request.window;
-      if (keepOpen !== undefined && typeof keepOpen !== "boolean") throw new PiConfigError("Keep-open must be true or false.");
-      if (windowMode !== undefined && !["normal", "maximized", "fullscreen"].includes(windowMode)) throw new PiConfigError("Window mode must be normal, maximized or fullscreen.");
-      if (executablePath !== undefined && typeof executablePath !== "string") throw new PiConfigError("Enter a browser executable path or leave it blank.");
+      const backend = request.backend, browseCli = request.browseCli;
+      if (backend !== undefined && backend !== "browse") throw new PiConfigError("Backend must be browse.");
+      if (browseCli !== undefined && typeof browseCli !== "string") throw new PiConfigError("Browse CLI must be a path.");
       new FileSettingsStorage(directory, directory).withLock("global", current => {
         const value = current ? JSON.parse(current) : {};
         const browser = { ...value.zepi?.browser };
-        if (keepOpen !== undefined) browser.keepOpen = keepOpen;
-        if (windowMode !== undefined) browser.window = windowMode;
-        if (executablePath !== undefined) { if (executablePath.trim()) browser.executablePath = executablePath.trim(); else delete browser.executablePath; }
+        if (backend !== undefined) browser.backend = backend;
+        if (browseCli !== undefined) { if (browseCli.trim()) browser.browseCli = browseCli.trim(); else delete browser.browseCli; }
+        if (request.browseDir !== undefined) browser.browseDir = request.browseDir;
+        if (request.browseTools !== undefined) browser.browseTools = request.browseTools;
         value.zepi = { ...value.zepi, browser };
         return JSON.stringify(value, null, 2) + "\n";
       });
       await chmod(join(directory, "settings.json"), 0o600);
+      return status();
+    } else if (operation === "browse-status") {
+      const bs = await browserStatus();
+      await ensureBrowseMcp(directory, bs.browseDir, bs.browseTools);
+      return browseStatus(bs.browseDir, bs.browseTools);
+    } else if (operation === "browse-install") {
+      const dir = request.dir || (await browserStatus()).browseDir;
+      await installBrowse(dir);
+      const tools = (await browserStatus()).browseTools;
+      await writeBrowseMcp(directory, dir, tools);
+      new FileSettingsStorage(directory, directory).withLock("global", current => {
+        const value = current ? JSON.parse(current) : {};
+        value.zepi = { ...value.zepi, browser: { ...value.zepi?.browser, browseDir: dir, backend: "browse" } };
+        return JSON.stringify(value, null, 2) + "\n";
+      });
+      return browseStatus(dir, tools);
+    } else if (operation === "browse-check-update") {
+      return checkBrowseUpdate((await browserStatus()).browseDir);
+    } else if (operation === "browse-update") {
+      const dir = (await browserStatus()).browseDir;
+      await updateBrowse(dir);
+      const tools = (await browserStatus()).browseTools;
+      await writeBrowseMcp(directory, dir, tools);
+      return browseStatus(dir, tools);
+    } else if (operation === "browse-pair") {
+      return { code: await pairBrowse((await browserStatus()).browseDir) };
+    } else if (operation === "browse-settings") {
+      const dir = (await browserStatus()).browseDir;
+      if (!(await browseStatus(dir)).installed) return { settings: {} };
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      try {
+        const { stdout } = await promisify(execFile)(join(dir, "bun.exe"), [join(dir, "cli.mjs"), "settings"], { timeout: 30000 });
+        return JSON.parse(stdout);
+      } catch { return { settings: {} }; }
+    } else if (operation === "browse-set") {
+      return setBrowseSettings((await browserStatus()).browseDir, request.changes ?? {});
+    } else if (operation === "browse-mcp") {
+      const bs = await browserStatus();
+      const tools = request.tools ?? bs.browseTools;
+      if (request.enabled === false) await removeBrowseMcp(directory);
+      else await writeBrowseMcp(directory, bs.browseDir, tools);
+      new FileSettingsStorage(directory, directory).withLock("global", current => {
+        const value = current ? JSON.parse(current) : {};
+        value.zepi = { ...value.zepi, browser: { ...value.zepi?.browser, browseTools: tools } };
+        return JSON.stringify(value, null, 2) + "\n";
+      });
+      // Relay caches the tools mode at startup; restart in the background so the UI doesn't block.
+      restartBrowseRelay(bs.browseDir).catch(() => {});
       return status();
     } else if (operation === "defaults") {
       const provider = providerId(request.provider);

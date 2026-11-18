@@ -28,6 +28,17 @@ pub mod terminal_thread_metadata_store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 mod thread_import;
+
+/// Branding for the bundled pi agent: show "pi" with the pi logo, not the id/sparkle.
+pub(crate) fn zepi_pi_label(id: &str) -> Option<gpui::SharedString> {
+    (id == "zepi-pi").then(|| gpui::SharedString::from("pi"))
+}
+pub(crate) fn zepi_pi_icon(id: &str) -> Option<gpui::SharedString> {
+    if id != "zepi-pi" { return None; }
+    // On-disk copy next to the exe (icons/pi.svg); the UI reads external svg from disk.
+    let exe = std::env::current_exe().ok()?;
+    Some(gpui::SharedString::from(exe.parent()?.join("icons").join("pi.svg").to_string_lossy().into_owned()))
+}
 pub mod thread_metadata_store;
 pub mod thread_worktree_archive;
 

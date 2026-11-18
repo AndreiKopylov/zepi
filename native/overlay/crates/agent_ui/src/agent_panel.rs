@@ -90,7 +90,7 @@ use terminal_view::TerminalView;
 use text::OffsetRangeExt;
 use theme_settings::ThemeSettings;
 use ui::{
-    ContextMenu, ContextMenuEntry, GradientFade, IconButton, KeyBinding, PopoverMenu,
+    ContextMenu, ContextMenuEntry, IconButton, KeyBinding, PopoverMenu,
     PopoverMenuHandle, ProjectEmptyState, Tab, Tooltip, prelude::*, utils::WithRemSize,
 };
 use util::ResultExt as _;
@@ -4073,7 +4073,7 @@ impl AgentPanel {
         }
     }
 
-    pub(crate) fn visible_conversation_view(&self) -> Option<&Entity<ConversationView>> {
+    pub fn visible_conversation_view(&self) -> Option<&Entity<ConversationView>> {
         match self.visible_surface() {
             VisibleSurface::AgentThread(conversation_view) => Some(conversation_view),
             _ => None,
@@ -5634,14 +5634,6 @@ impl AgentPanel {
         } else {
             cx.theme().colors().tab_bar_background
         };
-        let gradient_overlay = GradientFade::new(toolbar_bg, toolbar_bg, toolbar_bg)
-            .width(px(64.0))
-            .right(px(0.0))
-            .gradient_stop(0.75);
-        // The fade gradient renders as a visible patch on transparent windows
-        // (the title already truncates).
-        let opaque_window =
-            cx.theme().window_background_appearance() == gpui::WindowBackgroundAppearance::Opaque;
 
         h_flex()
             .key_context("TitleEditor")
@@ -5653,8 +5645,7 @@ impl AgentPanel {
             .overflow_x_hidden()
             .child(content)
             .when(self.should_show_title_edit(window, cx), |this| {
-                this.when(opaque_window, |this| this.child(gradient_overlay))
-                    .child(
+                this.child(
                         h_flex()
                             .visible_on_hover("title_editor")
                             .absolute()
@@ -5912,10 +5903,11 @@ impl AgentPanel {
             (None, SharedString::from("Terminal"))
         } else if let Agent::Custom { id, .. } = &self.selected_agent {
             let store = agent_server_store.read(cx);
-            let icon = store.agent_icon(&id);
+            let icon = store.agent_icon(&id).or_else(|| crate::zepi_pi_icon(id.as_ref()));
 
             let label = store
                 .agent_display_name(&id)
+                .or_else(|| crate::zepi_pi_label(id.as_ref()))
                 .unwrap_or_else(|| self.selected_agent.label());
             (icon, label)
         } else {
@@ -6030,6 +6022,7 @@ impl AgentPanel {
                                                 .and_then(|store| store.agent(agent_id))
                                                 .map(|a| a.name().clone())
                                         })
+                                        .or_else(|| crate::zepi_pi_label(agent_id.as_ref()))
                                         .unwrap_or_else(|| agent_id.0.clone());
                                     AgentMenuItem {
                                         id: agent_id.clone(),
@@ -6051,7 +6044,8 @@ impl AgentPanel {
                                             .as_ref()
                                             .and_then(|store| store.agent(&item.id))
                                             .and_then(|a| a.icon_path().cloned())
-                                    });
+                                    })
+                                    .or_else(|| crate::zepi_pi_icon(item.id.as_ref()));
 
                                 if let Some(icon_path) = icon_path {
                                     entry = entry.custom_icon_svg(icon_path);

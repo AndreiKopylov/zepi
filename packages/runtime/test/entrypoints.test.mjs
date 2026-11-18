@@ -21,15 +21,15 @@ test('native process entry points share global state from an unrelated working d
     assert.equal(child.status, code, child.stderr);
     return JSON.parse(child.stdout);
   };
-  assert.deepEqual(run('pi-settings', {operation: 'access', fullAccess: true}), {ok: true, data: {fullAccess: true}});
+  assert.equal(run('pi-settings', {operation: 'tool-defaults', tools: ['read', 'edit']}).ok, true);
   const status = run('pi-settings', {operation: 'status'});
   assert.equal(status.data.directory, directory);
-  assert.equal(status.data.fullAccess, true);
+  assert.deepEqual(status.data.defaultTools, ['read', 'edit']);
   const extensions = run('pi-extensions', {});
   assert.equal(extensions.ok, true);
   assert.deepEqual(extensions.data.packages, []);
   assert.deepEqual(JSON.parse(await readFile(join(directory, 'settings.json'), 'utf8')),
-    {customSetting: 'preserved', zepi: {fullAccess: true}});
+    {customSetting: 'preserved', defaultTools: ['read', 'edit']});
   const malformed = run('pi-settings', '{"secret":"must-not-echo"', 1);
   assert.equal(malformed.ok, false);
   assert.doesNotMatch(JSON.stringify(malformed), /must-not-echo/);

@@ -346,8 +346,9 @@ function makeLazyHandle(server, hash, signal, timeoutMs, sleep, binding, cache) 
     let active = 0;
     let idleTimer;
     const idleMs = 15 * 60_000;
+    let failures = 0, openUntil = 0;
     const arm = () => {
-        if (server.name === "zepi_browser") return;
+        if (server.name === "browse") return;
         clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
             if (active > 0 || Date.now() - lastUsed < idleMs) { arm(); return; }
@@ -356,17 +357,27 @@ function makeLazyHandle(server, hash, signal, timeoutMs, sleep, binding, cache) 
         idleTimer.unref?.();
     };
     const ensure = () => {
+        if (Date.now() < openUntil)
+            return Promise.reject(new Error(`MCP server "${server.name}" is unavailable (circuit open); retrying after cooldown`));
         connecting ??= (async () => {
-            const handle = await connectDefaultMcpClient(server, signal, timeoutMs, sleep, binding);
-            real = handle;
-            if (toolsChangedHandler) handle.setToolsChangedHandler(toolsChangedHandler);
-            if (disabledHandler) handle.setDisabledHandler(disabledHandler);
-            lastUsed = Date.now(); arm();
             try {
-                const listed = await handle.listTools(undefined, signal, timeoutMs);
-                writeCache(server.name, hash, { tools: listed.tools, instructions: handle.getInstructions?.() });
-            } catch { /* keep old cache */ }
-            return handle;
+                const handle = await connectDefaultMcpClient(server, signal, timeoutMs, sleep, binding);
+                real = handle;
+                if (toolsChangedHandler) handle.setToolsChangedHandler(toolsChangedHandler);
+                if (disabledHandler) handle.setDisabledHandler(disabledHandler);
+                lastUsed = Date.now(); arm();
+                try {
+                    const listed = await handle.listTools(undefined, signal, timeoutMs);
+                    writeCache(server.name, hash, { tools: listed.tools, instructions: handle.getInstructions?.() });
+                } catch { /* keep old cache */ }
+                failures = 0; openUntil = 0;
+                return handle;
+            } catch (error) {
+                connecting = undefined; // allow a later retry instead of caching the rejection forever
+                failures += 1;
+                if (failures >= 3) openUntil = Date.now() + Math.min(failures * 30_000, 300_000);
+                throw error;
+            }
         })();
         return connecting;
     };
@@ -786,7 +797,7 @@ export async function connectDefaultMcpClient(server, signal, timeoutMs, sleep, 
     // Its progress keeps the outer tool call alive; turn/session cancellation
     // still settles the incoming request immediately.
     installClientHandlers(client, binding, token, validator, timeoutMs, sleep,
-        server.name === "zepi_browser" ? 30 * 60_000 : timeoutMs);
+        server.name === "browse" ? 30 * 60_000 : timeoutMs);
     const capabilityDiagnostic = (method) => binding?.emitDiagnostic(`[mcp:${token}] ${method}`);
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
         const caps = client.getServerCapabilities();

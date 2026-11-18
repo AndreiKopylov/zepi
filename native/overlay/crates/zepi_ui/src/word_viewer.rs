@@ -635,7 +635,7 @@ impl WordView {
     fn send_text_to_agent(&self, text: &str, window: &mut Window, cx: &mut App) {
         let Some(workspace) = window.root::<Workspace>().flatten().or_else(|| {
             window.root::<workspace::MultiWorkspace>().flatten().and_then(|multi| {
-                multi.read(cx).workspaces().next().cloned()
+                Some(multi.read(cx).workspace().clone())
             })
         }) else {
             log::error!("slides_viewer send: no workspace root");
@@ -645,11 +645,15 @@ impl WordView {
             log::error!("slides_viewer send: no agent panel");
             return;
         };
-        let Some(conversation) = panel.read(cx).active_conversation_view().cloned() else {
+        let panel_ref = panel.read(cx);
+        let Some(conversation) = panel_ref
+            .visible_conversation_view()
+            .or_else(|| panel_ref.active_conversation_view())
+            .cloned() else {
             log::error!("slides_viewer send: no active conversation");
             return;
         };
-        let Some(thread_view) = conversation.read(cx).root_thread_view() else {
+        let Some(thread_view) = conversation.read(cx).active_thread().cloned() else {
             log::error!("slides_viewer send: no root thread view");
             return;
         };

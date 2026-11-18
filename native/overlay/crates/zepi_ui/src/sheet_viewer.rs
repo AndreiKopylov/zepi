@@ -73,6 +73,59 @@ const LEFT_W: f32 = 46.0;
 const ZOOM_MIN: f32 = 0.4;
 const ZOOM_MAX: f32 = 4.0;
 
+/// Save bytes via a sibling temp file, then rename over the target: a crash or
+/// full disk mid-write must not truncate the user's workbook (Excel saves the same way).
+fn save_workbook_atomic(abs: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let name = abs.file_name().unwrap_or_default().to_string_lossy();
+    let temp = abs.with_file_name(format!("~${name}.{}.tmp", uuid::Uuid::new_v4().simple()));
+    let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp);
+    let mut file = match file {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.into());
+        }
+    };
+    // Excel also hides its save temp: Explorer and sync tools skip it during the write
+    #[cfg(windows)]
+    set_hidden(&temp, true);
+    if let Err(error) = std::io::Write::write_all(&mut file, bytes) {
+        drop(file);
+        let _ = std::fs::remove_file(&temp);
+        return Err(error.into());
+    }
+    drop(file);
+    // attributes travel with the renamed file, so restore visibility before replacing the workbook
+    #[cfg(windows)]
+    set_hidden(&temp, false);
+    if let Err(error) = std::fs::rename(&temp, abs) {
+        let _ = std::fs::remove_file(&temp);
+        // sharing violation or access denied: another process holds the file open
+        if matches!(error.raw_os_error(), Some(5 | 32)) {
+            anyhow::bail!("the file is in use by another process (close it and retry): {error}");
+        }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_hidden(path: &std::path::Path, hidden: bool) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL,
+    };
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    // best-effort: visibility of the short-lived temp is cosmetic
+    unsafe {
+        let _ = SetFileAttributesW(
+            windows::core::PCWSTR::from_raw(wide.as_ptr()),
+            if hidden { FILE_ATTRIBUTE_HIDDEN } else { FILE_ATTRIBUTE_NORMAL },
+        );
+    }
+}
+
 pub fn init(cx: &mut App) {
     register_project_item::<SheetView>(cx);
     register_serializable_item::<SheetView>(cx);
@@ -694,7 +747,7 @@ impl SheetView {
         }
         let Some(workspace) = window.root::<Workspace>().flatten().or_else(|| {
             window.root::<workspace::MultiWorkspace>().flatten().and_then(|multi| {
-                multi.read(cx).workspaces().next().cloned()
+                Some(multi.read(cx).workspace().clone())
             })
         }) else {
             log::error!("sheet_viewer send: no workspace root");
@@ -704,11 +757,15 @@ impl SheetView {
             log::error!("sheet_viewer send: no agent panel");
             return;
         };
-        let Some(conversation) = panel.read(cx).active_conversation_view().cloned() else {
+        let panel_ref = panel.read(cx);
+        let Some(conversation) = panel_ref
+            .visible_conversation_view()
+            .or_else(|| panel_ref.active_conversation_view())
+            .cloned() else {
             log::error!("sheet_viewer send: no active conversation");
             return;
         };
-        let Some(thread_view) = conversation.read(cx).root_thread_view() else {
+        let Some(thread_view) = conversation.read(cx).active_thread().cloned() else {
             log::error!("sheet_viewer send: no root thread view");
             return;
         };
@@ -1357,15 +1414,7 @@ impl SheetView {
         // serialize and write off the main thread, then finish state on it
         let abs_for_write = abs.clone();
         let written = cx.background_executor().spawn(async move {
-            let bytes = write_xlsx(&wb)?;
-            if let Err(error) = std::fs::write(&abs_for_write, &bytes) {
-                // sharing violation: another process holds the file open
-                if error.raw_os_error() == Some(32) {
-                    anyhow::bail!("the file is in use by another process (close it and retry): {error}");
-                }
-                return Err(error.into());
-            }
-            anyhow::Ok(())
+            save_workbook_atomic(&abs_for_write, &write_xlsx(&wb)?)
         });
         // same notification shape zed uses for editor save failures
         cx.spawn(async move |this, cx| {
@@ -1720,5 +1769,24 @@ mod tests {
             other => panic!("expected number, got {other:?}"),
         }
         assert!(matches!(parse_cell_text("hello", d).value, Value::Text(_)));
+    }
+
+    #[test]
+    fn workbook_save_replaces_target_and_cleans_temp_up() {
+        let dir = std::env::temp_dir().join(format!("zepi-sheet-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("book.xlsx");
+        std::fs::write(&path, b"old").unwrap();
+        save_workbook_atomic(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        // a failed rename (target is a directory) must not leave the temp file behind
+        let target = dir.join("locked");
+        std::fs::create_dir_all(&target).unwrap();
+        assert!(save_workbook_atomic(&target, b"new").is_err());
+        let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name()).filter(|name| name.to_string_lossy().starts_with("~$")).collect();
+        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

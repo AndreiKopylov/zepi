@@ -37,35 +37,32 @@ export function findExecutable(command: string): string | undefined {
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
-export function findZepiBrowser(): string | undefined {
-  const exe = process.platform === "win32" ? "zepi_browser.exe" : "zepi_browser";
+export function findBrowseCli(): string | undefined {
   const candidates = [
-    process.env.ZEPI_BROWSER_EXE,
-    join(repoRoot, "..", "zepi-build", "release-fast", exe),
-    join(repoRoot, "..", "zepi-build", "debug", exe),
-    "C:/Llm/zepi/" + exe,
+    process.env.ZEPI_BROWSE_CLI,
+    join(repoRoot, "..", "browse", "cli.mjs"),
+    "C:/Llm/browse/cli.mjs",
   ].filter(Boolean) as string[];
   return candidates.find((p) => existsSync(p));
 }
 
 export function browserAdapter(cwd: string): Adapter {
+  const cli = findBrowseCli();
   return {
-    id: "zepi-browser", surface: "browser", version: "chromiumoxide",
-    command: findZepiBrowser() ?? "zepi_browser",
-    args: ["serve"], cwd,
-    env: {
-      ZEPI_PI_CONFIG_DIR: process.env.ZEPI_PI_CONFIG_DIR ?? fileURLToPath(new URL("../../../.local/zepi", import.meta.url)),
-    },
+    id: "browse", surface: "browser", version: "browse",
+    command: process.env.ZEPI_BUN ?? "bun",
+    args: cli ? [cli, "mcp"] : ["mcp"], cwd,
+    env: { OPENCODE_BROWSER_TOOLS: "plain" },
   };
 }
 
 export async function doctor() {
-  const binary = findZepiBrowser();
+  const binary = findBrowseCli();
   return {
     node: process.version,
     pi: JSON.parse(readFileSync(new URL("../../acp/node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url), "utf8")).version,
     browser: {
-      engine: "chromiumoxide",
+      engine: "browse",
       binary: binary ?? "missing",
       control: binary ? "available_unprobed" : "missing_binary",
     },
