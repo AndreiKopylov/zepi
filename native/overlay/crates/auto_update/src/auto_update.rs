@@ -1289,9 +1289,22 @@ async fn install_release_windows(downloaded_installer: &Path) -> Result<Option<P
     let path = downloaded_installer.display().to_string().replace('\'', "''");
     // -FilePath, not -LiteralPath: Windows PowerShell 5.1 has no -LiteralPath on Start-Process.
     let ps = format!("Start-Process -FilePath '{path}' -Verb RunAs");
-    let mut cmd = new_command("powershell.exe");
-    cmd.args(["-NoProfile", "-Command", ps.as_str()]);
-    let mut child = cmd.spawn().context("failed to launch installer")?;
+    // The app lives in a KILL_ON_JOB_CLOSE job; the installer must outlive the app it closes.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    let spawn = |flags: u32| {
+        use smol::process::windows::CommandExt;
+        let mut cmd = smol::process::Command::new("powershell.exe");
+        cmd.creation_flags(flags);
+        cmd.args(["-NoProfile", "-Command", ps.as_str()]);
+        cmd.spawn()
+    };
+    let mut child = spawn(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB)
+        .or_else(|error| {
+            log::warn!("auto-update: breakaway spawn failed ({error}), installer stays job-bound");
+            spawn(CREATE_NO_WINDOW)
+        })
+        .context("failed to launch installer")?;
     // powershell exits once ShellExecute returns; a declined UAC prompt exits non-zero.
     let status = child.status().await.context("failed to await installer launch")?;
     anyhow::ensure!(status.success(), "installer launch was declined or failed");

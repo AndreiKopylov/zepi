@@ -35,9 +35,12 @@ All notable changes to Zepi are documented here. The format follows
   installer via `Start-Process -Verb RunAs` instead of `explorer.exe`.
 - Auto-update staging moved from the install dir (Program Files, not writable without
   elevation) to `%LOCALAPPDATA%\Zepi\updates`; the `auto_update_helper` crate and its
-  quit-time finalize hook are gone (the Inno flow never used them). The installer asks to
-  close running instances instead of force-killing them (`CloseApplications=yes`), and the
-  app keeps an honest `Installing` status until the external installer finishes.
+  quit-time finalize hook are gone (the Inno flow never used them). The installer runs
+  outside the app's kill-on-exit job so it outlives the app it updates, and closes running
+  instances at install time (`CloseApplications=force`; unregistered apps cannot be closed
+  gracefully, so unsaved editor buffers are lost — the pi journal survives). A completed
+  download is cached and reused instead of re-downloaded on every check. The app keeps an
+  honest `Installing` status until the external installer finishes.
 - Shell capture: 16 MiB per binary input and 32 MiB total; workspace office/image binaries are
   captured even outside the `files` subset (an empty list captures all) so Reject always has a
   pre-command backup; writes that bypass the copy are detected by a workspace metadata diff.
