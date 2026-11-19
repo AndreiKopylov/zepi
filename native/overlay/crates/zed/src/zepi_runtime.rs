@@ -14,7 +14,8 @@ pub const PRODUCT_VERSION: &str = "0.0.3";
 fn reap_descendants_on_exit() {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
         SetInformationJobObject,
     };
@@ -22,7 +23,10 @@ fn reap_descendants_on_exit() {
     unsafe {
         let Ok(job) = CreateJobObjectW(None, None) else { return };
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // BREAKAWAY_OK lets the updater spawn the installer outside this job: it must
+        // outlive the app whose files it replaces.
+        info.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
         let configured = SetInformationJobObject(
             job,
             JobObjectExtendedLimitInformation,
