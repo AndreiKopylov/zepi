@@ -31,8 +31,8 @@ zepi/
 │   ├── zed-port-matrix.py     # port cost per overlay file: PORT/KEEP/NEW/DROP
 │   └── zed-port-merge.py      # 3-way merge of an overlay file (ours/base/theirs)
 ├── installer/zepi.iss         # Inno Setup script (per-machine, AppMutex, /DAppVersion)
-├── win-build.cmd              # cargo build -p zed --bin zepi --profile release-fast (or `installer`,
-│                                or `check <crate>` for a link-free type-check of one overlay crate)
+├── win-build.cmd              # cargo build -p zed --bin zepi --profile release-fast
+│                                (`installer` arg switches to the compact release-installer profile)
 ├── win-run.sh                 # launcher: win-build.cmd outside MSYS path conversion
 └── .local/                    # ignored: tarballs, upstream zed tree, build logs
 ```

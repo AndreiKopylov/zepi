@@ -33,6 +33,9 @@ All notable changes to Zepi are documented here. The format follows
 - Spreadsheet cell editing accepts the space bar (gpui reports it as the `space` keystroke).
 - No flashing npm/cmd console at session start: Zed's language-server version check runs npm
   as `node npm-cli.js` instead of a visible `npm.cmd`.
+- Rejecting an agent-created file now deletes it. Such buffers were tracked as a modification of
+  an empty base, so reject wrote back a blank file; they are tracked as created (before the edit,
+  with a scheduled review diff so the keep/reject rows still appear).
 
 ## [0.0.2] - 2026-11-17
 

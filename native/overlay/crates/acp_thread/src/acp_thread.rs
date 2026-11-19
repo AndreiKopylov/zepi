@@ -8378,10 +8378,15 @@ impl AcpThread {
 
             let format_on_save = cx.update(|cx| {
                 action_log.update(cx, |action_log, cx| {
-                    // Agent edits persist like upstream Zed: the file lands on disk right away and the
-                    // review log remains the undo trail. Keeping them in the buffer made shell commands
-                    // read stale files and surfaced later as "File changed on disk" conflicts.
-                    action_log.buffer_read(buffer.clone(), cx);
+                    // Track before the edit: a file that does not exist on disk yet must be
+                    // Created{existing: None}, so rejecting the review deletes it. Tracking
+                    // after the edit would capture the pre-edit (empty) diff base as
+                    // "existing content" and reject would save a blank file instead.
+                    if create {
+                        action_log.buffer_created(buffer.clone(), cx);
+                    } else {
+                        action_log.buffer_read(buffer.clone(), cx);
+                    }
                 });
 
                 let format_on_save = buffer.update(cx, |buffer, cx| {
@@ -8398,7 +8403,11 @@ impl AcpThread {
                     anyhow::Ok(settings.format_on_save != FormatOnSave::Off)
                 })?;
                 action_log.update(cx, |action_log, cx| {
-                    if zepi && buffer.read(cx).version() != expected_version {
+                    // A created file must be tracked as Created so rejecting the review deletes
+                    // the file; Modified reverts to the empty base and saves a blank file instead.
+                    if create {
+                        action_log.buffer_created(buffer.clone(), cx);
+                    } else if zepi && buffer.read(cx).version() != expected_version {
                         action_log.buffer_edited_by(buffer.clone(), edit_source.clone(), cx);
                     } else {
                         action_log.buffer_edited(buffer.clone(), cx);
