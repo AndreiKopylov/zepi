@@ -183,7 +183,6 @@ pub struct AutoUpdater {
     current_version: Version,
     client: Arc<Client>,
     pending_poll: Option<Task<Option<()>>>,
-    quit_subscription: Option<gpui::Subscription>,
     update_check_type: UpdateCheckType,
     _wake_subscription: gpui::Subscription,
     dismissed_status: Option<AutoUpdateStatus>,
@@ -382,14 +381,17 @@ struct InstallerDir(PathBuf);
 #[cfg(target_os = "windows")]
 impl InstallerDir {
     async fn new() -> Result<Self> {
-        let installer_dir = std::env::current_exe()?
-            .parent()
-            .context("No parent dir for Zed.exe")?
-            .join("updates");
+        use util::ResultExt;
+        // Program Files is not writable by non-admin users, so stage under user data.
+        let installer_dir = paths::data_dir().join("updates");
         if smol::fs::metadata(&installer_dir).await.is_ok() {
-            smol::fs::remove_dir_all(&installer_dir).await?;
+            // A previous installer may still be running from here; its lock must not fail this check.
+            smol::fs::remove_dir_all(&installer_dir)
+                .await
+                .context("failed to clear stale installer dir")
+                .log_err();
         }
-        smol::fs::create_dir(&installer_dir).await?;
+        smol::fs::create_dir_all(&installer_dir).await?;
         Ok(Self(installer_dir))
     }
 
@@ -418,23 +420,6 @@ impl AutoUpdater {
     }
 
     fn new(current_version: Version, client: Arc<Client>, cx: &mut Context<Self>) -> Self {
-        // On windows, executable files cannot be overwritten while they are
-        // running, so we must wait to overwrite the application until quitting
-        // or restarting. When quitting the app, we spawn the auto update helper
-        // to finish the auto update process after Zed exits. When restarting
-        // the app after an update, we use `set_restart_path` to run the auto
-        // update helper instead of the app, so that it can overwrite the app
-        // and then spawn the new binary.
-        #[cfg(target_os = "windows")]
-        let quit_subscription = Some(cx.on_app_quit(|_, _| finalize_auto_update_on_quit()));
-        #[cfg(not(target_os = "windows"))]
-        let quit_subscription = None;
-
-        cx.on_app_restart(|this, _| {
-            this.quit_subscription.take();
-        })
-        .detach();
-
         // A download or check that was in flight when the machine went to sleep
         // is almost certainly riding a TCP connection that silently died during
         // suspend, so it would otherwise appear to stall indefinitely.
@@ -450,7 +435,6 @@ impl AutoUpdater {
             current_version,
             client,
             pending_poll: None,
-            quit_subscription,
             update_check_type: UpdateCheckType::Automatic,
             _wake_subscription: wake_subscription,
             dismissed_status: None,
@@ -739,7 +723,7 @@ impl AutoUpdater {
         let Some(newer_version) = newer_version else {
             this.update(cx, |this, cx| {
                 this.status = match previous_status {
-                    AutoUpdateStatus::Updated { .. } => previous_status,
+                    AutoUpdateStatus::Updated { .. } | AutoUpdateStatus::Installing { .. } => previous_status,
                     _ => {
                         if this.update_check_type.is_manual() {
                             cx.emit(AutoUpdateEvent::UpToDate);
@@ -763,7 +747,7 @@ impl AutoUpdater {
         let installer_dir = InstallerDir::new()
             .await
             .context("Failed to create installer dir")?;
-        let target_path = Self::target_path(&installer_dir).await?;
+        let target_path = Self::target_path(&installer_dir, &newer_version).await?;
         let progress_entity = this.clone();
         let mut progress_cx = cx.clone();
         log::info!("auto-update: downloading {}", fetched_release_data.url);
@@ -821,16 +805,23 @@ impl AutoUpdater {
             .with_context(|| format!("Failed to install update at: {}", target_path.display()))?;
         if let Some(new_binary_path) = new_binary_path {
             cx.update(|cx| cx.set_restart_path(new_binary_path));
+            this.update(cx, |this, cx| {
+                this.set_should_show_update_notification(true, cx)
+                    .detach_and_log_err(cx);
+                this.status = AutoUpdateStatus::Updated {
+                    version: newer_version,
+                };
+                cx.notify();
+            });
+        } else {
+            // Windows: the elevated installer finishes outside the app; Updated here would be a lie.
+            this.update(cx, |this, cx| {
+                this.status = AutoUpdateStatus::Installing {
+                    version: newer_version,
+                };
+                cx.notify();
+            });
         }
-
-        this.update(cx, |this, cx| {
-            this.set_should_show_update_notification(true, cx)
-                .detach_and_log_err(cx);
-            this.status = AutoUpdateStatus::Updated {
-                version: newer_version,
-            };
-            cx.notify();
-        });
         Ok(())
     }
 
@@ -857,10 +848,9 @@ impl AutoUpdater {
                 Ok(should_download.then_some(fetched_version))
             }
             _ => {
-                let current_version = if let AutoUpdateStatus::Updated { version } = status {
-                    version
-                } else {
-                    installed_version
+                let current_version = match status {
+                    AutoUpdateStatus::Updated { version } | AutoUpdateStatus::Installing { version } => version,
+                    _ => installed_version,
                 };
                 Ok(Self::check_if_fetched_version_is_newer_non_nightly(
                     current_version,
@@ -889,11 +879,12 @@ impl AutoUpdater {
         Ok(())
     }
 
-    async fn target_path(installer_dir: &InstallerDir) -> Result<PathBuf> {
+    async fn target_path(installer_dir: &InstallerDir, version: &Version) -> Result<PathBuf> {
         let filename = match OS {
-            "macos" => anyhow::Ok("Zed.dmg"),
-            "linux" => Ok("zed.tar.gz"),
-            "windows" => Ok("zepi-setup.exe"),
+            "macos" => anyhow::Ok("Zed.dmg".to_string()),
+            "linux" => Ok("zed.tar.gz".to_string()),
+            // Versioned name: a still-running older installer locks its own exe file.
+            "windows" => Ok(format!("zepi-setup-{version}.exe")),
             unsupported_os => anyhow::bail!("not supported: {unsupported_os}"),
         }?;
 
@@ -1267,15 +1258,8 @@ async fn cleanup_stale_installer_dirs() {
 }
 
 async fn cleanup_windows() -> Result<()> {
-    let parent = std::env::current_exe()?
-        .parent()
-        .context("No parent dir for Zed.exe")?
-        .to_owned();
-
-    // keep in sync with crates/auto_update_helper/src/updater.rs
-    _ = smol::fs::remove_dir(parent.join("updates")).await;
-    _ = smol::fs::remove_dir(parent.join("install")).await;
-    _ = smol::fs::remove_dir(parent.join("old")).await;
+    // stale download staged under user data (current InstallerDir location)
+    _ = smol::fs::remove_dir(paths::data_dir().join("updates")).await;
 
     Ok(())
 }
@@ -1288,33 +1272,12 @@ async fn install_release_windows(downloaded_installer: &Path) -> Result<Option<P
     let ps = format!("Start-Process -LiteralPath '{path}' -Verb RunAs");
     let mut cmd = new_command("powershell.exe");
     cmd.args(["-NoProfile", "-Command", ps.as_str()]);
-    cmd.spawn().context("failed to launch installer")?;
+    let mut child = cmd.spawn().context("failed to launch installer")?;
+    // powershell exits once ShellExecute returns; a declined UAC prompt exits non-zero.
+    let status = child.status().await.context("failed to await installer launch")?;
+    anyhow::ensure!(status.success(), "installer launch was declined or failed");
     log::info!("auto-update: launched installer (RunAs): {}", downloaded_installer.display());
     Ok(None)
-}
-
-pub async fn finalize_auto_update_on_quit() {
-    let Some(installer_path) = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.join("updates")))
-    else {
-        return;
-    };
-
-    // The installer will create a flag file after it finishes updating
-    let flag_file = installer_path.join("versions.txt");
-    if flag_file.exists()
-        && let Some(helper) = installer_path
-            .parent()
-            .map(|p| p.join("tools").join("auto_update_helper.exe"))
-    {
-        let mut command = util::command::new_command(helper);
-        command.arg("--launch");
-        command.arg("false");
-        if let Ok(mut cmd) = command.spawn() {
-            _ = cmd.status().await;
-        }
-    }
 }
 
 #[cfg(test)]
