@@ -33,6 +33,11 @@ All notable changes to Zepi are documented here. The format follows
 - Auto-update is diagnosable and more robust: it logs the resolved release tag and the
   newer/up-to-date decision, busts edge/proxy caches on `releases/latest`, and launches the
   installer via `Start-Process -Verb RunAs` instead of `explorer.exe`.
+- Auto-update staging moved from the install dir (Program Files, not writable without
+  elevation) to `%LOCALAPPDATA%\Zepi\updates`; the `auto_update_helper` crate and its
+  quit-time finalize hook are gone (the Inno flow never used them). The installer asks to
+  close running instances instead of force-killing them (`CloseApplications=yes`), and the
+  app keeps an honest `Installing` status until the external installer finishes.
 - Shell capture: 16 MiB per binary input and 32 MiB total; workspace office/image binaries are
   captured even outside the `files` subset (an empty list captures all) so Reject always has a
   pre-command backup; writes that bypass the copy are detected by a workspace metadata diff.
@@ -46,6 +51,9 @@ All notable changes to Zepi are documented here. The format follows
 - Fresh installs enable auto-update: installed builds are detected by the absent dev marker
   (`zepi-root.txt` next to the exe), not the `ZEPI_INSTALLED_RUNTIME` env var real installs
   never had.
+- Auto-update no longer fails with "access denied" on non-elevated installs (staging under
+  Program Files); a still-running previous installer or a missing data dir no longer aborts
+  the check, and a declined UAC prompt is reported as an error instead of a false "updated".
 - `win-build.cmd installer` consumes its argument instead of forwarding `installer` to cargo.
 - Spreadsheet cell editing accepts the space bar (gpui reports it as the `space` keystroke).
 - No flashing npm/cmd console at session start: Zed's language-server version check runs npm
