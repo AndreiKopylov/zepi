@@ -381,16 +381,9 @@ struct InstallerDir(PathBuf);
 #[cfg(target_os = "windows")]
 impl InstallerDir {
     async fn new() -> Result<Self> {
-        use util::ResultExt;
         // Program Files is not writable by non-admin users, so stage under user data.
+        // Completed downloads stay: a cached installer is reused, not re-downloaded.
         let installer_dir = paths::data_dir().join("updates");
-        if smol::fs::metadata(&installer_dir).await.is_ok() {
-            // A previous installer may still be running from here; its lock must not fail this check.
-            smol::fs::remove_dir_all(&installer_dir)
-                .await
-                .context("failed to clear stale installer dir")
-                .log_err();
-        }
         smol::fs::create_dir_all(&installer_dir).await?;
         Ok(Self(installer_dir))
     }
@@ -748,28 +741,49 @@ impl AutoUpdater {
             .await
             .context("Failed to create installer dir")?;
         let target_path = Self::target_path(&installer_dir, &newer_version).await?;
-        let progress_entity = this.clone();
-        let mut progress_cx = cx.clone();
-        log::info!("auto-update: downloading {}", fetched_release_data.url);
-        download_release(
-            &target_path,
-            fetched_release_data,
-            client,
-            move |progress| {
-                progress_entity.update(&mut progress_cx, |this, cx| {
-                    if let AutoUpdateStatus::Downloading {
-                        progress: current_progress,
-                        ..
-                    } = &mut this.status
-                    {
-                        *current_progress = progress;
-                        cx.notify();
-                    }
-                });
-            },
-        )
-        .await
-        .with_context(|| format!("Failed to download update to {}", target_path.display()))?;
+        let ok_path = target_path.with_extension("ok");
+        let cached_len = smol::fs::metadata(&target_path).await.map(|m| m.len()).unwrap_or(0);
+        let marker_len = smol::fs::read_to_string(&ok_path)
+            .await
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok());
+        // Installers of other versions are garbage; a locked running one survives until unlocked.
+        if let Ok(mut entries) = smol::fs::read_dir(installer_dir.path()).await {
+            while let Some(Ok(entry)) = entries.next().await {
+                let name = entry.file_name();
+                if name != target_path.file_name().unwrap_or_default()
+                    && name != ok_path.file_name().unwrap_or_default()
+                {
+                    _ = smol::fs::remove_file(entry.path()).await;
+                }
+            }
+        }
+        if cached_len > 0 && marker_len == Some(cached_len) {
+            log::info!("auto-update: reusing cached installer {}", target_path.display());
+        } else {
+            let progress_entity = this.clone();
+            let mut progress_cx = cx.clone();
+            log::info!("auto-update: downloading {}", fetched_release_data.url);
+            download_release(
+                &target_path,
+                fetched_release_data,
+                client,
+                move |progress| {
+                    progress_entity.update(&mut progress_cx, |this, cx| {
+                        if let AutoUpdateStatus::Downloading {
+                            progress: current_progress,
+                            ..
+                        } = &mut this.status
+                        {
+                            *current_progress = progress;
+                            cx.notify();
+                        }
+                    });
+                },
+            )
+            .await
+            .with_context(|| format!("Failed to download update to {}", target_path.display()))?;
+        }
 
         this.update(cx, |this, cx| {
             this.status = AutoUpdateStatus::Installing {
@@ -1082,6 +1096,10 @@ async fn download_release(
     if total_bytes.is_some() && last_reported_percent != Some(100) {
         on_progress(Some(1.0));
     }
+    // Integrity marker: a later check reuses the download only when the size matches.
+    smol::fs::write(target_path.with_extension("ok"), downloaded_bytes.to_string())
+        .await
+        .context("failed to write installer integrity marker")?;
     log::info!("downloaded update. path:{:?}", target_path);
 
     Ok(())
@@ -1269,7 +1287,8 @@ async fn install_release_windows(downloaded_installer: &Path) -> Result<Option<P
     // UAC prompt and survives the app it is about to close; explorer.exe <file> is unreliable
     // (it may just open the containing folder). Per-machine installs need elevation.
     let path = downloaded_installer.display().to_string().replace('\'', "''");
-    let ps = format!("Start-Process -LiteralPath '{path}' -Verb RunAs");
+    // -FilePath, not -LiteralPath: Windows PowerShell 5.1 has no -LiteralPath on Start-Process.
+    let ps = format!("Start-Process -FilePath '{path}' -Verb RunAs");
     let mut cmd = new_command("powershell.exe");
     cmd.args(["-NoProfile", "-Command", ps.as_str()]);
     let mut child = cmd.spawn().context("failed to launch installer")?;

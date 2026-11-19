@@ -31,7 +31,6 @@ UninstallDisplayName={#AppName}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-AppMutex=Zepi-Editor-Stable-Instance-Mutex
 CloseApplications=yes
 RestartApplications=no
 AllowNoIcons=yes
