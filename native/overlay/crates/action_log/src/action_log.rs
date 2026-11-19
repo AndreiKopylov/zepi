@@ -687,7 +687,12 @@ impl ActionLog {
         if record_file_read_time {
             self.update_file_read_time(&buffer, cx);
         }
-        self.track_buffer_internal(buffer, true, cx);
+        let new_version = buffer.read(cx).version();
+        let tracked_buffer = self.track_buffer_internal(buffer, true, cx);
+        // Review rows come from the scheduled diff update, same as edits: a created file
+        // without it never shows up in the keep/reject review.
+        tracked_buffer.version = new_version;
+        tracked_buffer.schedule_diff_update(ChangeAuthor::Agent, cx);
     }
 
     /// Mark a buffer as edited by agent, so we can refresh it in the context

@@ -69,8 +69,6 @@ const suites = [
   'packages/acp/test/pi-commands.test.ts',
   'packages/acp/test/subagents.test.ts',
   ...(skipBrowser ? [] : ['packages/acp/test/browser.test.ts']),
-  // The preview/shell leg builds real projects and drives a browser; include it via --full.
-  ...(full ? ['packages/acp/test/preview.test.ts'] : []),
 ];
 try {
   // Suites must not see machine credentials: drop every key-like variable, not a hardcoded list.
@@ -84,6 +82,5 @@ try {
   ok(`${pass} tests pass`);
 } catch (error) { fail('suites', String(error?.message ?? error)); }
 
-if (!full) console.log('note: preview/shell leg excluded; run smoke --full to include it.');
 console.log(failed ? `\nSMOKE FAILED (${failed} steps)` : '\nSMOKE OK');
 process.exit(failed ? 1 : 0);

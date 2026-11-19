@@ -109,7 +109,7 @@ export function createSubagents(agentDir: string, sessionDir: string) {
     tool(parentId: string, client: AgentContext) {
       return defineTool({
         name: "subagent", label: "Delegate to agents",
-        description: "Delegate to independent pi agents. Use title/task/agent for one agent, tasks for parallel agents (up to 4 simultaneously), or chain for sequential agents. In chain tasks, {previous} is replaced with the preceding result. Default role is scout (read only); worker can edit native buffers and delegate; reviewer reads; verifier uses preview/browser. Use /agents to manage global roles. Children inherit model/thinking unless their role specifies them. Every child appears in the workbench with its own permissions, edits, results and stop control. Failures block dependent steps; independent parallel tasks continue. Context is independent; include all required instructions. Nesting is bounded to 3 levels and 16 active children per main task.",
+        description: "Delegate to independent pi agents. Use title/task/agent for one agent, tasks for parallel agents (up to 4 simultaneously), or chain for sequential agents. In chain tasks, {previous} is replaced with the preceding result. Default role is scout (read only); worker can edit native buffers and delegate; reviewer reads; verifier uses browser. Use /agents to manage global roles. Children inherit model/thinking unless their role specifies them. Every child appears in the workbench with its own permissions, edits, results and stop control. Failures block dependent steps; independent parallel tasks continue. Context is independent; include all required instructions. Nesting is bounded to 3 levels and 16 active children per main task.",
         parameters: Type.Object({title: instanceTitle(), task: Type.Optional(Type.String({minLength: 1})), agent: roleName(),
           tasks: Type.Optional(Type.Array(jobSchema, {minItems: 1, maxItems: 8})), chain: Type.Optional(Type.Array(jobSchema, {minItems: 1, maxItems: 8}))}),
         async execute(toolCallId, args, signal) {
@@ -190,7 +190,7 @@ export function createSubagents(agentDir: string, sessionDir: string) {
               if (childId) {
                 awaitingPrompts.delete(childId);
                 // Keep the same idle pi session for native queued follow-ups.
-                // Each turn releases browser/preview resources in server.ts.
+                // Each turn releases browser/shell resources in server.ts.
                 running.delete(childId);
               }
               row.duration = row.started === undefined ? 0 : Date.now() - row.started;

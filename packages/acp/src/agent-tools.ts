@@ -1,6 +1,6 @@
 import type { AgentSession, ToolInfo, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-export const agentToolCategories = ["read", "edit", "write", "bash", "preview", "browser", "subagent", "extensions", "mcp"];
+export const agentToolCategories = ["read", "edit", "write", "bash", "browser", "subagent", "extensions", "mcp"];
 const mcpPath = "<inline:agentprism-pi-acp-mcp>";
 const discovery = new Map([['codemode', 'builtin:codemode'], ['tool_search', 'builtin:tool-search']]);
 

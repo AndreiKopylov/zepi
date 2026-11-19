@@ -1,6 +1,9 @@
 @echo off
 rem cargo check for the zepi app with the MSVC/SDK environment win-build.cmd expects
+rem Optional arg: check a single crate instead of the whole zed package (no --features).
 setlocal
+set PKG=%~1
+if "%PKG%"=="" set PKG=zed
 for %%I in ("%~dp0..") do set "REPO=%%~fI"
 set MSVC=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207
 set SDK=C:\Program Files (x86)\Windows Kits\10
@@ -18,4 +21,8 @@ set LIB=%MSVC%\lib\x64;%SDK%\Lib\10.0.26100.0\ucrt\x64;%SDK%\Lib\10.0.26100.0\um
 if "%ZEPI_EXTRA_PATH%"=="" set ZEPI_EXTRA_PATH=%REPO%\..\tools\cmake-3.30.5-windows-x86_64\bin;%REPO%\..\tools\nasm-2.16.03
 set PATH=%MSVC%\bin\Hostx64\x64;%ZEPI_EXTRA_PATH%;%PATH%
 cd /d %REPO%\.local\upstream\zed
-cargo check -p zed --features gpui_platform/runtime_shaders 2>&1
+if "%PKG%"=="zed" (
+  cargo check -p zed --features gpui_platform/runtime_shaders 2>&1
+) else (
+  cargo check -p %PKG% 2>&1
+)
