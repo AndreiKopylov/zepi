@@ -8,6 +8,16 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [0.0.3] - 2026-11-19
 
+### Added
+
+- Keep/Reject review for binary shell outputs (xlsx, pptx, images): they apply to the project
+  with a pre-command backup and get review rows styled like code rows (file-tree icon, same
+  background, hover-only buttons). Reject restores the backup, created files are deleted.
+  Reviews survive session reloads and drop out of the list when the target file was deleted.
+- `powershell` tool: the captured-copy + review workflow with native PowerShell syntax.
+- Text review replay after a reload: both sides of the diff travel in the agent journal
+  (write tool and shell merges), covering created files, autosaved intermediates and CRLF saves.
+
 ### Changed
 
 - Much faster Rust dev builds: `release-fast` defaults to line-tables-only debug info
@@ -23,6 +33,13 @@ All notable changes to Zepi are documented here. The format follows
 - Auto-update is diagnosable and more robust: it logs the resolved release tag and the
   newer/up-to-date decision, busts edge/proxy caches on `releases/latest`, and launches the
   installer via `Start-Process -Verb RunAs` instead of `explorer.exe`.
+- Shell capture: 16 MiB per binary input and 32 MiB total; workspace office/image binaries are
+  captured even outside the `files` subset (an empty list captures all) so Reject always has a
+  pre-command backup; writes that bypass the copy are detected by a workspace metadata diff.
+- Keep All / Reject All settle binary and text reviews together; the edits list auto-expands
+  for new reviews unless the user collapsed it.
+- Startup retention sweeps: shell run directories and text-review snapshots older than 14 days,
+  and runtime leases of dead processes.
 
 ### Fixed
 
@@ -36,6 +53,13 @@ All notable changes to Zepi are documented here. The format follows
 - Rejecting an agent-created file now deletes it. Such buffers were tracked as a modification of
   an empty base, so reject wrote back a blank file; they are tracked as created (before the edit,
   with a scheduled review diff so the keep/reject rows still appear).
+- Outside-capture inspection failures (locked or uncaptured files) no longer abort the shell
+  call or drop reviews of already-applied binaries.
+- Reject All keeps journal reviews of preserved buffers (external overlap) so their edits
+  survive a reload; one unreadable file no longer aborts replay of the remaining reviews.
+- Rejecting an already-deleted created binary settles cleanly; swept backups hide Reject
+  instead of failing forever; superseded text-review snapshots are removed on settle.
+- Workspace metadata scans batch their lstat calls, keeping shell calls fast on Windows.
 
 ## [0.0.2] - 2026-11-17
 

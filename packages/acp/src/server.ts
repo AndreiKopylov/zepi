@@ -5,11 +5,14 @@ import {createShell} from './shell.ts';
 import {refreshPiNetwork} from './pi-network.ts';
 import {preparePromptContent} from './prompt-content.ts';
 import {createDeliveryLedger, DELIVERY} from './delivery.ts';
+import {createBinaryReviewLedger, BINARY_REVIEW} from './binary-review.ts';
+import {createTextReviewLedger, TEXT_REVIEW} from './text-review.ts';
 import {nativeUiAction} from './native-ui.ts';
 import { runAcp } from "../adapter/src/lib.js";
 import { createAgentSession, ModelRuntime, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import { stat } from "node:fs/promises";
+import { lstat, readdir, rm, stat } from "node:fs/promises";
+import {basename} from "node:path";
 import { ndJsonStream, type AgentContext, type McpServer, type Stream } from "@agentclientprotocol/sdk";
 import {Readable, Writable} from 'node:stream';
 import { editorTools } from "./editor-tools.ts";
@@ -23,6 +26,18 @@ import { browserEnvironment } from "../../runtime/src/browser/config.mjs";
 import { ensureBrowseMcp, ensureRelayMode } from "../../runtime/src/browser/browse.mjs";
 import {codemodeImages} from './codemode-images.ts';
 
+// Runtime leases are written per process id; a dead process leaves them behind forever.
+export const sweepDeadRuntimes = (root: string) => (async () => {
+  for (const entry of await readdir(root).catch(() => [] as string[])) {
+    const pid = Number(basename(entry, ".mcp.json").replace(/\.json$/, ""));
+    if (!Number.isInteger(pid) || pid === process.pid) continue;
+    try { process.kill(pid, 0); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") continue;
+      await rm(join(root, entry), {force: true}).catch(() => {});
+    }
+  }
+})();
+
 export async function startZepiAgent(agentDir: string, sessionDir: string, stream?: Stream, modelRuntime?: ModelRuntime) {
   const runtime = modelRuntime ?? await ModelRuntime.create({
     authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), allowModelNetwork: false,
@@ -30,6 +45,8 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   let connectClient!: (client: AgentContext) => void;
   let supportsForms = false;
   let supportsNativeUi = false;
+  let supportsBinaryReview = false;
+  let supportsTextReview = false;
   const subagents = createSubagents(agentDir, sessionDir);
   const mcp = createMcpConnector(agentDir);
   // Skip the per-session local catalog rebuild when models/settings/auth are unchanged.
@@ -49,7 +66,23 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
     await runtime.refresh({ allowNetwork: false });
     void browseSelfHeal().catch(e => console.error("browse self-heal failed", e));
   };
+// Snapshot directories older than the retention window cannot belong to any live
+// review: a session unopened that long has released its evidence.
+const TEXT_SNAPSHOT_RETENTION_DAYS = 14;
+const sweepStaleSnapshots = (root: string) => (async () => {
+  const cutoff = Date.now() - TEXT_SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  for (const sessionDir of await readdir(root).catch(() => [] as string[])) {
+    for (const snapshotDir of await readdir(join(root, sessionDir)).catch(() => [] as string[])) {
+      const dir = join(root, sessionDir, snapshotDir);
+      const ages = await Promise.all(["base", "current"].map(file =>
+        lstat(join(dir, file)).then(info => info.mtimeMs).catch(() => Infinity)));
+      if (Math.max(...ages) < cutoff) await rm(dir, {recursive: true, force: true}).catch(() => {});
+    }
+  }
+})();
   const deliveries = new Map<string, ReturnType<typeof createDeliveryLedger>>();
+  const binaryReviews = new Map<string, ReturnType<typeof createBinaryReviewLedger>>();
+  const textReviews = new Map<string, ReturnType<typeof createTextReviewLedger>>();
   const clientReady = new Promise<AgentContext>(resolve => { connectClient = resolve; });
   // The transport can receive initialize/new while asynchronous Zepi setup is
   // still installing wrappers. Admit requests only after that setup completes.
@@ -74,7 +107,14 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         const client = await clientReady;
         let liveSession:AgentSession|undefined;
         const images = codemodeImages();
-        const shell = createShell(options.cwd, join(agentDir, "commands"), options.sessionManager.getSessionId(), client);
+        const sessionId = options.sessionManager.getSessionId();
+        const onBinaryApply = (change:{path:string;kind:'modified'|'created';backup?:string}) =>
+          binaryReviews.get(sessionId)?.record(change);
+        const onTextApply = (change:{path:string;base:string;current:string;mtimeNs:string|null;created?:boolean}) =>
+          void textReviews.get(sessionId)?.record(change);
+        const shell = createShell(options.cwd, join(agentDir, "commands"), options.sessionManager.getSessionId(), client, 'bash', onBinaryApply, onTextApply);
+        // PowerShell gets the same captured-copy + review workflow instead of a raw disk writer.
+        const powershell = createShell(options.cwd, join(agentDir, "commands-pwsh"), options.sessionManager.getSessionId(), client, 'powershell', onBinaryApply, onTextApply);
         // Settings are owned by pi. New tasks see credentials/models changed in
         // Zepi's settings without replacing the model of an active conversation.
         await refreshModelsIfChanged();
@@ -88,7 +128,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
           const getExtensions = options.resourceLoader.getExtensions.bind(options.resourceLoader);
           options.resourceLoader.getExtensions = () => {
             const loaded = getExtensions();
-            return { ...loaded, extensions: [...loaded.extensions, shell.extension, accessPolicy()] };
+            return { ...loaded, extensions: [...loaded.extensions, shell.extension, powershell.extension, accessPolicy()] };
           };
           const append = options.resourceLoader.getAppendSystemPrompt.bind(options.resourceLoader);
           options.resourceLoader.getAppendSystemPrompt = () => [...append(),
@@ -108,9 +148,10 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
           // Preserve pi's defaultTools lifecycle with native file operations.
           tools: undefined,
           noTools: undefined,
-          customTools: [...[...editorTools(options.cwd, options.sessionManager.getSessionId(), client, images.get),
+          customTools: [...[...editorTools(options.cwd, options.sessionManager.getSessionId(), client, images.get,
+              change => void textReviews.get(sessionId)?.record(change)),
             ...editorQueryTools(options.cwd, options.sessionManager.getSessionId(), client)]
-            .map(tool => ({...tool, defaultActive: false})), shell.tool,
+            .map(tool => ({...tool, defaultActive: false})), shell.tool, powershell.tool,
             ...(subagents.enabled ? [subagents.tool(options.sessionManager.getSessionId(), client)] : [])],
         });
         liveSession=created.session;
@@ -140,8 +181,14 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         }, (message,entryId)=>subagents.consumedInput(created.session.sessionId,message,entryId));
         deliveries.set(created.session.sessionId, ledger);
         Object.defineProperty(created.session, DELIVERY, {value:ledger});
+        const binaryReview = createBinaryReviewLedger(created.session, options.cwd, client, () => supportsBinaryReview);
+        binaryReviews.set(created.session.sessionId, binaryReview);
+        Object.defineProperty(created.session, BINARY_REVIEW, {value:binaryReview});
+        const textReview = createTextReviewLedger(created.session, options.cwd, join(agentDir, "text-reviews"), client, () => supportsTextReview);
+        textReviews.set(created.session.sessionId, textReview);
+        Object.defineProperty(created.session, TEXT_REVIEW, {value:textReview});
         const dispose = created.session.dispose.bind(created.session);
-        created.session.dispose = () => { disposeImages(); ledger.dispose(); if(deliveries.get(created.session.sessionId)===ledger)deliveries.delete(created.session.sessionId); dispose(); };
+        created.session.dispose = () => { disposeImages(); ledger.dispose(); if(deliveries.get(created.session.sessionId)===ledger)deliveries.delete(created.session.sessionId); if(binaryReviews.get(created.session.sessionId)===binaryReview)binaryReviews.delete(created.session.sessionId); if(textReviews.get(created.session.sessionId)===textReview)textReviews.delete(created.session.sessionId); dispose(); };
         const prompt = created.session.prompt.bind(created.session);
         created.session.prompt = async (...args) => {
           try {
@@ -152,7 +199,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
             await created.session.waitForIdle();
             return result;
           } finally {
-            const cleanup = await Promise.allSettled([shell.finishTurn()]);
+            const cleanup = await Promise.allSettled([shell.finishTurn(), powershell.finishTurn()]);
             const failed = cleanup.find(result => result.status === "rejected");
             if (failed?.status === "rejected") throw failed.reason;
           }
@@ -162,7 +209,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         const abort = created.session.abort.bind(created.session);
         created.session.abort = async () => {
           try { await abort(); } finally {
-            const results = await Promise.allSettled([shell.finishTurn()]);
+            const results = await Promise.allSettled([shell.finishTurn(), powershell.finishTurn()]);
             const failed = results.find(result => result.status === "rejected");
             if (failed?.status === "rejected") throw failed.reason;
           }
@@ -194,6 +241,8 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   server.agent.initialize = context => {
     supportsForms = context.params.clientCapabilities?.elicitation?.form != null;
     supportsNativeUi = context.params.clientCapabilities?._meta?.zepiNativeUi === 1;
+    supportsBinaryReview = context.params.clientCapabilities?._meta?.zepiBinaryReview === 1;
+    supportsTextReview = context.params.clientCapabilities?._meta?.zepiTextReview === 1;
     subagents.setEnabled(context.params.clientCapabilities?._meta?.zepiSubagents === 1);
     const result = initialize(context);
     return {...result, agentCapabilities: {...result.agentCapabilities,
@@ -235,6 +284,10 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   void refreshModelCatalogs(runtime).then(() => server.agent.refreshGlobalModelScope())
     .catch((error: unknown) => console.error("background model catalog refresh failed", error));
   void browseSelfHeal().catch((error: unknown) => console.error("browse self-heal failed", error));
+  void sweepStaleSnapshots(join(agentDir, "text-reviews")).catch((error: unknown) =>
+    console.error("snapshot retention failed", error));
+  void sweepDeadRuntimes(join(agentDir, "runtimes")).catch((error: unknown) =>
+    console.error("runtime lease cleanup failed", error));
   admitRequests();
   return server;
 }

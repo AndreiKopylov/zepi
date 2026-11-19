@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 /// Command input exceeds this and the shell refuses to capture it.
 const MAX_BYTES: usize = 1024 * 1024;
+/// Binary inputs (xlsx, images) have no editor buffer and are legitimately larger.
+const MAX_BINARY_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZepiFileSnapshot {
@@ -41,7 +43,8 @@ impl AcpThread {
                 )
             };
             let bytes = buffer.as_ref().map(String::as_bytes).or(disk.as_deref()).context("File is unavailable")?;
-            ensure!(bytes.len() <= MAX_BYTES, "Command input exceeds 1 MiB");
+            let max_bytes = if binary { MAX_BINARY_BYTES } else { MAX_BYTES };
+            ensure!(bytes.len() <= max_bytes, "Command input exceeds {} MiB", max_bytes / (1024 * 1024));
             Ok(ZepiFileSnapshot {
                 content: STANDARD.encode(bytes),
                 disk: disk.as_deref().map(|bytes| STANDARD.encode(bytes)),

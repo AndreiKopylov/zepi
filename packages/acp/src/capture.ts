@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { appendFile, cp, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join, relative, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -40,6 +40,22 @@ async function removeTree(path: string) {
 }
 
 const sweptStorages = new Set<string>();
+// Run directories hold review evidence (backups, outputs, snapshots). Past the
+// retention window nothing can reference them, so they are plain garbage.
+export const RUN_RETENTION_DAYS = 14;
+const staleSweptStorages = new Set<string>();
+export async function sweepStaleRuns(storage: string) {
+  if (staleSweptStorages.has(storage)) return;
+  staleSweptStorages.add(storage);
+  const cutoff = Date.now() - RUN_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  for (const sessionDir of await readdir(storage).catch(() => [] as string[])) {
+    for (const runDir of await readdir(join(storage, sessionDir)).catch(() => [] as string[])) {
+      const run = join(storage, sessionDir, runDir);
+      const info = await lstat(run).catch(() => undefined);
+      if (info && info.mtimeMs < cutoff) await removeTree(run);
+    }
+  }
+}
 async function sweepDanglingLinks(storage: string) {
   if (sweptStorages.has(storage)) return;
   sweptStorages.add(storage);
@@ -72,6 +88,7 @@ function capped() {
 
 export function createCapture(cwd: string, storage: string, sessionId: string, client: AgentContext) {
   void sweepDanglingLinks(storage);
+  void sweepStaleRuns(storage);
   let active: Run | undefined;
   let stopping: Promise<void> | undefined;
   const temporaryInputs = new Map<string, Run>();
@@ -96,7 +113,7 @@ export function createCapture(cwd: string, storage: string, sessionId: string, c
     const content = Buffer.from(response.content, "base64");
     if (content.toString("base64") !== response.content) throw new Error("Invalid native file snapshot.");
     signal?.throwIfAborted();
-    return { canonical, content };
+    return { canonical, content, binary: response.buffer === null };
   }
 
   async function freshness(run: Run, signal?: AbortSignal) {
@@ -205,10 +222,11 @@ export function createCapture(cwd: string, storage: string, sessionId: string, c
       for (const path of params.files ?? []) {
         const local = relative(root, await workspacePath(root, path, true)).split(sep).join("/");
         if (inputs.has(local)) continue;
-        const { canonical, content } = await observe(local, signal);
+        const { canonical, content, binary } = await observe(local, signal);
         const size = Buffer.byteLength(content);
         bytes += size;
-        if (size > 1024 * 1024 || bytes > 16 * 1024 * 1024) throw new Error("Inputs exceed the supported size (1 MiB per file, 16 MiB total).");
+        // Binary inputs (xlsx, images) have no editor buffer and may exceed the text bound.
+        if (size > (binary ? 16 : 1) * 1024 * 1024 || bytes > 32 * 1024 * 1024) throw new Error("Inputs exceed the supported size (16 MiB per binary file, 1 MiB per text file, 32 MiB total).");
         const disk = await readFile(canonical).catch((e: NodeJS.ErrnoException) => { if (e.code !== "ENOENT") throw e; return undefined; });
         inputs.set(local, { content, differsFromDisk: disk === undefined || hash(disk) !== hash(content) });
       }

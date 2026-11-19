@@ -3797,6 +3797,8 @@ pub struct AcpThread {
     pending_terminal_exit: HashMap<acp_v2::TerminalId, acp_v1::TerminalExitStatus>,
     had_error: bool,
     zepi_turn: ZepiTurnState,
+    zepi_binary_reviews: Vec<crate::zepi_turn::ZepiBinaryReview>,
+    zepi_text_review_paths: Vec<String>,
     local_execution_error: Option<Arc<anyhow::Error>>,
     /// The user's unsent prompt text, persisted so it can be restored when reloading the thread.
     draft_prompt: Option<Vec<acp_v2::ContentBlock>>,
@@ -3937,6 +3939,7 @@ pub struct ZepiUiAction {
 #[derive(Debug)]
 pub enum AcpThreadEvent {
     ZepiUiAction(Rc<ZepiUiAction>),
+    ZepiBinaryReviewsChanged,
     StatusChanged,
     /// The parent's title, description, or capabilities for this subagent changed. Views that
     /// read them from the parent's side, such as its subagent card, observe this event.
@@ -4120,7 +4123,8 @@ impl AcpThread {
                 | AcpThreadEvent::ModeUpdated(_)
                 | AcpThreadEvent::ConfigOptionsUpdated(_)
                 | AcpThreadEvent::WorkingDirectoriesUpdated
-                | AcpThreadEvent::ZepiUiAction(_) => {}
+                | AcpThreadEvent::ZepiUiAction(_)
+                | AcpThreadEvent::ZepiBinaryReviewsChanged => {}
             });
 
         let receipt_submissions = connection.receipt_submissions(&session_id, cx);
@@ -4176,6 +4180,8 @@ impl AcpThread {
             pending_terminal_exit: HashMap::default(),
             had_error: false,
             zepi_turn: ZepiTurnState::default(),
+            zepi_binary_reviews: Vec::new(),
+            zepi_text_review_paths: Vec::new(),
             local_execution_error: None,
             draft_prompt: None,
             draft_prompt_revision: 0,
@@ -4191,6 +4197,89 @@ impl AcpThread {
 
     pub fn pending_review_count(&self, cx: &App) -> usize {
         self.action_log.read(cx).changed_buffers(cx).count()
+            + self.zepi_binary_reviews.len()
+    }
+
+    pub fn zepi_binary_reviews(&self) -> &[ZepiBinaryReview] {
+        &self.zepi_binary_reviews
+    }
+
+    /// Text files whose review the agent still considers pending. The agent owns the
+    /// journal, so Zed asks it back after a reload instead of guessing.
+    pub fn zepi_text_review_paths(&self) -> &[String] {
+        &self.zepi_text_review_paths
+    }
+
+    pub fn set_zepi_text_review_paths(&mut self, paths: Vec<String>, _cx: &mut Context<Self>) {
+        self.zepi_text_review_paths = paths;
+    }
+
+    /// Replays text reviews after a session reload. Agent edits live in editor buffers,
+    /// so the agent's journal carries both sides of the diff; the review is rebuilt here
+    /// instead of re-applying the edit and inventing a baseline.
+    pub fn restore_zepi_text_reviews(
+        &self,
+        reviews: Vec<ZepiTextReview>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<usize>> {
+        let project = self.project.clone();
+        let action_log = self.action_log.clone();
+        let Some(root) = self
+            .work_dirs()
+            .and_then(|dirs| dirs.ordered_paths().next().cloned())
+        else {
+            return Task::ready(Err(anyhow::anyhow!("Session has no work root")));
+        };
+        cx.spawn(async move |_this, cx| {
+            let mut restored = 0;
+            for review in reviews {
+                let abs_path = root.join(&review.path);
+                let buffer = match project
+                    .update(cx, |project, cx| project.open_local_buffer(&abs_path, cx))
+                    .await
+                {
+                    Ok(buffer) => buffer,
+                    Err(error) => {
+                        log::warn!("zepi text review: {} open failed: {error}", review.path);
+                        continue;
+                    }
+                };
+                let checkpoint = action_log::ReviewCheckpoint {
+                    path: abs_path,
+                    base: review.base,
+                    current: review.current,
+                    disk_mtime: review
+                        .disk_mtime_ns
+                        .as_deref()
+                        .and_then(|ns| ns.parse::<u64>().ok())
+                        .map(|ns| (ns / 1_000_000_000, (ns % 1_000_000_000) as u32)),
+                    sources: Vec::new(),
+                    has_external_overlap: false,
+                };
+                match action_log.update(cx, |log, cx| {
+                    log.restore_review_checkpoint(buffer, checkpoint, cx)
+                }) {
+                    Ok(()) => {
+                        log::info!("zepi text review: restored {}", review.path);
+                        restored += 1;
+                    }
+                    Err(error) => {
+                        log::warn!("zepi text review: {} rejected: {error}", review.path);
+                    }
+                }
+            }
+            Ok(restored)
+        })
+    }
+
+    pub fn set_zepi_binary_reviews(
+        &mut self,
+        reviews: Vec<ZepiBinaryReview>,
+        cx: &mut Context<Self>,
+    ) {
+        self.zepi_binary_reviews = reviews;
+        cx.emit(AcpThreadEvent::ZepiBinaryReviewsChanged);
+        cx.notify();
     }
 
     pub fn retain_review_subscription(&mut self, subscription: Subscription) {
@@ -23176,6 +23265,27 @@ mod tests {
         });
         request.await.unwrap();
         assert_eq!(thread.read_with(cx, |thread, _| thread.zepi_turn().status), ZepiTurnStatus::Cancelled);
+    }
+
+    #[gpui::test]
+    async fn test_zepi_binary_reviews_count_as_pending_review(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let connection = Rc::new(FakeAgentConnection::new());
+        let thread = cx.update(|cx| connection.new_session(project, PathList::new(&[Path::new(path!("/test"))]), cx)).await.unwrap();
+        thread.update(cx, |thread, cx| {
+            thread.set_zepi_binary_reviews(
+                vec![ZepiBinaryReview {
+                    path: "report.xlsx".into(),
+                    kind: "modified".into(),
+                    backup: Some(PathBuf::from(path!("/run/backup/report.xlsx"))),
+                }],
+                cx,
+            );
+        });
+        assert_eq!(thread.read_with(cx, |thread, cx| thread.pending_review_count(cx)), 1);
+        thread.update(cx, |thread, cx| thread.set_zepi_binary_reviews(vec![], cx));
+        assert_eq!(thread.read_with(cx, |thread, cx| thread.pending_review_count(cx)), 0);
     }
 
     /// Tests that when a follow-up message is sent during generation,

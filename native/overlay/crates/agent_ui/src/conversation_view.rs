@@ -317,7 +317,9 @@ impl Conversation {
             let session_id = session_id.clone();
             move |this, _thread, event, cx| {
                 match event {
-                    AcpThreadEvent::NoticesUpdated | AcpThreadEvent::ZepiUiAction(_) => return,
+                    AcpThreadEvent::NoticesUpdated
+                    | AcpThreadEvent::ZepiUiAction(_)
+                    | AcpThreadEvent::ZepiBinaryReviewsChanged => return,
                     AcpThreadEvent::ToolAuthorizationRequested(id) => {
                         this.add_permission_request(&session_id, id);
                         cx.notify();
@@ -783,7 +785,8 @@ fn affects_thread_metadata(event: &AcpThreadEvent) -> bool {
         | AcpThreadEvent::LoadError(_)
         | AcpThreadEvent::Refusal
         | AcpThreadEvent::WorkingDirectoriesUpdated
-        | AcpThreadEvent::StatusChanged => true,
+        | AcpThreadEvent::StatusChanged
+        | AcpThreadEvent::ZepiBinaryReviewsChanged => true,
         // --
         AcpThreadEvent::EntryUpdated(_)
         | AcpThreadEvent::ActivityConfirmedIdle
@@ -2136,6 +2139,7 @@ impl ConversationView {
             cx.emit(RootThreadUpdated);
         }
         match event {
+            AcpThreadEvent::ZepiBinaryReviewsChanged => {}
             AcpThreadEvent::ZepiUiAction(request) => {
                 let Some(response) = request.response.borrow_mut().take() else { return; };
                 let result = self.zepi_ui_action(&session_id, request, window, cx);
