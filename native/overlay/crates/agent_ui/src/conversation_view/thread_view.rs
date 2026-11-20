@@ -870,8 +870,6 @@ pub struct ThreadView {
     subagent_scroll_reveal_until: Option<std::time::Instant>,
     subagent_scroll_drag: Option<SubagentScrollDrag>,
     pub edits_expanded: bool,
-    /// Set when the user collapses the edits list: new edits must not re-open it.
-    edits_collapsed_by_user: bool,
     pub plan_expanded: bool,
     pub queue_expanded: bool,
     pub editor_expanded: bool,
@@ -1181,13 +1179,6 @@ impl ThreadView {
                     .remeasure_items(0..this.list_state.item_count());
                 cx.notify();
             }
-            if !this.edits_collapsed_by_user
-                && this.thread.read(cx).pending_review_count(cx) > 0
-                && !this.edits_expanded
-            {
-                this.edits_expanded = true;
-                cx.notify();
-            }
         }));
 
         let has_slash_completions = session_capabilities.read().has_slash_completions();
@@ -1456,8 +1447,7 @@ impl ThreadView {
             subagent_scroll_handles: RefCell::new(HashMap::default()),
             subagent_scroll_reveal_until: None,
             subagent_scroll_drag: None,
-            edits_expanded: true,
-            edits_collapsed_by_user: false,
+            edits_expanded: false,
             plan_expanded: false,
             queue_expanded: true,
             editor_expanded: false,
@@ -4372,18 +4362,11 @@ impl ThreadView {
 
     // edits
 
-    pub fn keep_all(&mut self, _: &KeepAll, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn keep_all(&mut self, _: &KeepAll, _window: &mut Window, cx: &mut Context<Self>) {
         crate::agent_diff::keep_and_save(&self.thread, None, self.workspace.clone(), cx);
-        for review in self.thread.read(cx).zepi_binary_reviews().to_vec() {
-            self.zepi_resolve_binary_review(review.path, "kept", window, cx);
-        }
-        self.zepi_settle_text_reviews("kept", cx);
     }
 
-    pub fn reject_all(&mut self, _: &RejectAll, window: &mut Window, cx: &mut Context<Self>) {
-        for review in self.thread.read(cx).zepi_binary_reviews().to_vec() {
-            self.zepi_resolve_binary_review(review.path, "rejected", window, cx);
-        }
+    pub fn reject_all(&mut self, _: &RejectAll, _window: &mut Window, cx: &mut Context<Self>) {
         let thread = &self.thread;
         let telemetry = ActionLogTelemetry::from(thread.read(cx));
         let action_log = thread.read(cx).action_log().clone();
@@ -4396,7 +4379,6 @@ impl ThreadView {
                 action_log.reject_all_edits(Some(telemetry), cx)
             })
             .detach();
-        self.zepi_settle_text_reviews("rejected", cx);
 
         if preserved {
             if let Some(workspace) = self.workspace.upgrade() {
@@ -4572,7 +4554,6 @@ impl ThreadView {
         let action_log = thread.action_log();
         let telemetry = ActionLogTelemetry::from(thread);
         let changed_buffers = action_log.read(cx).changed_buffers(cx).collect::<Vec<_>>();
-        let binary_reviews = thread.zepi_binary_reviews().to_vec();
         let plan = thread.plan().filter(|plan| !plan.is_empty());
         let has_plan = plan.is_some();
         let queue_is_empty = !self.has_queued_messages();
@@ -4594,7 +4575,6 @@ impl ThreadView {
         let has_awaiting_permission = awaiting_permission.is_some();
 
         if changed_buffers.is_empty()
-            && binary_reviews.is_empty()
             && !has_plan
             && queue_is_empty
             && !has_awaiting_permission
@@ -4657,12 +4637,10 @@ impl ThreadView {
                         this.child(Divider::horizontal().color(DividerColor::Border))
                     })
                     .when(
-                        (!changed_buffers.is_empty() || !binary_reviews.is_empty())
-                            && thread.parent_session_id().is_none(),
+                        !changed_buffers.is_empty() && thread.parent_session_id().is_none(),
                         |this| {
                             this.child(self.render_edits_summary(
                                 &changed_buffers,
-                                binary_reviews.len(),
                                 edits_expanded,
                                 pending_edits,
                                 cx,
@@ -4672,7 +4650,6 @@ impl ThreadView {
                                     action_log,
                                     telemetry.clone(),
                                     &changed_buffers,
-                                    &binary_reviews,
                                     pending_edits,
                                     cx,
                                 ))
@@ -4698,7 +4675,6 @@ impl ThreadView {
         action_log: &Entity<ActionLog>,
         telemetry: ActionLogTelemetry,
         changed_buffers: &[(Entity<Buffer>, Entity<BufferDiff>)],
-        binary_reviews: &[acp_thread::ZepiBinaryReview],
         pending_edits: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
@@ -4795,7 +4771,7 @@ impl ThreadView {
                             .gap_2()
                             .justify_between()
                             .bg(editor_bg_color)
-                            .when(index < changed_buffers.len() - 1 || !binary_reviews.is_empty(), |parent| {
+                            .when(index < changed_buffers.len() - 1, |parent| {
                                 parent.border_color(cx.theme().colors().border).border_b_1()
                             })
                             .child(
@@ -4845,192 +4821,7 @@ impl ThreadView {
                     },
                 )),
             )
-            .children(binary_reviews.iter().enumerate().map(|(index, review)| {
-                let name = std::path::Path::new(&review.path)
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| review.path.clone());
-                let kind = if review.kind == "created" { "created" } else { "modified" };
-                let file_icon = FileIcons::get_icon(std::path::Path::new(&review.path), cx)
-                    .map(Icon::from_path)
-                    .map(|icon| icon.color(Color::Muted).size(IconSize::Small))
-                    .unwrap_or_else(|| {
-                        Icon::new(IconName::File)
-                            .color(Color::Muted)
-                            .size(IconSize::Small)
-                    });
-                let buttons = h_flex()
-                    .id(("binary-buttons-container", index))
-                    .visible_on_hover("edited-code")
-                    .absolute()
-                    .right_0()
-                    .px_1()
-                    .gap_1()
-                    .bg(editor_bg_color)
-                    .when(review.kind != "modified" || review.backup.is_some(), |this| {
-                        this.child(
-                            Button::new(("binary-reject", index), "Reject")
-                                .label_size(LabelSize::Small)
-                                .on_click({
-                                    let path = review.path.clone();
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.zepi_resolve_binary_review(path.clone(), "rejected", window, cx);
-                                    })
-                                }),
-                        )
-                    })
-                    .child(
-                        Button::new(("binary-keep", index), "Keep")
-                            .label_size(LabelSize::Small)
-                            .on_click({
-                                let path = review.path.clone();
-                                cx.listener(move |this, _, window, cx| {
-                                    this.zepi_resolve_binary_review(path.clone(), "kept", window, cx);
-                                })
-                            }),
-                    );
-                h_flex()
-                    .group("edited-code")
-                    .id(("binary-file-row", index))
-                    .relative()
-                    .min_w_0()
-                    .p_1p5()
-                    .gap_2()
-                    .justify_between()
-                    .bg(editor_bg_color)
-                    .when(index < binary_reviews.len() - 1, |row| {
-                        row.border_color(cx.theme().colors().border).border_b_1()
-                    })
-                    .child(
-                        h_flex()
-                            .id(("binary-file-name", index))
-                            .cursor_pointer()
-                            .pr_0p5()
-                            .gap_0p5()
-                            .rounded_xs()
-                            .hover(|style| style.bg(cx.theme().colors().element_hover))
-                            .tooltip({
-                                let path = review.path.clone();
-                                move |_, cx| Tooltip::with_meta("Open File", None, path.clone(), cx)
-                            })
-                            .on_click({
-                                let path = review.path.clone();
-                                cx.listener(move |this, _, window, cx| {
-                                    this.zepi_open_binary_review(path.clone(), window, cx);
-                                })
-                            })
-                            .child(file_icon)
-                            .child(
-                                Label::new(name)
-                                    .size(LabelSize::XSmall)
-                                    .buffer_font(cx)
-                                    .ml_1(),
-                            )
-                            .child(
-                                Label::new(format!("({kind})"))
-                                    .color(Color::Muted)
-                                    .size(LabelSize::XSmall),
-                            ),
-                    )
-                    .child(buttons)
-            }))
             .into_any_element()
-    }
-
-    /// Keep All / Reject All settle every pending text review at once.
-    fn zepi_settle_text_reviews(&mut self, state: &str, cx: &mut Context<Self>) {
-        let pending = self.thread.read(cx).zepi_text_review_paths().to_vec();
-        if pending.is_empty() {
-            return;
-        }
-        // Preserved buffers keep their review: settling them would lose the edits on reload.
-        let still_changed: Vec<String> = self
-            .thread
-            .read(cx)
-            .action_log()
-            .read(cx)
-            .changed_buffers(cx)
-            .filter_map(|(buffer, _)| {
-                buffer.read(cx).file().map(|file| {
-                    file.path().as_std_path().to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")
-                })
-            })
-            .collect();
-        let connection = self.thread.read(cx).connection().clone();
-        let session_id = self.thread.read(cx).session_id().clone();
-        for path in pending.into_iter().filter(|path| !still_changed.contains(path)) {
-            let connection = connection.clone();
-            let session_id = session_id.clone();
-            let state = state.to_owned();
-            cx.spawn(async move |_, cx| {
-                let task = cx.update(|cx| {
-                    connection.zepi_text_review_resolve(session_id, path, state, cx)
-                });
-                let _ = task.await;
-                Ok::<_, anyhow::Error>(())
-            })
-            .detach_and_log_err(cx);
-        }
-    }
-
-    fn zepi_open_binary_review(
-        &mut self,
-        path: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(workspace) = self.workspace.upgrade() else { return };
-        let Some(root) = self
-            .thread
-            .read(cx)
-            .work_dirs()
-            .and_then(|dirs| dirs.ordered_paths().next().cloned())
-        else {
-            return;
-        };
-        workspace
-            .update(cx, |workspace, cx| {
-                workspace.open_abs_path(
-                    root.join(&path),
-                    workspace::OpenOptions::default(),
-                    window,
-                    cx,
-                )
-            })
-            .detach_and_log_err(cx);
-    }
-
-    fn zepi_resolve_binary_review(
-        &mut self,
-        path: String,
-        state: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let connection = self.thread.read(cx).connection().clone();
-        let session_id = self.thread.read(cx).session_id().clone();
-        let workspace = self.workspace.clone();
-        let state = state.to_owned();
-        cx.spawn_in(window, async move |_, cx| {
-            let task = cx.update(|_, cx| {
-                connection.zepi_binary_review_resolve(session_id, path, state, cx)
-            })?;
-            let response = task.await?;
-            if let Some(error) = response.get("error").and_then(|value| value.as_str()) {
-                workspace
-                    .update(cx, |workspace, cx| {
-                        let toast = StatusToast::new(
-                            format!("Could not resolve the binary review: {error}"),
-                            cx,
-                            |this, _| this,
-                        );
-                        workspace.toggle_status_toast(toast, cx);
-                    })
-                    .ok();
-            }
-            Ok::<_, anyhow::Error>(())
-        })
-        .detach_and_log_err(cx);
     }
 
     fn render_edited_files_buttons(
@@ -5967,12 +5758,10 @@ impl ThreadView {
     fn render_edits_summary(
         &self,
         changed_buffers: &[(Entity<Buffer>, Entity<BufferDiff>)],
-        binary_count: usize,
         expanded: bool,
         pending_edits: bool,
         cx: &Context<Self>,
     ) -> Div {
-        let total_files = changed_buffers.len() + binary_count;
         const EDIT_NOT_READY_TOOLTIP_LABEL: &str = "Wait until file edits are complete.";
 
         let focus_handle = self.focus_handle(cx);
@@ -6029,8 +5818,8 @@ impl ThreadView {
                             .child(
                                 Label::new(format!(
                                     "{} {}",
-                                    total_files,
-                                    if total_files == 1 { "file" } else { "files" }
+                                    changed_buffers.len(),
+                                    if changed_buffers.len() == 1 { "file" } else { "files" }
                                 ))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
@@ -6045,7 +5834,6 @@ impl ThreadView {
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.edits_expanded = !this.edits_expanded;
-                        this.edits_collapsed_by_user = !this.edits_expanded;
                         cx.notify();
                     })),
             )

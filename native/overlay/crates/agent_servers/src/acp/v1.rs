@@ -501,14 +501,6 @@ fn client_builder(
             on_request!(handle_zepi_file_snapshot),
             agent_client_protocol::on_receive_request!(),
         )
-        .on_receive_request(
-            on_request!(handle_zepi_binary_review),
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            on_request!(handle_zepi_text_review),
-            agent_client_protocol::on_receive_request!(),
-        )
 }
 
 /// `offer_subagents` advertises the unstable subagents RFD, which Zed only offers v1 agents
@@ -522,8 +514,6 @@ fn client_capabilities_for_agent(
         ("terminal-auth".into(), true.into()),
         ("zepiSubagents".into(), 1.into()),
         ("zepiNativeUi".into(), 1.into()),
-        ("zepiBinaryReview".into(), 1.into()),
-        ("zepiTextReview".into(), 1.into()),
     ]);
 
     if agent_id.as_ref() == CURSOR_ID {
@@ -1347,48 +1337,6 @@ fn meta_terminal_auth_task(
 }
 
 impl AgentConnection for AcpConnection {
-fn zepi_text_review_resolve(
-        &self,
-        session_id: acp_v2::SessionId,
-        path: String,
-        state: String,
-        cx: &mut App,
-    ) -> Task<Result<serde_json::Value>> {
-        let conn = self.connection.clone();
-        cx.foreground_executor().spawn(async move {
-            let response = conn
-                .send_request(ZepiTextReviewResolve {
-                    session_id: acp::SessionId::new(session_id.0.clone()),
-                    path,
-                    state,
-                })
-                .block_task()
-                .await?;
-            Ok(serde_json::to_value(response)?)
-        })
-    }
-
-fn zepi_binary_review_resolve(
-        &self,
-        session_id: acp_v2::SessionId,
-        path: String,
-        state: String,
-        cx: &mut App,
-    ) -> Task<Result<serde_json::Value>> {
-        let conn = self.connection.clone();
-        cx.foreground_executor().spawn(async move {
-            let response = conn
-                .send_request(ZepiBinaryReviewResolve {
-                    session_id: acp::SessionId::new(session_id.0.clone()),
-                    path,
-                    state,
-                })
-                .block_task()
-                .await?;
-            Ok(serde_json::to_value(response)?)
-        })
-    }
-
 fn zepi_delivery_status(&self, session_id: acp_v2::SessionId, ids: Vec<String>, cx: &mut App) -> Task<Result<serde_json::Value>> {
         let conn = self.connection.clone();
         cx.foreground_executor().spawn(async move {
@@ -10991,104 +10939,6 @@ fn handle_zepi_file_snapshot(args: ZepiFileSnapshotRequest, responder: Responder
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
-#[request(method = "_zepi/textReview", response = ZepiTextReviewResponse)]
-#[serde(rename_all = "camelCase")]
-struct ZepiTextReviewRequest {
-    session_id: acp::SessionId,
-    /// Workspace-relative paths the agent still considers pending.
-    #[serde(default)]
-    pending: Vec<String>,
-    /// Content for reviews replayed after a reload; empty on a plain list update.
-    #[serde(default)]
-    reviews: Vec<acp_thread::ZepiTextReview>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcResponse)]
-struct ZepiTextReviewResponse {
-    handled: bool,
-    #[serde(default)]
-    restored: usize,
-}
-
-fn handle_zepi_text_review(
-    args: ZepiTextReviewRequest,
-    responder: Responder<ZepiTextReviewResponse>,
-    cx: &mut AsyncApp,
-    ctx: &ClientContext,
-) {
-    log::info!(
-        "zepi text review: session {} pending {} replay {}",
-        args.session_id.0,
-        args.pending.len(),
-        args.reviews.len()
-    );
-    let thread = match session_thread(ctx, &acp_v2::SessionId::new(args.session_id.0.clone())) {
-        Ok(thread) => thread,
-        Err(error) => return respond_err(responder, error),
-    };
-    cx.spawn(async move |cx| {
-        let result = responder.cancellation().run_until_cancelled(async {
-            let task = thread
-                .update(cx, |thread, cx| {
-                    thread.set_zepi_text_review_paths(args.pending, cx);
-                    thread.restore_zepi_text_reviews(args.reviews, cx)
-                })
-                .map_err(agent_client_protocol::Error::from)?;
-            let restored = task
-                .await
-                .inspect_err(|error| log::warn!("zepi text review restore failed: {error}"))
-                .map_err(agent_client_protocol::Error::from)?;
-            Ok::<_, agent_client_protocol::Error>(ZepiTextReviewResponse {
-                handled: true,
-                restored,
-            })
-        })
-        .await;
-        respond_result(responder, result);
-    })
-    .detach();
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
-#[request(method = "_zepi/binaryReview", response = ZepiBinaryReviewResponse)]
-#[serde(rename_all = "camelCase")]
-struct ZepiBinaryReviewRequest {
-    session_id: acp::SessionId,
-    #[serde(default)]
-    reviews: Vec<acp_thread::ZepiBinaryReview>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcResponse)]
-struct ZepiBinaryReviewResponse {
-    handled: bool,
-}
-
-fn handle_zepi_binary_review(
-    args: ZepiBinaryReviewRequest,
-    responder: Responder<ZepiBinaryReviewResponse>,
-    cx: &mut AsyncApp,
-    ctx: &ClientContext,
-) {
-    let thread = match session_thread(ctx, &acp_v2::SessionId::new(args.session_id.0.clone())) {
-        Ok(thread) => thread,
-        Err(error) => return respond_err(responder, error),
-    };
-    cx.spawn(async move |cx| {
-        let result = responder.cancellation().run_until_cancelled(async {
-            thread
-                .update(cx, |thread, cx| {
-                    thread.set_zepi_binary_reviews(args.reviews, cx);
-                })
-                .map_err(agent_client_protocol::Error::from)?;
-            Ok::<_, agent_client_protocol::Error>(ZepiBinaryReviewResponse { handled: true })
-        })
-        .await;
-        respond_result(responder, result);
-    })
-    .detach();
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
 #[request(method = "_zepi/fs/query", response = ZepiFileQueryResponse)]
 #[serde(rename_all = "camelCase")]
 struct ZepiFileQueryRequest {
@@ -11130,36 +10980,6 @@ fn handle_zepi_file_query(
 #[request(method = "_zepi/delivery/status", response = ZepiDeliveryStatusResponse)]
 #[serde(rename_all = "camelCase")]
 struct ZepiDeliveryStatus { session_id: acp::SessionId, ids: Vec<String> }
-
-#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
-#[request(method = "_zepi/textReview/resolve", response = ZepiTextReviewResolveResponse)]
-#[serde(rename_all = "camelCase")]
-struct ZepiTextReviewResolve {
-    session_id: acp::SessionId,
-    path: String,
-    state: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcResponse)]
-struct ZepiTextReviewResolveResponse {
-    handled: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
-#[request(method = "_zepi/binaryReview/resolve", response = ZepiBinaryReviewResolveResponse)]
-#[serde(rename_all = "camelCase")]
-struct ZepiBinaryReviewResolve {
-    session_id: acp::SessionId,
-    path: String,
-    state: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcResponse)]
-struct ZepiBinaryReviewResolveResponse {
-    handled: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcResponse)]
 struct ZepiDeliveryStatusResponse { deliveries: Vec<serde_json::Value> }

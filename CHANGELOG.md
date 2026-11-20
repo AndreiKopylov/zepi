@@ -6,6 +6,20 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+### Removed
+
+- Keep/Reject review for agent edits: the captured-copy shell workflow, binary backup
+  reviews, text-review journal replay and the review rows are gone. `bash`/`powershell`
+  are pi's built-in in-place shells (like stock pi and Zed's terminal); write/edit land
+  in editor buffers and on disk with plain editor undo as the safety net, and git remains
+  the review tool for project changes. The tracking temp dirs (`commands`, `commands-pwsh`,
+  `text-reviews`) are no longer created.
+
+### Changed
+
+- Windows shell fallback is pi's built-in `powershell` (pi ships no `bash` builtin on
+  Windows); the defaultTools seed keeps `-bash`, `+powershell`.
+
 ## [0.0.3] - 2026-11-19
 
 ### Added

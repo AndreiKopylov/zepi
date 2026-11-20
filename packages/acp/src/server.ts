@@ -1,17 +1,14 @@
 import {createMcpConnector} from './mcp.ts';
 import {refreshModelCatalogs} from '../../runtime/src/pi/model-catalog.mjs';
 import {sessionOwners} from './session-owner.ts';
-import {createShell} from './shell.ts';
 import {refreshPiNetwork} from './pi-network.ts';
 import {preparePromptContent} from './prompt-content.ts';
 import {createDeliveryLedger, DELIVERY} from './delivery.ts';
-import {createBinaryReviewLedger, BINARY_REVIEW} from './binary-review.ts';
-import {createTextReviewLedger, TEXT_REVIEW} from './text-review.ts';
 import {nativeUiAction} from './native-ui.ts';
 import { runAcp } from "../adapter/src/lib.js";
 import { createAgentSession, ModelRuntime, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import { lstat, readdir, rm, stat } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import {basename} from "node:path";
 import { ndJsonStream, type AgentContext, type McpServer, type Stream } from "@agentclientprotocol/sdk";
 import {Readable, Writable} from 'node:stream';
@@ -45,8 +42,6 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   let connectClient!: (client: AgentContext) => void;
   let supportsForms = false;
   let supportsNativeUi = false;
-  let supportsBinaryReview = false;
-  let supportsTextReview = false;
   const subagents = createSubagents(agentDir, sessionDir);
   const mcp = createMcpConnector(agentDir);
   // Skip the per-session local catalog rebuild when models/settings/auth are unchanged.
@@ -66,23 +61,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
     await runtime.refresh({ allowNetwork: false });
     void browseSelfHeal().catch(e => console.error("browse self-heal failed", e));
   };
-// Snapshot directories older than the retention window cannot belong to any live
-// review: a session unopened that long has released its evidence.
-const TEXT_SNAPSHOT_RETENTION_DAYS = 14;
-const sweepStaleSnapshots = (root: string) => (async () => {
-  const cutoff = Date.now() - TEXT_SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  for (const sessionDir of await readdir(root).catch(() => [] as string[])) {
-    for (const snapshotDir of await readdir(join(root, sessionDir)).catch(() => [] as string[])) {
-      const dir = join(root, sessionDir, snapshotDir);
-      const ages = await Promise.all(["base", "current"].map(file =>
-        lstat(join(dir, file)).then(info => info.mtimeMs).catch(() => Infinity)));
-      if (Math.max(...ages) < cutoff) await rm(dir, {recursive: true, force: true}).catch(() => {});
-    }
-  }
-})();
   const deliveries = new Map<string, ReturnType<typeof createDeliveryLedger>>();
-  const binaryReviews = new Map<string, ReturnType<typeof createBinaryReviewLedger>>();
-  const textReviews = new Map<string, ReturnType<typeof createTextReviewLedger>>();
   const clientReady = new Promise<AgentContext>(resolve => { connectClient = resolve; });
   // The transport can receive initialize/new while asynchronous Zepi setup is
   // still installing wrappers. Admit requests only after that setup completes.
@@ -107,14 +86,6 @@ const sweepStaleSnapshots = (root: string) => (async () => {
         const client = await clientReady;
         let liveSession:AgentSession|undefined;
         const images = codemodeImages();
-        const sessionId = options.sessionManager.getSessionId();
-        const onBinaryApply = (change:{path:string;kind:'modified'|'created';backup?:string}) =>
-          binaryReviews.get(sessionId)?.record(change);
-        const onTextApply = (change:{path:string;base:string;current:string;mtimeNs:string|null;created?:boolean}) =>
-          void textReviews.get(sessionId)?.record(change);
-        const shell = createShell(options.cwd, join(agentDir, "commands"), options.sessionManager.getSessionId(), client, 'bash', onBinaryApply, onTextApply);
-        // PowerShell gets the same captured-copy + review workflow instead of a raw disk writer.
-        const powershell = createShell(options.cwd, join(agentDir, "commands-pwsh"), options.sessionManager.getSessionId(), client, 'powershell', onBinaryApply, onTextApply);
         // Settings are owned by pi. New tasks see credentials/models changed in
         // Zepi's settings without replacing the model of an active conversation.
         await refreshModelsIfChanged();
@@ -122,18 +93,17 @@ const sweepStaleSnapshots = (root: string) => (async () => {
         // reload additions. Only the absent-setting fallback is Zepi-specific.
         if (options.settingsManager) {
           const defaults = options.settingsManager.getDefaultTools.bind(options.settingsManager);
-          options.settingsManager.getDefaultTools = () => defaults() ?? ["read", "edit", "write", "find", "grep", "ls", "bash"];
+          options.settingsManager.getDefaultTools = () => defaults() ?? ["read", "edit", "write", "find", "grep", "ls", process.platform === "win32" ? "powershell" : "bash"];
         }
         if (options.resourceLoader) {
           const getExtensions = options.resourceLoader.getExtensions.bind(options.resourceLoader);
           options.resourceLoader.getExtensions = () => {
             const loaded = getExtensions();
-            return { ...loaded, extensions: [...loaded.extensions, shell.extension, powershell.extension, accessPolicy()] };
+            return { ...loaded, extensions: [...loaded.extensions, accessPolicy()] };
           };
           const append = options.resourceLoader.getAppendSystemPrompt.bind(options.resourceLoader);
           options.resourceLoader.getAppendSystemPrompt = () => [...append(),
             "Office documents: when a task involves .docx, .xlsx, .pptx or .pdf, load the matching skill before writing any code — read its SKILL.md from the skill list in this prompt, or run /skill:zepi-docx, /skill:zepi-xlsx, /skill:zepi-deck-build, /skill:zepi-office-qa. A Word file means the \`zepi-docx\` skill, a spreadsheet the \`zepi-xlsx\` skill, a deck \`zepi-deck-build\` with \`zepi-deck-design\`. Those skills define the runtime (the bundled Python), the known traps and the verification step; re-deriving the pipeline from a sample file or from experience skips all three and is not acceptable. A visual check means rendering the result with \`zepi office render\` and looking at the PNGs, not only a script exiting zero. Reading a skill costs one tool call.",
-            "Edit a file one way only: through edit/write or through the shell, never both for the same file in one turn — a shell rewrite makes the recorded review stale and resurfaces as a conflict the next time the thread opens.",
             "If edit reports that the text was not found, re-read the file and retry against the current contents; writes always land on disk, so a missing match means stale text, never a change waiting in a buffer.",
             "PowerShell has no heredocs (<<EOF, python - <<'PY') and no cmd flags such as dir /b. Write the script to a real file with the write tool, then run python <file>; never assume a heredoc created a file.",
             "Two Pythons, and they are not interchangeable.",
@@ -148,10 +118,9 @@ const sweepStaleSnapshots = (root: string) => (async () => {
           // Preserve pi's defaultTools lifecycle with native file operations.
           tools: undefined,
           noTools: undefined,
-          customTools: [...[...editorTools(options.cwd, options.sessionManager.getSessionId(), client, images.get,
-              change => void textReviews.get(sessionId)?.record(change)),
+          customTools: [...[...editorTools(options.cwd, options.sessionManager.getSessionId(), client, images.get),
             ...editorQueryTools(options.cwd, options.sessionManager.getSessionId(), client)]
-            .map(tool => ({...tool, defaultActive: false})), shell.tool, powershell.tool,
+            .map(tool => ({...tool, defaultActive: false})),
             ...(subagents.enabled ? [subagents.tool(options.sessionManager.getSessionId(), client)] : [])],
         });
         liveSession=created.session;
@@ -181,41 +150,18 @@ const sweepStaleSnapshots = (root: string) => (async () => {
         }, (message,entryId)=>subagents.consumedInput(created.session.sessionId,message,entryId));
         deliveries.set(created.session.sessionId, ledger);
         Object.defineProperty(created.session, DELIVERY, {value:ledger});
-        const binaryReview = createBinaryReviewLedger(created.session, options.cwd, client, () => supportsBinaryReview);
-        binaryReviews.set(created.session.sessionId, binaryReview);
-        Object.defineProperty(created.session, BINARY_REVIEW, {value:binaryReview});
-        const textReview = createTextReviewLedger(created.session, options.cwd, join(agentDir, "text-reviews"), client, () => supportsTextReview);
-        textReviews.set(created.session.sessionId, textReview);
-        Object.defineProperty(created.session, TEXT_REVIEW, {value:textReview});
         const dispose = created.session.dispose.bind(created.session);
-        created.session.dispose = () => { disposeImages(); ledger.dispose(); if(deliveries.get(created.session.sessionId)===ledger)deliveries.delete(created.session.sessionId); if(binaryReviews.get(created.session.sessionId)===binaryReview)binaryReviews.delete(created.session.sessionId); if(textReviews.get(created.session.sessionId)===textReview)textReviews.delete(created.session.sessionId); dispose(); };
+        created.session.dispose = () => { disposeImages(); ledger.dispose(); if(deliveries.get(created.session.sessionId)===ledger)deliveries.delete(created.session.sessionId); dispose(); };
         const prompt = created.session.prompt.bind(created.session);
         created.session.prompt = async (...args) => {
-          try {
-            const result = await prompt(...args);
-            // Extension commands can start a custom run without awaiting it.
-            // Pi 1.2+ is busy during before_agent_start as well. Keep the ACP
-            // turn and its resources alive until that public SDK run settles.
-            await created.session.waitForIdle();
-            return result;
-          } finally {
-            const cleanup = await Promise.allSettled([shell.finishTurn(), powershell.finishTurn()]);
-            const failed = cleanup.find(result => result.status === "rejected");
-            if (failed?.status === "rejected") throw failed.reason;
-          }
+          const result = await prompt(...args);
+          // Extension commands can start a custom run without awaiting it.
+          // Pi 1.2+ is busy during before_agent_start as well. Keep the ACP
+          // turn and its resources alive until that public SDK run settles.
+          await created.session.waitForIdle();
+          return result;
         };
-        // The adapter awaits pi.abort() on cancellation. Settlement hooks are not
-        // guaranteed on an aborted turn, so release preview after tools settle.
-        const abort = created.session.abort.bind(created.session);
-        created.session.abort = async () => {
-          try { await abort(); } finally {
-            const results = await Promise.allSettled([shell.finishTurn(), powershell.finishTurn()]);
-            const failed = results.find(result => result.status === "rejected");
-            if (failed?.status === "rejected") throw failed.reason;
-          }
-        };
-        // The SDK bash override uses current editor captures and the same native
-        // process supervisor as the shell. Role restrictions apply after discovery.
+        // Role restrictions apply after discovery.
         const child = subagents.register(created.session);
         const decisionTools = new Set<string>();
         let toolPolicy: ReturnType<typeof installAgentToolPolicy>;
@@ -241,8 +187,6 @@ const sweepStaleSnapshots = (root: string) => (async () => {
   server.agent.initialize = context => {
     supportsForms = context.params.clientCapabilities?.elicitation?.form != null;
     supportsNativeUi = context.params.clientCapabilities?._meta?.zepiNativeUi === 1;
-    supportsBinaryReview = context.params.clientCapabilities?._meta?.zepiBinaryReview === 1;
-    supportsTextReview = context.params.clientCapabilities?._meta?.zepiTextReview === 1;
     subagents.setEnabled(context.params.clientCapabilities?._meta?.zepiSubagents === 1);
     const result = initialize(context);
     return {...result, agentCapabilities: {...result.agentCapabilities,
@@ -284,8 +228,6 @@ const sweepStaleSnapshots = (root: string) => (async () => {
   void refreshModelCatalogs(runtime).then(() => server.agent.refreshGlobalModelScope())
     .catch((error: unknown) => console.error("background model catalog refresh failed", error));
   void browseSelfHeal().catch((error: unknown) => console.error("browse self-heal failed", error));
-  void sweepStaleSnapshots(join(agentDir, "text-reviews")).catch((error: unknown) =>
-    console.error("snapshot retention failed", error));
   void sweepDeadRuntimes(join(agentDir, "runtimes")).catch((error: unknown) =>
     console.error("runtime lease cleanup failed", error));
   admitRequests();

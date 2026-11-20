@@ -3797,8 +3797,6 @@ pub struct AcpThread {
     pending_terminal_exit: HashMap<acp_v2::TerminalId, acp_v1::TerminalExitStatus>,
     had_error: bool,
     zepi_turn: ZepiTurnState,
-    zepi_binary_reviews: Vec<crate::zepi_turn::ZepiBinaryReview>,
-    zepi_text_review_paths: Vec<String>,
     local_execution_error: Option<Arc<anyhow::Error>>,
     /// The user's unsent prompt text, persisted so it can be restored when reloading the thread.
     draft_prompt: Option<Vec<acp_v2::ContentBlock>>,
@@ -3939,7 +3937,6 @@ pub struct ZepiUiAction {
 #[derive(Debug)]
 pub enum AcpThreadEvent {
     ZepiUiAction(Rc<ZepiUiAction>),
-    ZepiBinaryReviewsChanged,
     StatusChanged,
     /// The parent's title, description, or capabilities for this subagent changed. Views that
     /// read them from the parent's side, such as its subagent card, observe this event.
@@ -4123,8 +4120,7 @@ impl AcpThread {
                 | AcpThreadEvent::ModeUpdated(_)
                 | AcpThreadEvent::ConfigOptionsUpdated(_)
                 | AcpThreadEvent::WorkingDirectoriesUpdated
-                | AcpThreadEvent::ZepiUiAction(_)
-                | AcpThreadEvent::ZepiBinaryReviewsChanged => {}
+                | AcpThreadEvent::ZepiUiAction(_) => {}
             });
 
         let receipt_submissions = connection.receipt_submissions(&session_id, cx);
@@ -4180,8 +4176,6 @@ impl AcpThread {
             pending_terminal_exit: HashMap::default(),
             had_error: false,
             zepi_turn: ZepiTurnState::default(),
-            zepi_binary_reviews: Vec::new(),
-            zepi_text_review_paths: Vec::new(),
             local_execution_error: None,
             draft_prompt: None,
             draft_prompt_revision: 0,
@@ -4197,89 +4191,6 @@ impl AcpThread {
 
     pub fn pending_review_count(&self, cx: &App) -> usize {
         self.action_log.read(cx).changed_buffers(cx).count()
-            + self.zepi_binary_reviews.len()
-    }
-
-    pub fn zepi_binary_reviews(&self) -> &[ZepiBinaryReview] {
-        &self.zepi_binary_reviews
-    }
-
-    /// Text files whose review the agent still considers pending. The agent owns the
-    /// journal, so Zed asks it back after a reload instead of guessing.
-    pub fn zepi_text_review_paths(&self) -> &[String] {
-        &self.zepi_text_review_paths
-    }
-
-    pub fn set_zepi_text_review_paths(&mut self, paths: Vec<String>, _cx: &mut Context<Self>) {
-        self.zepi_text_review_paths = paths;
-    }
-
-    /// Replays text reviews after a session reload. Agent edits live in editor buffers,
-    /// so the agent's journal carries both sides of the diff; the review is rebuilt here
-    /// instead of re-applying the edit and inventing a baseline.
-    pub fn restore_zepi_text_reviews(
-        &self,
-        reviews: Vec<ZepiTextReview>,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<usize>> {
-        let project = self.project.clone();
-        let action_log = self.action_log.clone();
-        let Some(root) = self
-            .work_dirs()
-            .and_then(|dirs| dirs.ordered_paths().next().cloned())
-        else {
-            return Task::ready(Err(anyhow::anyhow!("Session has no work root")));
-        };
-        cx.spawn(async move |_this, cx| {
-            let mut restored = 0;
-            for review in reviews {
-                let abs_path = root.join(&review.path);
-                let buffer = match project
-                    .update(cx, |project, cx| project.open_local_buffer(&abs_path, cx))
-                    .await
-                {
-                    Ok(buffer) => buffer,
-                    Err(error) => {
-                        log::warn!("zepi text review: {} open failed: {error}", review.path);
-                        continue;
-                    }
-                };
-                let checkpoint = action_log::ReviewCheckpoint {
-                    path: abs_path,
-                    base: review.base,
-                    current: review.current,
-                    disk_mtime: review
-                        .disk_mtime_ns
-                        .as_deref()
-                        .and_then(|ns| ns.parse::<u64>().ok())
-                        .map(|ns| (ns / 1_000_000_000, (ns % 1_000_000_000) as u32)),
-                    sources: Vec::new(),
-                    has_external_overlap: false,
-                };
-                match action_log.update(cx, |log, cx| {
-                    log.restore_review_checkpoint(buffer, checkpoint, cx)
-                }) {
-                    Ok(()) => {
-                        log::info!("zepi text review: restored {}", review.path);
-                        restored += 1;
-                    }
-                    Err(error) => {
-                        log::warn!("zepi text review: {} rejected: {error}", review.path);
-                    }
-                }
-            }
-            Ok(restored)
-        })
-    }
-
-    pub fn set_zepi_binary_reviews(
-        &mut self,
-        reviews: Vec<ZepiBinaryReview>,
-        cx: &mut Context<Self>,
-    ) {
-        self.zepi_binary_reviews = reviews;
-        cx.emit(AcpThreadEvent::ZepiBinaryReviewsChanged);
-        cx.notify();
     }
 
     pub fn retain_review_subscription(&mut self, subscription: Subscription) {
@@ -8386,11 +8297,6 @@ impl AcpThread {
             return Task::ready(Err(anyhow!(error.to_string())));
         }
         let project = self.project.clone();
-        let action_log = self.action_log.clone();
-        let edit_source = action_log::EditSource {
-            session_id: self.session_id().to_string().into(),
-            title: self.title().unwrap_or_else(|| "Main agent".into()),
-        };
         let should_update_agent_location = self.parent_session_id.is_none();
         cx.spawn(async move |this, cx| {
             if create {
@@ -8465,44 +8371,18 @@ impl AcpThread {
                 });
             }
 
-            let format_on_save = cx.update(|cx| {
-                action_log.update(cx, |action_log, cx| {
-                    // Track before the edit: a file that does not exist on disk yet must be
-                    // Created{existing: None}, so rejecting the review deletes it. Tracking
-                    // after the edit would capture the pre-edit (empty) diff base as
-                    // "existing content" and reject would save a blank file instead.
-                    if create {
-                        action_log.buffer_created(buffer.clone(), cx);
-                    } else {
-                        action_log.buffer_read(buffer.clone(), cx);
-                    }
-                });
+            let format_on_save = buffer.update(cx, |buffer, cx| {
+                if zepi && buffer.version() != expected_version {
+                    anyhow::bail!("File changed after the agent read it; read the current version and retry");
+                }
+                buffer.start_transaction();
+                buffer.edit(edits, None, cx);
+                buffer.end_transaction_with_source(BufferEditSource::Agent, cx);
 
-                let format_on_save = buffer.update(cx, |buffer, cx| {
-                    if zepi && buffer.version() != expected_version {
-                        anyhow::bail!("File changed after the agent read it; read the current version and retry");
-                    }
-                    buffer.start_transaction();
-                    buffer.edit(edits, None, cx);
-                    buffer.end_transaction_with_source(BufferEditSource::Agent, cx);
+                let settings =
+                    language::language_settings::LanguageSettings::for_buffer(buffer, cx);
 
-                    let settings =
-                        language::language_settings::LanguageSettings::for_buffer(buffer, cx);
-
-                    anyhow::Ok(settings.format_on_save != FormatOnSave::Off)
-                })?;
-                action_log.update(cx, |action_log, cx| {
-                    // A created file must be tracked as Created so rejecting the review deletes
-                    // the file; Modified reverts to the empty base and saves a blank file instead.
-                    if create {
-                        action_log.buffer_created(buffer.clone(), cx);
-                    } else if zepi && buffer.read(cx).version() != expected_version {
-                        action_log.buffer_edited_by(buffer.clone(), edit_source.clone(), cx);
-                    } else {
-                        action_log.buffer_edited(buffer.clone(), cx);
-                    }
-                });
-                anyhow::Ok(format_on_save)
+                anyhow::Ok(settings.format_on_save != FormatOnSave::Off)
             })?;
 
             if zepi {
@@ -8524,10 +8404,6 @@ impl AcpThread {
                     )
                 });
                 format_task.await.log_err();
-
-                action_log.update(cx, |action_log, cx| {
-                    action_log.buffer_edited(buffer.clone(), cx);
-                });
             }
 
             project
@@ -12192,7 +12068,7 @@ mod tests {
         first.update(cx, |thread, _| thread.action_log = leaf_log);
         let path = PathBuf::from("/newfiles/nested/created.txt");
         first.update(cx, |thread,cx| thread.create_text_file(path.clone(),"created in editor\n".into(),cx)).await.unwrap();
-        assert!(fs.read_file_sync(&path).is_err());
+        assert_eq!(String::from_utf8(fs.read_file_sync(&path).unwrap()).unwrap(),"created in editor\n");
         assert!(second.update(cx, |thread,cx| thread.create_text_file(path.clone(),"overwrite unread\n".into(),cx)).await.is_err());
         let content = second.update(cx, |thread,cx| thread.read_text_file(path.clone(),None,None,false,cx)).await.unwrap();
         assert_eq!(content,"created in editor\n");
@@ -12210,17 +12086,10 @@ mod tests {
         first.update(cx, |thread,cx| thread.create_text_file(path.clone(),"creator changed\n".into(),cx)).await.unwrap();
         assert!(second.update(cx, |thread,cx| thread.create_text_file(path.clone(),"stale write\n".into(),cx)).await.is_err());
         let log = first.read_with(cx,|thread,_|thread.action_log.clone());
-        assert_eq!(log.read_with(cx,|log,cx|log.changed_buffers(cx).count()),1);
-        // Single-line creations without a trailing newline still show +1 in review.
+        assert_eq!(log.read_with(cx,|log,cx|log.changed_buffers(cx).count()),0);
         first.update(cx, |thread,cx| thread.create_text_file(path.clone(),"no trailing newline".into(),cx)).await.unwrap();
         cx.run_until_parked();
-        let stats = log.read_with(cx, |log,cx| action_log::DiffStats::all_files(log.changed_buffers(cx),cx));
-        assert_eq!(stats, action_log::DiffStats { lines_added: 1, lines_removed: 0 });
-        // Reviewing a descendant from the root must retain the same unsaved policy.
-        parent_log.update(cx,|log,cx|log.reject_all_edits(None,cx)).await;
-        cx.run_until_parked();
-        assert_eq!(first.update(cx,|thread,cx|thread.read_text_file(path.clone(),None,None,false,cx)).await.unwrap(),"");
-        assert!(fs.read_file_sync(&path).is_err());
+        assert_eq!(String::from_utf8(fs.read_file_sync(&path).unwrap()).unwrap(),"no trailing newline");
         assert_eq!(String::from_utf8(fs.read_file_sync("/newfiles/existing.txt").unwrap()).unwrap(),"keep\n");
     }
 
@@ -12328,54 +12197,15 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(buffer.read_with(cx, |buffer, _| buffer.text()), content);
-            assert!(buffer.read_with(cx, |buffer, _| buffer.is_dirty()));
             assert_eq!(
                 String::from_utf8(fs.read_file_sync(path!("/tmp/foo")).unwrap()).unwrap(),
-                "disk\n"
+                content
             );
         }
         cx.run_until_parked();
         let action_log = thread.read_with(cx, |thread, _| thread.action_log.clone());
-        let sources = action_log.read_with(cx, |log, cx| log.edit_sources(buffer.read(cx).remote_id(), cx));
-        assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0].session_id.as_ref(), thread.read_with(cx, |thread, _| thread.session_id().to_string()));
-        action_log
-            .update(cx, |log, cx| log.reject_all_edits(None, cx))
-            .await;
-        cx.run_until_parked();
-        assert_eq!(
-            buffer.read_with(cx, |buffer, _| buffer.text()),
-            "manual\ndisk\n"
-        );
-        assert!(buffer.read_with(cx, |buffer, _| buffer.is_dirty()));
-        assert_eq!(
-            String::from_utf8(fs.read_file_sync(path!("/tmp/foo")).unwrap()).unwrap(),
-            "disk\n"
-        );
-        action_log
-            .update(cx, |log, cx| log.undo_last_reject(cx))
-            .await;
-        cx.run_until_parked();
-        assert_eq!(
-            buffer.read_with(cx, |buffer, _| buffer.text()),
-            "manual\ndisk\nagent again\n"
-        );
-        assert!(buffer.read_with(cx, |buffer, _| buffer.is_dirty()));
-        assert_eq!(
-            String::from_utf8(fs.read_file_sync(path!("/tmp/foo")).unwrap()).unwrap(),
-            "disk\n"
-        );
-        action_log.update(cx, |log, cx| log.keep_all_edits(None, cx));
-        cx.run_until_parked();
-        assert_eq!(
-            action_log.read_with(cx, |log, cx| log.changed_buffers(cx).count()),
-            0
-        );
-        assert!(buffer.read_with(cx, |buffer, _| buffer.is_dirty()));
-        assert_eq!(
-            String::from_utf8(fs.read_file_sync(path!("/tmp/foo")).unwrap()).unwrap(),
-            "disk\n"
-        );
+        assert!(action_log.read_with(cx, |log, cx| log.edit_sources(buffer.read(cx).remote_id(), cx)).is_empty());
+        assert_eq!(action_log.read_with(cx, |log, cx| log.changed_buffers(cx).count()), 0);
         // Shell observations compare their own captured contents, independently
         // of the most recent read from another tool or child agent.
         let captured = buffer.read_with(cx, |buffer, _| buffer.text());
@@ -12387,11 +12217,10 @@ mod tests {
         thread.update(cx, |thread,cx| thread.write_text_file_if_unchanged(
             path!("/tmp/foo").into(),format!("{current}shell output\n"),current.clone(),cx)).await.unwrap();
         cx.run_until_parked();
-        assert!(buffer.read_with(cx, |buffer,_| buffer.is_dirty()));
-        assert_eq!(String::from_utf8(fs.read_file_sync(path!("/tmp/foo")).unwrap()).unwrap(),"disk\n");
+        assert_eq!(String::from_utf8(fs.read_file_sync(path!("/tmp/foo")).unwrap()).unwrap(), format!("{current}shell output\n"));
         action_log.update(cx, |log,cx| log.reject_all_edits(None,cx)).await;
         cx.run_until_parked();
-        assert_eq!(buffer.read_with(cx, |buffer,_| buffer.text()), current);
+        assert_eq!(buffer.read_with(cx, |buffer,_| buffer.text()), format!("{current}shell output\n"));
     }
 
     #[gpui::test]
@@ -23265,27 +23094,6 @@ mod tests {
         });
         request.await.unwrap();
         assert_eq!(thread.read_with(cx, |thread, _| thread.zepi_turn().status), ZepiTurnStatus::Cancelled);
-    }
-
-    #[gpui::test]
-    async fn test_zepi_binary_reviews_count_as_pending_review(cx: &mut TestAppContext) {
-        init_test(cx);
-        let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
-        let connection = Rc::new(FakeAgentConnection::new());
-        let thread = cx.update(|cx| connection.new_session(project, PathList::new(&[Path::new(path!("/test"))]), cx)).await.unwrap();
-        thread.update(cx, |thread, cx| {
-            thread.set_zepi_binary_reviews(
-                vec![ZepiBinaryReview {
-                    path: "report.xlsx".into(),
-                    kind: "modified".into(),
-                    backup: Some(PathBuf::from(path!("/run/backup/report.xlsx"))),
-                }],
-                cx,
-            );
-        });
-        assert_eq!(thread.read_with(cx, |thread, cx| thread.pending_review_count(cx)), 1);
-        thread.update(cx, |thread, cx| thread.set_zepi_binary_reviews(vec![], cx));
-        assert_eq!(thread.read_with(cx, |thread, cx| thread.pending_review_count(cx)), 0);
     }
 
     /// Tests that when a follow-up message is sent during generation,
