@@ -1,12 +1,14 @@
 # Builds the Zepi installer: stages the repo + build + payload into dist, then runs Inno Setup.
 # Nothing is taken from a working bundle: dist\staging is rebuilt from its sources every time.
+# -Zip packs the same staging as dist\zepi-<ver>-portable.zip for machines without admin rights.
 param(
     [string]$Version = '',
     [string]$Repo = '',
     [string]$Exe = '',
     [string]$Payload = '',
     [switch]$SkipStaging,
-    [switch]$KeepStaging
+    [switch]$KeepStaging,
+    [switch]$Zip
 )
 $ErrorActionPreference = 'Stop'
 # Paths are derived from this script's location, so nothing machine-specific is committed.
@@ -27,13 +29,6 @@ if (-not $Exe) {
 if (-not $Payload) { $Payload = Join-Path $Repo '.local\payload' }
 $staging = Join-Path $Repo 'dist\staging'
 $dist = Join-Path $Repo 'dist'
-
-$iscc = @(
-    (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
-    'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
-    'C:\Program Files\Inno Setup 6\ISCC.exe'
-) | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $iscc) { throw 'Inno Setup not found. Install it with: winget install -e --id JRSoftware.InnoSetup' }
 
 # Sources: build output, the repository itself, and the runtime payload (node/python).
 # The agent is a single bun binary (agent.exe); node_modules are build-time only.
@@ -89,11 +84,23 @@ if (-not $SkipStaging) {
     Write-Host ('staged ' + $size + ' MB from ' + $Repo + ' + ' + $Exe + ' + ' + $Payload)
 }
 
-& $iscc ('/DAppVersion=' + $Version) (Join-Path $Repo 'installer\zepi.iss')
-if ($LASTEXITCODE -ne 0) { throw ('ISCC failed with exit code ' + $LASTEXITCODE) }
-$setup = Join-Path $dist ('zepi-' + $Version + '-setup.exe')
-if (-not (Test-Path $setup)) { throw ('installer not produced: ' + $setup) }
-Get-Item $setup | ForEach-Object { Write-Host ('built ' + $_.FullName + ' (' + [int]($_.Length / 1MB) + ' MB)') }
+if ($Zip) {
+    $zipPath = Join-Path $dist ('zepi-' + $Version + '-portable.zip')
+    Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath -Force
+    Get-Item $zipPath | ForEach-Object { Write-Host ('built ' + $_.FullName + ' (' + [int]($_.Length / 1MB) + ' MB)') }
+} else {
+    $iscc = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
+        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+        'C:\Program Files\Inno Setup 6\ISCC.exe'
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $iscc) { throw 'Inno Setup not found. Install it with: winget install -e --id JRSoftware.InnoSetup' }
+    & $iscc ('/DAppVersion=' + $Version) (Join-Path $Repo 'installer\zepi.iss')
+    if ($LASTEXITCODE -ne 0) { throw ('ISCC failed with exit code ' + $LASTEXITCODE) }
+    $setup = Join-Path $dist ('zepi-' + $Version + '-setup.exe')
+    if (-not (Test-Path $setup)) { throw ('installer not produced: ' + $setup) }
+    Get-Item $setup | ForEach-Object { Write-Host ('built ' + $_.FullName + ' (' + [int]($_.Length / 1MB) + ' MB)') }
+}
 # staging is only packaging input: 1.4 GB of duplicates that ISCC already compressed
 if (-not $KeepStaging -and (Test-Path $staging)) {
     Remove-Item $staging -Recurse -Force
