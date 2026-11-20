@@ -32,7 +32,7 @@ export function createPiDecorations(pi:AgentSession, state:ReturnType<typeof cre
       const view=views.get(key); if(!view||view.closed)return;
       view.timer=undefined;
       try {
-        const lines=view.component.render(state.columns());
+        const lines = [...view.component.render(state.columns())];
         if(lines.length>512||lines.join('\n').length>262_144)throw new Error('Extension component exceeds the native display limit.');
         const signature=JSON.stringify(lines);
         if(view.last!==signature){view.last=signature;publish(key,lines,placement);}

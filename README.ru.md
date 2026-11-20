@@ -5,10 +5,11 @@
 **Windows-воркспейс для кода и офисных документов с агентом внутри.**
 
 Zepi соединяет редактор [Zed](https://github.com/zed-industries/zed) и агента
-[pi](https://github.com/badlogic/pi-mono) через протокол ACP. В одном окне: код, терминал, git,
+[pi](https://github.com/earendil-works/pi) через протокол ACP. В одном окне: код, терминал, git,
 чат с моделью и просмотр/правка `.pptx`, `.docx`, `.xlsx` без установленного Microsoft Office.
 
-> Статус: **бета (0.0.1)**. Собрано на Zed v1.28.1 и pi 1.5.2.
+> Статус: **бета**. Каждый [релиз](../../releases) указывает базовый Zed и версию pi
+> в поставке.
 
 ## Возможности
 
@@ -37,7 +38,8 @@ openpyxl, python-pptx, pypdf и Pillow. Ставить ничего не нуж�
    `%LOCALAPPDATA%\Zepi\pi\models.json`. Готовых провайдеров в поставке нет — адрес и ключ каждый
    задаёт свои.
 
-Настройки, сессии и скиллы живут в `%LOCALAPPDATA%\Zepi` и не затрагиваются обновлением.
+Настройки, сессии и скиллы живут в `%LOCALAPPDATA%\Zepi` и не затрагиваются обновлением. Zepi
+проверяет [релизы](../../releases) и обновляется сам — через отдельный установщик с подтверждением.
 
 ### Требования
 
@@ -112,7 +114,6 @@ Zepi читает собственные параметры из секции `z
 ## Ограничения беты
 
 - Установщик не подписан — SmartScreen предупредит о «неизвестном издателе».
-- Автообновления нет: новая версия ставится поверх, данные сохраняются.
 - `.xlsx` не имеет растрового рендера: визуальная проверка таблиц не поддерживается, значения
   проверяются программно.
 - Модели не поставляются: без ключа агент не отвечает.
@@ -122,7 +123,7 @@ Zepi читает собственные параметры из секции `z
 - [Zed Industries](https://github.com/zed-industries/zed) — редактор и платформа gpui.
 - [tony3liu](https://github.com/tony3liu/eido) — eido: первая связка Zed + pi на Windows,
   от которой Zepi ведёт происхождение.
-- [Mario Zechner](https://github.com/badlogic/pi-mono) — агент pi и протокол ACP.
+- [Mario Zechner](https://github.com/earendil-works/pi) — агент pi и протокол ACP.
 - [storytold](https://github.com/storytold) — gridcraft, deckcraft, wordcraft (движки документов).
 - [browse](https://github.com/anomalyco/browse) (opencode, MIT) — автоматизация реального браузера: Rust-relay + Chromium-расширение.
 - [browser-use](https://github.com/browser-use) — хелперы текстовой модели страницы (MIT).

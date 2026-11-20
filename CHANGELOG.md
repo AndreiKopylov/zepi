@@ -4,7 +4,20 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.5] - Unreleased
+
+### Changed
+
+- Dependency refresh: pi 1.5.2 -> 1.6.0 (coding-agent, ai, tui and the package overrides). The
+  one breaking change that touches Zepi is extension components' `render()` returning
+  `readonly string[]`; passive component rendering (`pi-decorations`) copies the lines before
+  publishing them to the native surface. Version guards (the bundled-runtime check in runtime
+  settings, the `zepi-runtime.json` manifest check, ACP agent info) and test expectations now
+  say 1.6.0. Notable behavior riding along: undici security updates, find tool path patterns
+  relative to the search directory, new default models for some providers.
+- README (EN/RU) no longer pins the Zed base and the bundled pi version inline (each release
+  lists them), documents the existing GitHub-Releases auto-update instead of the stale
+  "no auto-update" limitation, and links pi at its current home (earendil-works/pi).
 
 ## [0.0.4] - 2026-11-20
 
