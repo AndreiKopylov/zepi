@@ -4,7 +4,7 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
-## [0.0.5] - Unreleased
+## [0.0.5] - 2026-11-21
 
 ### Added
 
