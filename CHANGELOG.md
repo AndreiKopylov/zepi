@@ -6,8 +6,25 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [0.0.5] - Unreleased
 
+### Added
+
+- Zepi's own brand mark across the app: new artwork for the Windows icon set (a per-size
+  vector render, 7 ICO frames 16-256 px instead of one downscaled bitmap), the app-icon PNG
+  pair per channel (1x 512, @2x 1024, as upstream Zed ships them instead of one file copied
+  into all eight names), and the welcome mark. The mark appears where the product shows
+  itself: window icon, taskbar, shortcuts, the welcome screen and its watermark.
+
 ### Changed
 
+- The application names itself: `display_name()` says Zepi / Zepi Dev / Zepi Preview / Zepi
+  Nightly, so the window title, Alt-Tab, About and update notifications stop saying "Zed".
+  The executable's own metadata follows: `windows_resources` is vendored into the overlay and
+  reports FileDescription/ProductName "Zepi Dev" and CompanyName "Zepi contributors", keeping
+  the upstream attribution ("Based on Zed by Zed Industries, Inc.").
+- `zepi-mark.svg` and `zed_logo.svg` carry the same mark as a flat monochrome glyph. These two
+  are drawn through `gpui::svg()`, which rasterizes the file and tints it with the element's
+  text color, so a mark with its own background filled the whole slot instead of drawing the
+  glyph.
 - Dependency refresh: pi 1.5.2 -> 1.6.0 (coding-agent, ai, tui and the package overrides). The
   one breaking change that touches Zepi is extension components' `render()` returning
   `readonly string[]`; passive component rendering (`pi-decorations`) copies the lines before
