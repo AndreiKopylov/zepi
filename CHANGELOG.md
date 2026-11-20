@@ -25,6 +25,9 @@ All notable changes to Zepi are documented here. The format follows
   are drawn through `gpui::svg()`, which rasterizes the file and tints it with the element's
   text color, so a mark with its own background filled the whole slot instead of drawing the
   glyph.
+- Fresh profiles seed `auto_update: false`. The seeded `true` only made sense for an installed copy;
+  a portable unpack runs the per-machine installer into a UAC wall. Update manually (reinstall or
+  re-unpack), or flip the setting if you want the updater to run.
 - Dependency refresh: pi 1.5.2 -> 1.6.0 (coding-agent, ai, tui and the package overrides). The
   one breaking change that touches Zepi is extension components' `render()` returning
   `readonly string[]`; passive component rendering (`pi-decorations`) copies the lines before

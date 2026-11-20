@@ -245,10 +245,7 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
         }
     }
     merge(&mut settings, &defaults);
-    let installed = !std::env::current_exe().ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("zepi-root.txt").is_file()))
-        .unwrap_or(false);
-    merge(&mut settings, &json!({"telemetry":{"metrics":false,"diagnostics":false},"auto_update":installed,
+    merge(&mut settings, &json!({"telemetry":{"metrics":false,"diagnostics":false},"auto_update":false,
         "disable_ai":false,"auto_install_extensions":{"html":false}}));
     // migrate legacy flat zepi knobs to the grouped agent/office layout (keep user values)
     if let Some(z) = settings.get_mut("zepi").and_then(|v| v.as_object_mut()) {
