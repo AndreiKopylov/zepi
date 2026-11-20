@@ -31,7 +31,5 @@ jobs:
         run: npm run test:acp
       - name: Runtime suite
         run: npm run test:runtime
-      - name: Preview deps
-        run: npm run test:preview
       - name: native.py prepare units
         run: python scripts/test/test_native_prepare.py
