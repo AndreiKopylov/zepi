@@ -6,6 +6,8 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-11-20
+
 ### Removed
 
 - Keep/Reject review for agent edits: the captured-copy shell workflow, binary backup
@@ -37,6 +39,8 @@ All notable changes to Zepi are documented here. The format follows
 - A `bash` entry in a role's tool list selected nothing on Windows, where pi ships the
   `powershell` tool instead: `worker` agents ran without any shell. The `bash` category now
   resolves to the platform shell.
+- Elicitation forms collapsed multi-line text fields (skill bodies and other values with
+  line breaks) into a single-line editor, so the answers lost their lines.
 
 ## [0.0.3] - 2026-11-19
 
