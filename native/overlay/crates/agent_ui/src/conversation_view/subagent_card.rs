@@ -4,7 +4,7 @@ use acp_thread::{
 };
 use agent_client_protocol::v2::schema as acp_v2;
 use gpui::{App, Entity, SharedString};
-use std::{fmt, ops::Range};
+use std::fmt;
 
 use super::thread_view::subagent_label;
 
@@ -184,8 +184,11 @@ pub(crate) struct SubagentCardState {
     pub label: Option<SharedString>,
    /// The task the parent agent asked this subagent to do
     pub task: Option<SharedString>,
-    /// Provider-side summary: role, model, state, duration, tokens, cost
+    /// Provider-side summary: role and model
     pub detail: Option<SharedString>,
+    /// Provider-side state line: outcome, duration, tokens, cost. The card keeps this slot
+    /// whether or not it has work to report, so cards do not resize while agents run.
+    pub status_text: Option<SharedString>,
    /// An ACP parent's own label for the subagent describes it in the parent's view, so it
     /// wins over the subagent's title for itself.
     pub label_wins: bool,
@@ -219,10 +222,12 @@ impl SubagentCardState {
         };
         let task = field("task");
         let detail = field("detail");
+        let status_text = field("status");
         Self {
             label: (!label.is_empty()).then(|| label.to_string().into()),
            task,
             detail,
+            status_text,
            label_wins: false,
             status,
             error: tool_call_error(tool_call, cx),
@@ -287,6 +292,7 @@ impl SubagentCardState {
             label_wins: true,
             task: None,
             detail: None,
+            status_text: None,
             status,
             error,
             can_stop: status == SubagentStatus::Running && can_cancel,
@@ -316,22 +322,6 @@ impl SubagentCardState {
     pub(crate) fn fullscreen_entry(&self) -> Option<usize> {
         (self.status != SubagentStatus::Running)
             .then(|| self.entries.map_or(0, |entries| entries.start))
-    }
-
-    /// The last `max_entries` of the entries this card covers.
-    pub(crate) fn preview_range(&self, total_entries: usize, max_entries: usize) -> Range<usize> {
-        let mut range = match self.entries {
-            Some(entries) => {
-                entries.start
-                    ..entries
-                        .end
-                        .map(|end| (end + 1).min(total_entries))
-                        .unwrap_or(total_entries)
-            }
-            None => 0..total_entries,
-        };
-        range.start = range.end.saturating_sub(max_entries).max(range.start);
-        range
     }
 }
 
@@ -372,6 +362,7 @@ mod tests {
             label: label.map(|label| label.to_string().into()),
             label_wins: false,
             status,
+            status_text: None,
             error: None,
             can_stop: false,
             entries,
@@ -502,38 +493,5 @@ mod tests {
             assert_eq!(card(None, status, part).fullscreen_entry(), Some(4));
             assert_eq!(card(None, status, None).fullscreen_entry(), Some(0));
         }
-    }
-
-    #[test]
-    fn preview_range_shows_the_last_entries_the_card_covers() {
-        let whole_thread = card(None, SubagentStatus::Running, None);
-        assert_eq!(whole_thread.preview_range(20, 8), 12..20);
-        assert_eq!(whole_thread.preview_range(3, 8), 0..3);
-
-        let open_ended = card(
-            None,
-            SubagentStatus::Running,
-            Some(SubagentEntries {
-                start: 4,
-                end: None,
-            }),
-        );
-        assert_eq!(open_ended.preview_range(6, 8), 4..6);
-        assert_eq!(open_ended.preview_range(20, 8), 12..20);
-
-        let finished = card(
-            None,
-            SubagentStatus::Completed,
-            Some(SubagentEntries {
-                start: 4,
-                end: Some(6),
-            }),
-        );
-        assert_eq!(finished.preview_range(20, 8), 4..7);
-        assert_eq!(
-            finished.preview_range(5, 8),
-            4..5,
-            "an end past the thread is clamped"
-        );
     }
 }

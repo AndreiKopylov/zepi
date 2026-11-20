@@ -14,11 +14,28 @@ All notable changes to Zepi are documented here. The format follows
   in editor buffers and on disk with plain editor undo as the safety net, and git remains
   the review tool for project changes. The tracking temp dirs (`commands`, `commands-pwsh`,
   `text-reviews`) are no longer created.
+- The delegated-agent card body: the task line, the inline transcript preview, the
+  in-card scrollbar with its drag state and the embedded pending tool call. A subagent's
+  transcript stays one click away in its own view; the task moved to the header tooltip.
 
 ### Changed
 
 - Windows shell fallback is pi's built-in `powershell` (pi ships no `bash` builtin on
   Windows); the defaultTools seed keeps `-bash`, `+powershell`.
+- Delegated agents are one-bar cards: title, `role · model`, then a single state line that
+  keeps its slot in every state - `Queued · waiting to start`, the live step while running
+  (`Working · 5 steps · powershell · …`), `Completed · 60.8s · … tokens · $…`. The role/model
+  line no longer changes when a run ends, so cards stop resizing; Open (full screen) sits in
+  the header next to Stop, and failures keep their error under the header.
+
+### Fixed
+
+- Stopping a delegated agent left its card spinning in `Stopping` forever. The run's own
+  cleanup cancel re-armed the row after it had already reported `Cancelled`, so the card
+  never left `in_progress`.
+- A `bash` entry in a role's tool list selected nothing on Windows, where pi ships the
+  `powershell` tool instead: `worker` agents ran without any shell. The `bash` category now
+  resolves to the platform shell.
 
 ## [0.0.3] - 2026-11-19
 

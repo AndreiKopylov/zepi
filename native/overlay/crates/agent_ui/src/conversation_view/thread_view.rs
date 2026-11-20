@@ -58,7 +58,7 @@ use super::elicitation::{
     ElicitationCard, ElicitationCardHandlers, ElicitationFormState, should_render_elicitation,
 };
 use super::subagent_card::{
-    AcpSubagentCard, SubagentCardId, SubagentCardState, SubagentStatus, acp_subagent_card,
+    AcpSubagentCard, SubagentCardState, SubagentStatus, acp_subagent_card,
 };
 use super::*;
 use agent_client_protocol::v1::schema as acp_v1;
@@ -796,37 +796,6 @@ impl PermissionSelection {
     }
 }
 
-#[derive(Clone, Copy)]
-struct SubagentScrollDrag {
-    start_y: Pixels,
-    start_offset: Pixels,
-    track: Pixels,
-    max_offset: Pixels,
-}
-
-fn reveal_subagent_scrollbar(view: &Entity<ThreadView>, cx: &mut App) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
-    let _ = view.update(cx, |this, cx| {
-        this.subagent_scroll_reveal_until = Some(deadline);
-        cx.notify();
-    });
-    let weak = view.downgrade();
-    cx.spawn(async move |cx| {
-        cx.background_executor()
-            .timer(std::time::Duration::from_millis(1600))
-            .await;
-        let _ = weak.update(cx, |this, cx| {
-            let expired = this
-                .subagent_scroll_reveal_until
-                .is_some_and(|deadline| std::time::Instant::now() >= deadline);
-            if expired {
-                this.subagent_scroll_reveal_until = None;
-                cx.notify();
-            }
-        });
-    })
-    .detach();
-}
 
 pub struct ThreadView {
     pub(crate) root_thread_id: ThreadId,
@@ -866,9 +835,6 @@ pub struct ThreadView {
     /// has explicitly acknowledged. Until a prompt's tool call is in this set,
     /// its allow buttons stay disabled. See [`Self::sandbox_confusable_findings`].
     acknowledged_confusable_warnings: HashSet<acp_v2::ToolCallId>,
-    pub subagent_scroll_handles: RefCell<HashMap<acp_v2::SessionId, ScrollHandle>>,
-    subagent_scroll_reveal_until: Option<std::time::Instant>,
-    subagent_scroll_drag: Option<SubagentScrollDrag>,
     pub edits_expanded: bool,
     pub plan_expanded: bool,
     pub queue_expanded: bool,
@@ -1444,9 +1410,6 @@ impl ThreadView {
             collapsed_sandbox_authorization_details: HashSet::default(),
             collapsed_sandbox_network_details: HashSet::default(),
             acknowledged_confusable_warnings: HashSet::default(),
-            subagent_scroll_handles: RefCell::new(HashMap::default()),
-            subagent_scroll_reveal_until: None,
-            subagent_scroll_drag: None,
             edits_expanded: false,
             plan_expanded: false,
             queue_expanded: true,
@@ -8425,7 +8388,7 @@ impl ThreadView {
             AgentThreadEntry::SessionMessage(message) => {
                 let session_message =
                     match acp_subagent_card(self.thread.read(cx), entry_ix, message, cx) {
-                        Some(card) => self.render_acp_subagent_card(entry_ix, &card, window, cx),
+                        Some(card) => self.render_acp_subagent_card(entry_ix, &card, cx),
                         None => self.render_session_message(entry_ix, message, window, cx),
                     };
                 if let Some(handle) = self
@@ -8825,22 +8788,13 @@ impl ThreadView {
 
         let scroll_to_top = is_thread_bottom.then(|| {
             let scope = cx.entity();
-            let session_id = self.thread.read(cx).session_id().clone();
             IconButton::new(("scroll_to_top", entry_ix), IconName::ArrowUp)
                 .icon_size(IconSize::Small)
                 .icon_color(Color::Muted)
                 .tooltip(Tooltip::text("Scroll to Top"))
                 .on_click(move |_, _, cx: &mut App| {
                     scope.update(cx, |view, cx| {
-                        let handle = view
-                            .subagent_scroll_handles
-                            .borrow()
-                            .get(&session_id)
-                            .cloned();
-                        match handle {
-                            Some(handle) => handle.set_offset(gpui::point(px(0.), px(0.))),
-                            None => view.scroll_to_top(cx),
-                        }
+                        view.scroll_to_top(cx);
                         cx.notify();
                     });
                 })
@@ -9993,7 +9947,6 @@ impl ThreadView {
         &self,
         entry_ix: usize,
         card: &AcpSubagentCard,
-        window: &Window,
         cx: &Context<Self>,
     ) -> Div {
         let subagent = card.subagent.read(cx);
@@ -10004,13 +9957,9 @@ impl ThreadView {
             .and_then(|server_view| server_view.read(cx).as_connected())
             .and_then(|connected| connected.threads.get(&subagent_session_id));
         let content = self.render_subagent_card(
-            self.thread.read(cx).session_id(),
             entry_ix,
-            &card.id,
             &SubagentCardState::from_acp_subagent(subagent, card.entries),
             subagent_thread_view,
-            &self.focus_handle(cx),
-            window,
             cx,
         );
 
@@ -10471,15 +10420,12 @@ impl ThreadView {
                 if tool_call.is_subagent() {
                     this.child(
                         self.render_subagent_tool_call(
-                            active_session_id,
                             entry_ix,
                             tool_call,
                             tool_call
                                 .subagent_session_info
                                 .as_ref()
                                 .map(|i| i.session_id.clone()),
-                            focus_handle,
-                            window,
                             cx,
                         ),
                     )
@@ -13248,12 +13194,9 @@ impl ThreadView {
 
     fn render_subagent_tool_call(
         &self,
-        active_session_id: &acp_v2::SessionId,
         entry_ix: usize,
         tool_call: &ToolCall,
         subagent_session_id: Option<acp_v2::SessionId>,
-        focus_handle: &FocusHandle,
-        window: &Window,
         cx: &Context<Self>,
     ) -> Div {
         let subagent_thread_view = subagent_session_id.and_then(|session_id| {
@@ -13268,29 +13211,17 @@ impl ThreadView {
             subagent_thread_view.map(|view| view.read(cx).thread.read(cx)),
             cx,
         );
-        let content = self.render_subagent_card(
-            active_session_id,
-            entry_ix,
-            &SubagentCardId::ToolCall(tool_call.id.clone()),
-            &state,
-            subagent_thread_view,
-            focus_handle,
-            window,
-            cx,
-        );
+        let content =
+            self.render_subagent_card(entry_ix, &state, subagent_thread_view, cx);
 
         v_flex().mx_5().my_1p5().gap_3().child(content)
     }
 
     fn render_subagent_card(
         &self,
-        active_session_id: &acp_v2::SessionId,
         entry_ix: usize,
-        card_id: &SubagentCardId,
         state: &SubagentCardState,
         thread_view: Option<&Entity<ThreadView>>,
-        focus_handle: &FocusHandle,
-        window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
         let thread = thread_view
@@ -13304,19 +13235,9 @@ impl ThreadView {
             .map(|log| log.read(cx).changed_buffers(cx).collect::<Vec<_>>())
             .unwrap_or_default();
 
-        let is_pending_tool_call = thread_view
-            .as_ref()
-            .and_then(|tv| {
-                let sid = tv.read(cx).thread.read(cx).session_id();
-                self.conversation.read(cx).pending_tool_call(sid, cx)
-            })
-            .is_some();
-
-        let is_expanded = self.is_subagent_card_expanded(card_id, cx);
         let files_changed = changed_buffers.len();
         let diff_stats = DiffStats::all_files(changed_buffers, cx);
 
-        let is_running = state.status == SubagentStatus::Running;
         let is_failed_or_canceled = state.status.is_failed_or_canceled();
 
         let model_name = thread_view
@@ -13327,6 +13248,29 @@ impl ThreadView {
                 Some(model.name().0)
             });
         let detail = state.detail.clone().or(model_name);
+        // A running card names the step it is on; its transcript is one click away.
+        let activity = thread_view
+            .filter(|_| state.status == SubagentStatus::Running)
+            .and_then(|view| {
+                let view = view.read(cx);
+                let entries = view.thread.read(cx).entries().len();
+                view.zepi_activity(entries.checked_sub(1)?, cx)
+                    .map(|(_, _, steps, preview)| {
+                        let steps = if steps == 1 { "step".to_string() } else { format!("{steps} steps") };
+                        if preview.is_empty() {
+                            format!("Working · {steps}")
+                        } else {
+                            format!("Working · {steps} · {preview}")
+                        }
+                    })
+            });
+        // The state slot never collapses: a live step while running, the outcome afterwards.
+        let status_text = if state.status == SubagentStatus::Running {
+            activity.map(SharedString::from).or_else(|| state.status_text.clone())
+        } else {
+            state.status_text.clone()
+        };
+        let has_status_text = status_text.is_some();
         let thread_title = thread
             .as_ref()
             .and_then(|t| t.read(cx).title())
@@ -13337,7 +13281,6 @@ impl ThreadView {
 
         let title = state.title(thread_title);
 
-        let card_header_id = format!("subagent-header-{}", entry_ix);
         let status_icon = format!("status-icon-{}", entry_ix);
         let diff_stat_id = format!("subagent-diff-{}", entry_ix);
 
@@ -13379,18 +13322,12 @@ impl ThreadView {
                     .into_any_element(),
             });
 
-        let has_expandable_content = thread
-            .as_ref()
-            .map_or(false, |thread| !thread.read(cx).entries().is_empty());
-
-        let tooltip_meta_description = if is_expanded {
-            "Click to Collapse"
-        } else {
-            "Click to Preview"
-        };
+        let tooltip_description: SharedString = state
+            .task
+            .clone()
+            .unwrap_or_else(|| "Open this agent in its own view.".into());
 
         let error_message = state.error.clone();
-        let task = state.task.clone();
 
         v_flex()
             .w_full()
@@ -13401,9 +13338,10 @@ impl ThreadView {
             .overflow_hidden()
             .child(
                 h_flex()
-                    .group(&card_header_id)
-                    .h_8()
-                    .when(detail.is_some(), |this| this.h_12())
+                    .min_h_8()
+                    .when(detail.is_some(), |this| this.min_h_12())
+                    .when(has_status_text, |this| this.min_h_16())
+                    .items_start()
                     .p_1()
                     .w_full()
                     .justify_between()
@@ -13415,7 +13353,8 @@ impl ThreadView {
                             .id(format!("subagent-title-{}", entry_ix))
                             .px_1()
                             .min_w_0()
-                            .size_full()
+                            .w_full()
+                            .items_start()
                             .gap_2()
                             .justify_between()
                             .rounded_sm()
@@ -13444,6 +13383,14 @@ impl ThreadView {
                                             .when_some(detail, |this, detail| {
                                                 this.child(
                                                     Label::new(detail)
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Muted)
+                                                        .truncate(),
+                                                )
+                                            })
+                                            .when_some(status_text, |this, status_text| {
+                                                this.child(
+                                                    Label::new(status_text)
                                                         .size(LabelSize::Small)
                                                         .color(Color::Muted)
                                                         .truncate(),
@@ -13483,42 +13430,48 @@ impl ThreadView {
                                         )
                                     }),
                             )
-                            .when(!has_no_title_or_canceled && !is_pending_tool_call, |this| {
+                            .when(!has_no_title_or_canceled, |this| {
                                 this.tooltip(move |_, cx| {
                                     Tooltip::with_meta(
                                         title.to_string(),
                                         None,
-                                        tooltip_meta_description,
+                                        tooltip_description.clone(),
                                         cx,
                                     )
                                 })
-                            })
-                            .when(has_expandable_content && !is_pending_tool_call, |this| {
-                                this.cursor_pointer()
-                                    .hover(|s| s.bg(cx.theme().colors().element_hover))
-                                    .child(
-                                        div().visible_on_hover(card_header_id).child(
-                                            Icon::new(if is_expanded {
-                                                IconName::ChevronUp
-                                            } else {
-                                                IconName::ChevronDown
-                                            })
-                                            .color(Color::Muted)
-                                            .size(IconSize::Small),
-                                        ),
-                                    )
-                                    .on_click(cx.listener({
-                                        let card_id = card_id.clone();
-                                        move |this, _, window, cx| {
-                                            let expanded =
-                                                this.toggle_subagent_card_expansion(&card_id, cx);
-                                            this.materialize_tool_call_views(entry_ix, window, cx);
-                                            this.refresh_thread_search(window, cx);
-                                            telemetry::event!("Subagent Toggled", expanded);
-                                            cx.notify();
-                                        }
-                                    }))
                             }),
+                    )
+                    .when_some(
+                        thread_view.map(|view| {
+                            let session_id = view.read(cx).thread.read(cx).session_id().clone();
+                            (view.clone(), session_id, state.fullscreen_entry())
+                        }),
+                        |buttons, (view, session_id, entry)| {
+                            buttons.child(
+                                div()
+                                    .debug_selector(move || {
+                                        format!("subagent-fullscreen-{entry_ix}")
+                                    })
+                                    .child(
+                                        IconButton::new(
+                                            format!("subagent-open-{entry_ix}"),
+                                            IconName::Maximize,
+                                        )
+                                        .icon_size(IconSize::Small)
+                                        .icon_color(Color::Muted)
+                                        .tooltip(Tooltip::text("Open Subagent"))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.open_subagent_thread(
+                                                session_id.clone(),
+                                                entry,
+                                                view.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        })),
+                                    ),
+                            )
+                        },
                     )
                     .when(state.can_stop && subagent_session_id.is_some(), |buttons| {
                         buttons.child(
@@ -13549,313 +13502,35 @@ impl ThreadView {
                         )
                     }),
             )
-            .when_some(task.filter(|_| !is_expanded), |this, task| {
+            .when_some(error_message, |this, message| {
                 this.child(
-                    div()
-                        .id(format!("subagent-task-{}", entry_ix))
-                        .w_full()
-                        .px_3()
-                        .py_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .child(
-                            Label::new(task)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .truncate(),
-                        ),
+                    div().px_3().py_2().child(
+                        Callout::new()
+                            .severity(Severity::Error)
+                            .icon(IconName::XCircle)
+                            .title(message),
+                    ),
                 )
-            })
-            .when_some(thread_view, |this, thread_view| {
-                let thread = &thread_view.read(cx).thread;
-                let tv_session_id = thread.read(cx).session_id();
-                let pending_tool_call = self
-                    .conversation
-                    .read(cx)
-                    .pending_tool_call(tv_session_id, cx);
-
-                let nav_session_id = tv_session_id.clone();
-                let fullscreen_entry = state.fullscreen_entry();
-                let subagent_view = thread_view.clone();
-
-                let fullscreen_toggle = h_flex()
-                    .id(entry_ix)
-                    .debug_selector(move || format!("subagent-fullscreen-{entry_ix}"))
-                    .py_1()
-                    .w_full()
-                    .justify_center()
-                    .border_t_1()
-                    .when(is_failed_or_canceled, |this| this.border_dashed())
-                    .border_color(self.tool_card_border_color(cx))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(cx.theme().colors().element_hover))
-                    .child(
-                        Icon::new(IconName::Maximize)
-                            .color(Color::Muted)
-                            .size(IconSize::Small),
-                    )
-                    .tooltip(Tooltip::text("Make Subagent Full Screen"))
-                    .on_click(cx.listener(move |this, _event, window, cx| {
-                        telemetry::event!("Subagent Maximized");
-                        this.server_view
-                            .update(cx, |this, cx| {
-                                this.navigate_to_thread(nav_session_id.clone(), window, cx);
-                            })
-                            .ok();
-                        if let Some(entry_ix) = fullscreen_entry {
-                            subagent_view.update(cx, |view, cx| view.scroll_to_entry(entry_ix, cx));
-                        }
-                    }));
-
-                if is_running && let Some((_, subagent_tool_call_id, _)) = pending_tool_call {
-                    if let Some((entry_ix, tool_call)) =
-                        thread.read(cx).tool_call(&subagent_tool_call_id)
-                    {
-                        this.child(Divider::horizontal().color(DividerColor::Border))
-                            .child(thread_view.read(cx).render_any_tool_call(
-                                active_session_id,
-                                entry_ix,
-                                tool_call,
-                                focus_handle,
-                                ToolCallLayout::Embedded,
-                                window,
-                                cx,
-                            ))
-                            .child(fullscreen_toggle)
-                    } else {
-                        this
-                    }
-                } else {
-                    this.when(is_expanded, |this| {
-                        this.child(self.render_subagent_expanded_content(
-                            thread_view,
-                            card_id,
-                            state,
-                            window,
-                            cx,
-                        ))
-                        .when_some(error_message, |this, message| {
-                            this.child(
-                                Callout::new()
-                                    .severity(Severity::Error)
-                                    .icon(IconName::XCircle)
-                                    .title(message),
-                            )
-                        })
-                        .child(fullscreen_toggle)
-                    })
-                }
             })
             .into_any_element()
     }
 
-    fn is_subagent_card_expanded(&self, card_id: &SubagentCardId, cx: &App) -> bool {
-        let state = self.entry_view_state.read(cx);
-        match card_id {
-            SubagentCardId::ToolCall(id) => state.is_tool_call_expanded(id),
-            SubagentCardId::SessionMessage(id) => state.is_session_message_card_expanded(id),
-        }
-    }
-
-    /// Returns whether the card is expanded afterwards.
-    fn toggle_subagent_card_expansion(
+    /// Opens the subagent's own thread at the point this card covers.
+    fn open_subagent_thread(
         &mut self,
-        card_id: &SubagentCardId,
+        session_id: acp_v2::SessionId,
+        entry_ix: Option<usize>,
+        view: Entity<ThreadView>,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> bool {
-        self.entry_view_state.update(cx, |state, _| match card_id {
-            SubagentCardId::ToolCall(id) => state.toggle_tool_call_expansion(id),
-            SubagentCardId::SessionMessage(id) => state.toggle_session_message_card_expansion(id),
-        });
-        self.is_subagent_card_expanded(card_id, cx)
-    }
-
-    fn render_subagent_expanded_content(
-        &self,
-        thread_view: &Entity<ThreadView>,
-        card_id: &SubagentCardId,
-        state: &SubagentCardState,
-        window: &Window,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        const MAX_PREVIEW_ENTRIES: usize = 8;
-
-        let subagent_view = thread_view.read(cx);
-        let session_id = subagent_view.thread.read(cx).session_id().clone();
-
-        let editor_bg = cx.theme().colors().editor_background;
-        let overlay = {
-            div()
-                .absolute()
-                .inset_0()
-                .size_full()
-                .bg(linear_gradient(
-                    180.,
-                    linear_color_stop(editor_bg.opacity(0.5), 0.),
-                    linear_color_stop(editor_bg.opacity(0.), 0.1),
-                ))
-        };
-
-        let entries = subagent_view.thread.read(cx).entries();
-        let total_entries = entries.len();
-        let entry_range = state.preview_range(total_entries, MAX_PREVIEW_ENTRIES);
-        let start_ix = entry_range.start;
-
-        let scroll_handle = self
-            .subagent_scroll_handles
-            .borrow_mut()
-            .entry(subagent_view.session_id.clone())
-            .or_default()
-            .clone();
-
-
-        let scrollbar_thumb = {
-            let bounds = scroll_handle.bounds();
-            let offset = scroll_handle.offset();
-            let max_offset = scroll_handle.max_offset();
-            let viewport = bounds.size.height;
-            let reveal = self
-                .subagent_scroll_reveal_until
-                .is_some_and(|deadline| std::time::Instant::now() < deadline)
-                || self.subagent_scroll_drag.is_some();
-            if max_offset.y > px(0.) && viewport > px(0.) {
-                let content = viewport + max_offset.y;
-                let ratio = f32::from(viewport) / f32::from(content);
-                let thumb_height = (viewport * ratio).max(px(24.)).min(viewport);
-                let progress = (-offset.y / max_offset.y).clamp(0., 1.);
-                let top = progress * (viewport - thumb_height);
-                let track = (viewport - thumb_height).max(px(1.));
-                Some(
-                    div()
-                        .id(format!("subagent-thumb-{}", card_id))
-                        .absolute()
-                        .top(top)
-                        .right(px(2.))
-                        .w(px(6.))
-                        .h(thumb_height)
-                        .rounded_full()
-                        .bg(cx.theme().colors().scrollbar_thumb_background)
-                        .when(!reveal, |this| {
-                            this.visible_on_hover(format!("subagent-scrollbar-{}", card_id))
-                        })
-                        .on_mouse_down(gpui::MouseButton::Left, {
-                            let scroll_handle = scroll_handle.clone();
-                            let view = cx.entity();
-                            move |event: &gpui::MouseDownEvent, _, cx: &mut App| {
-                                let drag = SubagentScrollDrag {
-                                    start_y: event.position.y,
-                                    start_offset: scroll_handle.offset().y,
-                                    track,
-                                    max_offset: scroll_handle.max_offset().y,
-                                };
-                                cx.stop_propagation();
-                                let _ = view.update(cx, |this, cx| {
-                                    this.subagent_scroll_drag = Some(drag);
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                )
-            } else {
-                None
-            }
-        };
-
-        let rendered_entries: Vec<AnyElement> = entries
-            .get(entry_range)
-            .unwrap_or_default()
-            .iter()
-            .enumerate()
-            .map(|(i, entry)| {
-                let actual_ix = start_ix + i;
-                subagent_view.render_entry(actual_ix, total_entries, entry, window, cx)
-            })
-            .collect();
-
-        v_flex()
-            .w_full()
-            .border_t_1()
-            .when(state.status.is_failed_or_canceled(), |this| {
-                this.border_dashed()
-            })
-            .border_color(self.tool_card_border_color(cx))
-            .overflow_hidden()
-            .relative()
-            .group(format!("subagent-scrollbar-{}", card_id))
-            .child(
-                div()
-                    .pb_1()
-                    .min_h_0()
-                    // Include the card id so the same subagent session
-                    // rendered in multiple parent cards gets distinct element
-                    // ids for its inlined entries (avoids duplicate a11y ids).
-                   .id(format!("subagent-entries-{}-{}", session_id, card_id))
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&scroll_handle)
-                    // gpui scrolls the offset itself (paint_scroll_listener); stop_propagation keeps
-                    // the outer agent list from scrolling along (bubble order in list.rs)
-                    .on_scroll_wheel({
-                        let view = cx.entity();
-                        move |_, _, cx: &mut App| {
-                            cx.stop_propagation();
-                            reveal_subagent_scrollbar(&view, cx);
-                        }
-                    })
-                    .children(rendered_entries),
-            )
-            .h_56()
-            .child(overlay)
-            .children(scrollbar_thumb)
-            .child(gpui::canvas(
-                |_, _, _| (),
-                {
-                    let view = cx.entity();
-                    let scroll_handle = scroll_handle.clone();
-                    move |_, _, window: &mut Window, cx: &mut App| {
-                        // the drag lives outside the card: window-level listeners like the Zed scrollbar
-                        if view.read(cx).subagent_scroll_drag.is_none() {
-                            return;
-                        }
-                        window.on_mouse_event({
-                            let view = view.clone();
-                            let scroll_handle = scroll_handle.clone();
-                            move |event: &gpui::MouseMoveEvent, phase, _, cx: &mut App| {
-                                if phase != gpui::DispatchPhase::Bubble {
-                                    return;
-                                }
-                                let Some(drag) = view.read(cx).subagent_scroll_drag else {
-                                    return;
-                                };
-                                let travelled = event.position.y - drag.start_y;
-                                let target = (drag.start_offset
-                                    - travelled * (drag.max_offset / drag.track))
-                                    .clamp(-drag.max_offset, px(0.));
-                                let current = scroll_handle.offset();
-                                if target == current.y {
-                                    return;
-                                }
-                                scroll_handle.set_offset(gpui::point(current.x, target));
-                                reveal_subagent_scrollbar(&view, cx);
-                            }
-                        });
-                        window.on_mouse_event({
-                            let view = view.clone();
-                            move |_: &gpui::MouseUpEvent, phase, _, cx: &mut App| {
-                                if phase != gpui::DispatchPhase::Bubble {
-                                    return;
-                                }
-                                let _ = view.update(cx, |this, cx| {
-                                    this.subagent_scroll_drag = None;
-                                    cx.notify();
-                                });
-                            }
-                        });
-                    }
-                },
-            ))
-            .into_any_element()
+    ) {
+        telemetry::event!("Subagent Maximized");
+        self.server_view
+            .update(cx, |this, cx| this.navigate_to_thread(session_id, window, cx))
+            .ok();
+        if let Some(entry_ix) = entry_ix {
+            view.update(cx, |view, cx| view.scroll_to_entry(entry_ix, cx));
+        }
     }
 
     fn tool_card_header_bg(&self, cx: &Context<Self>) -> Hsla {
