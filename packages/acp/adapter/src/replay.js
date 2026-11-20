@@ -116,6 +116,8 @@ export function replayEntry(entry) {
                     if (update.rawInput?.zepiAgent) {
                         update.rawInput.zepiAgent.state = "Interrupted";
                         update.rawInput.zepiAgent.detail = update.rawInput.zepiAgent.detail.replace(/Running|Queued|Stopping/g, "Interrupted");
+                        if (typeof update.rawInput.zepiAgent.status === "string")
+                            update.rawInput.zepiAgent.status = update.rawInput.zepiAgent.status.replace(/Running|Queued|Stopping/g, "Interrupted");
                     }
                     update.content = [{type:"content",content:{type:"text",text:"Run interrupted. Continue or retry explicitly; no actions were replayed."}}];
                 }

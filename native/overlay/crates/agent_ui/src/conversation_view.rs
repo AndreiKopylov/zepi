@@ -29,8 +29,8 @@ use fs::Fs;
 use futures::FutureExt as _;
 use gpui::{
     Action, Animation, AnimationExt, App, ClickEvent, ClipboardItem, CursorStyle, ElementId, Empty,
-    Entity, EventEmitter, FocusHandle, Focusable, Hsla, ListOffset, ListState, ObjectFit,
-    PlatformDisplay, ScrollHandle, SharedString, StyledText, Subscription, Task, TextRun,
+    Entity, EventEmitter, FocusHandle, Focusable, Hsla, ListOffset, ListState,
+    PlatformDisplay, SharedString, StyledText, Subscription, Task, TextRun,
     TextStyle, WeakEntity, Window, WindowHandle, div, ease_in_out, img, linear_color_stop,
     linear_gradient, list, pulsating_between,
 };
@@ -318,8 +318,7 @@ impl Conversation {
             move |this, _thread, event, cx| {
                 match event {
                     AcpThreadEvent::NoticesUpdated
-                    | AcpThreadEvent::ZepiUiAction(_)
-                    | AcpThreadEvent::ZepiBinaryReviewsChanged => return,
+                    | AcpThreadEvent::ZepiUiAction(_) => return,
                     AcpThreadEvent::ToolAuthorizationRequested(id) => {
                         this.add_permission_request(&session_id, id);
                         cx.notify();
@@ -785,8 +784,7 @@ fn affects_thread_metadata(event: &AcpThreadEvent) -> bool {
         | AcpThreadEvent::LoadError(_)
         | AcpThreadEvent::Refusal
         | AcpThreadEvent::WorkingDirectoriesUpdated
-        | AcpThreadEvent::StatusChanged
-        | AcpThreadEvent::ZepiBinaryReviewsChanged => true,
+        | AcpThreadEvent::StatusChanged => true,
         // --
         AcpThreadEvent::EntryUpdated(_)
         | AcpThreadEvent::ActivityConfirmedIdle
@@ -2139,7 +2137,6 @@ impl ConversationView {
             cx.emit(RootThreadUpdated);
         }
         match event {
-            AcpThreadEvent::ZepiBinaryReviewsChanged => {}
             AcpThreadEvent::ZepiUiAction(request) => {
                 let Some(response) = request.response.borrow_mut().take() else { return; };
                 let result = self.zepi_ui_action(&session_id, request, window, cx);
@@ -4695,7 +4692,7 @@ pub(crate) mod tests {
     async fn test_zepi_recall_and_resend_restored_question_preserve_composer_draft(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
-        let (conversation, cx) = setup_conversation_view(StubAgentServer::new(connection.clone()), cx).await;
+        let (conversation, cx) = setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
         add_to_workspace(conversation.clone(), cx);
         let view = active_thread(&conversation, cx);
         let id = view.read_with(cx, |view, cx| view.thread.read(cx).session_id().clone());
@@ -4733,7 +4730,7 @@ pub(crate) mod tests {
     async fn test_zepi_execution_disclosures_default_closed_and_preview_latest_action(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
-        let (conversation, cx) = setup_conversation_view(StubAgentServer::new(connection.clone()), cx).await;
+        let (conversation, cx) = setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
         add_to_workspace(conversation.clone(), cx);
         let view = active_thread(&conversation, cx);
         let id = view.read_with(cx, |view, cx| view.thread.read(cx).session_id().clone());
@@ -4775,7 +4772,7 @@ pub(crate) mod tests {
     async fn test_zepi_activity_headers_toggle_from_the_label_area(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
-        let (conversation, cx) = setup_conversation_view(StubAgentServer::new(connection.clone()), cx).await;
+        let (conversation, cx) = setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
         add_to_workspace_with_size(conversation.clone(), true, cx);
         let view = active_thread(&conversation, cx);
         let id = view.read_with(cx, |view, cx| view.thread.read(cx).session_id().clone());
@@ -4811,7 +4808,7 @@ pub(crate) mod tests {
     async fn test_zepi_extension_shortcuts_route_only_from_the_composer(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
-        let (view, cx) = setup_conversation_view(StubAgentServer::new(connection.clone()), cx).await;
+        let (view, cx) = setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
         add_to_workspace(view.clone(), cx);
         cx.run_until_parked();
         let active = view.read_with(cx, |view, _| view.root_thread_view().unwrap().clone());
@@ -9104,7 +9101,7 @@ pub(crate) mod tests {
                 .with_supports_load_session(true)
                 .with_receipt_submissions(reported_activity);
             let (conversation_view, cx) =
-                setup_conversation_view(StubAgentServer::new(connection), cx).await;
+                setup_conversation_view(StubAgentServer::zepi(connection), cx).await;
             let previous_view = active_thread(&conversation_view, cx);
             let previous_thread = previous_view.read_with(cx, |view, _| view.thread.clone());
             conversation_view.update_in(cx, |view, window, cx| view.reset(window, cx));
@@ -10844,7 +10841,7 @@ pub(crate) mod tests {
         let connection_store =
             cx.update(|_window, cx| cx.new(|cx| AgentConnectionStore::new(project.clone(), cx)));
 
-        let agent_key = Agent::Custom { id: "Test".into() };
+        let agent_key = Agent::from(agent.agent_id());
 
         let conversation_view = cx.update(|window, cx| {
             cx.new(|cx| {
@@ -10943,11 +10940,23 @@ pub(crate) mod tests {
 
     pub(crate) struct StubAgentServer<C> {
         connection: C,
+        agent_id: AgentId,
     }
 
     impl<C> StubAgentServer<C> {
         pub(crate) fn new(connection: C) -> Self {
-            Self { connection }
+            Self {
+                connection,
+                agent_id: "Test".into(),
+            }
+        }
+
+        /// Behaves like the pi agent, for tests that exercise zepi-only UI.
+        pub(crate) fn zepi(connection: C) -> Self {
+            Self {
+                connection,
+                agent_id: AgentId::new("zepi-pi"),
+            }
         }
     }
 
@@ -10970,7 +10979,7 @@ pub(crate) mod tests {
         }
 
         fn agent_id(&self) -> AgentId {
-            "Test".into()
+            self.agent_id.clone()
         }
 
         fn connect(
@@ -21666,8 +21675,7 @@ pub(crate) mod tests {
             );
         });
 
-        // The expanded card renders the subagent's own view of the message, a row that
-        // names the parent.
+        // The card stays a header row; the message it links to stays in the subagent's view.
         child
             .update(cx, |child, cx| {
                 child.upsert_session_message(
@@ -21679,12 +21687,6 @@ pub(crate) mod tests {
                 )
             })
             .expect("incoming message");
-        thread_view.update(cx, |view, cx| {
-            view.entry_view_state.update(cx, |state, _| {
-                state.toggle_session_message_card_expansion(&acp_v2::MessageId::new("launch"))
-            });
-            cx.notify();
-        });
         cx.run_until_parked();
         assert!(cx.debug_bounds("subagent-card-0").is_some());
     }
@@ -21827,29 +21829,15 @@ pub(crate) mod tests {
             "the unlinked message is drawn as a row"
         );
 
-        let parent_view = active_thread(&conversation_view, cx);
         let child_view = conversation_view
             .read_with(cx, |view, _| view.thread_view(&child_session_id))
             .expect("subagent view");
         let child_scroll_top = |cx: &mut VisualTestContext| {
             child_view.read_with(cx, |view, _| view.list_state.logical_scroll_top())
         };
-        let open_fullscreen = |message_id: &str,
-                               selector: &'static str,
-                               cx: &mut VisualTestContext| {
+        let open_fullscreen = |selector: &'static str, cx: &mut VisualTestContext| {
             conversation_view.update_in(cx, |view, window, cx| {
                 view.navigate_to_thread(root_session_id.clone(), window, cx)
-            });
-            parent_view.update(cx, |view, cx| {
-                view.entry_view_state.update(cx, |state, _| {
-                    if !state.is_session_message_card_expanded(&acp_v2::MessageId::new(message_id))
-                    {
-                        state.toggle_session_message_card_expansion(&acp_v2::MessageId::new(
-                            message_id,
-                        ));
-                    }
-                });
-                cx.notify();
             });
             cx.run_until_parked();
             let toggle = cx.debug_bounds(selector).expect("full screen button");
@@ -21859,7 +21847,7 @@ pub(crate) mod tests {
         };
 
         child_view.update(cx, |view, cx| view.scroll_to_entry(4, cx));
-        open_fullscreen("follow-up", "subagent-fullscreen-1", cx);
+        open_fullscreen("subagent-fullscreen-1", cx);
         assert_eq!(
             child_scroll_top(cx).item_ix,
             2,
@@ -21867,7 +21855,7 @@ pub(crate) mod tests {
         );
 
         child_view.update(cx, |view, cx| view.scroll_to_entry(3, cx));
-        open_fullscreen("retry", "subagent-fullscreen-2", cx);
+        open_fullscreen("subagent-fullscreen-2", cx);
         assert_eq!(
             child_scroll_top(cx).item_ix,
             3,

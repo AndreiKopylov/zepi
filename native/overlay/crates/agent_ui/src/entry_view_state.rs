@@ -68,8 +68,6 @@ pub struct EntryViewState {
     expanded_tool_calls: HashSet<acp_v2::ToolCallId>,
    collapsed_tool_calls: HashSet<acp_v2::ToolCallId>,
     pub(crate) all_tools_expanded: bool,
-   /// Subagent cards shown for an ACP parent's outgoing session messages.
-    expanded_session_message_cards: HashSet<acp_v2::MessageId>,
 }
 
 impl EntryViewState {
@@ -95,7 +93,6 @@ impl EntryViewState {
             expanded_tool_calls: HashSet::default(),
            collapsed_tool_calls: HashSet::default(),
             all_tools_expanded: false,
-           expanded_session_message_cards: HashSet::default(),
         }
     }
 
@@ -132,18 +129,7 @@ impl EntryViewState {
         self.collapsed_tool_calls.clear();
     }
 
-   pub(crate) fn is_session_message_card_expanded(&self, message_id: &acp_v2::MessageId) -> bool {
-        self.expanded_session_message_cards.contains(message_id)
-    }
-
-    pub(crate) fn toggle_session_message_card_expansion(&mut self, message_id: &acp_v2::MessageId) {
-        if !self.expanded_session_message_cards.remove(message_id) {
-            self.expanded_session_message_cards
-                .insert(message_id.clone());
-        }
-    }
-
-    pub(crate) fn is_compaction_expanded(&self, entry_ix: usize) -> bool {
+   pub(crate) fn is_compaction_expanded(&self, entry_ix: usize) -> bool {
         self.expanded_compactions.contains(&entry_ix)
     }
 

@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { lstat, readFile as readFileFromDisk, writeFile as writeFileFromDisk, stat } from "node:fs/promises";
-import { relative, sep } from "node:path";
+import { readFile as readFileFromDisk, writeFile as writeFileFromDisk, stat } from "node:fs/promises";
 import { readableFile, writableFile } from "./workspace-path.ts";
 import { methods, type AgentContext } from "@agentclientprotocol/sdk";
 import {
@@ -12,8 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 export function editorTools(cwd: string, sessionId: string, client: Pick<AgentContext, "request">,
-  outputImage: (path:string)=>{data:string;mimeType:string}|undefined = ()=>undefined,
-  onTextWrite?: (change:{path:string;base:string;current:string;mtimeNs:string|null;created?:boolean})=>void) {
+  outputImage: (path:string)=>{data:string;mimeType:string}|undefined = ()=>undefined) {
   const readPaths = new Set<string>();
   const signals = new AsyncLocalStorage<AbortSignal | undefined>();
   const checkPath = (path: string) => writableFile(cwd, path);
@@ -73,15 +71,10 @@ export function editorTools(cwd: string, sessionId: string, client: Pick<AgentCo
       readPaths.add(canonical);
       return;
     }
-    // The review outlives this process: keep both sides of the diff for a replay.
-    const mtimeNs = exists ? await lstat(canonical, {bigint: true}).then(info => String(info.mtimeNs)).catch(() => null) : null;
-    const base = exists ? (await readFile(path)).toString('utf8') : '';
     await client.request(methods.client.fs.writeTextFile, { sessionId, path: canonical, content,
       ...(!exists ? {_meta: {"zepi.dev/createFile": true}} : {}),
     }, { cancellationSignal: signals.getStore() });
     readPaths.add(canonical);
-    onTextWrite?.({path: relative(cwd, canonical).split(sep).join('/'), base, current: content, mtimeNs,
-      ...(exists ? {} : {created: true})});
   };
   const access = async (path: string) => {
     if (outputImage(path)) return;

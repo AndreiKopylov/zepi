@@ -63,10 +63,12 @@ export function createSubagents(agentDir: string, sessionDir: string) {
   const updateRow = (parent: Session, row: Row) => {
     const r = row.relation;
     const label = `${row.job.title || row.role.name}`;
-    const detail = [row.role.name, row.model, row.state, row.duration === undefined ? undefined : `${(row.duration / 1000).toFixed(1)}s`, row.tokens === undefined ? undefined : `${row.tokens} tokens`, row.cost === undefined ? undefined : `$${row.cost.toFixed(4)}`].filter(Boolean).join(" · ");
+    const detail = [row.role.name, row.model].filter(Boolean).join(" · ");
+    // The header keeps one fixed slot for the state line: outcome and stats, or the live step.
+    const status = [row.state === "Queued" ? "Queued · waiting to start" : row.state, row.duration === undefined ? undefined : `${(row.duration / 1000).toFixed(1)}s`, row.tokens === undefined ? undefined : `${row.tokens} tokens`, row.cost === undefined ? undefined : `$${row.cost.toFixed(4)}`].filter(Boolean).join(" · ");
     publish(parent, {sessionUpdate: "tool_call_update", toolCallId: row.id, title: label,
       status: row.state === "Completed" ? "completed" : ["Failed", "Cancelled", "Blocked"].includes(row.state) ? "failed" : row.state === "Queued" ? "pending" : "in_progress",
-      content: row.output ? textContent(row.output) : [], rawInput: {zepiAgent: {detail, state: row.state, runId: r?.runId, role: row.role.name, model: row.model, task: row.job.task}},
+      content: row.output ? textContent(row.output) : [], rawInput: {zepiAgent: {detail, status, state: row.state, runId: r?.runId, role: row.role.name, model: row.model, task: row.job.task}},
       ...(r ? {_meta: {subagent_session_info: {session_id: r.childSessionId, message_start_index: 0}}} : {}),
     });
   };
@@ -294,7 +296,8 @@ export function createSubagents(agentDir: string, sessionDir: string) {
       server.agent.cancel = ctx => {
         awaitingPrompts.delete(ctx.params.sessionId);
         const row = running.get(ctx.params.sessionId), parent = row?.relation && sessions.get(row.relation.parentSessionId);
-        if (row && parent) {row.state = "Stopping"; updateRow(parent, row);}
+        // A finished run already reported its outcome; its own cleanup cancel must not revive the row.
+        if (row && parent && !["Completed", "Failed", "Cancelled", "Blocked"].includes(row.state)) {row.state = "Stopping"; updateRow(parent, row);}
         stopChildren(ctx.params.sessionId, ctx.client); cancel(ctx);
       };
       const close = server.agent.closeSession.bind(server.agent);

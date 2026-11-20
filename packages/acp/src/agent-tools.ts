@@ -3,14 +3,14 @@ import type { AgentSession, ToolInfo, ToolDefinition } from "@earendil-works/pi-
 export const agentToolCategories = ["read", "edit", "write", "bash", "browser", "subagent", "extensions", "mcp"];
 const mcpPath = "<inline:agentprism-pi-acp-mcp>";
 const discovery = new Map([['codemode', 'builtin:codemode'], ['tool_search', 'builtin:tool-search']]);
+// Windows has no bash: pi's own powershell tool replaces it and is builtin, so it needs an explicit pass.
+const platformShell = (tool: ToolInfo) => tool.name === "powershell" && process.platform === "win32";
 
 export function validAgentToolSelector(value: string): boolean {
   return agentToolCategories.includes(value) || /^(?:tool|mcp):[A-Za-z0-9_.-]+$/.test(value);
 }
 
 export function availableAgentTools(tools: ToolInfo[]): ToolInfo[] {
-  // Windows has no bash: pi's own powershell tool replaces it and is builtin, so it needs an explicit pass.
-  const platformShell = (tool: ToolInfo) => tool.name === "powershell" && process.platform === "win32";
   return tools.filter(tool => platformShell(tool) || discovery.get(tool.name) === tool.sourceInfo.path || (tool.name !== "bash" || tool.sourceInfo.source === 'sdk') && tool.sourceInfo.source !== "builtin"
     && !tool.sourceInfo.path.startsWith("builtin:") && !tool.sourceInfo.path.startsWith("<builtin:")
     && tool.sourceInfo.path !== "<inline:agentprism-pi-acp-control>");
@@ -29,6 +29,7 @@ export function resolveAgentTools(selectors: string[] | undefined, tools: ToolIn
       if (selector === "browser") return tool.sourceInfo.path === mcpPath && tool.name.startsWith("mcp__browse__");
       if (selector.startsWith("mcp:")) return tool.sourceInfo.path === mcpPath && tool.name.startsWith(`mcp__${selector.slice(4)}__`);
       if (selector === "read") return ["read", "find", "grep", "ls"].includes(tool.name) && tool.sourceInfo.source === "sdk";
+      if (selector === "bash") return tool.name === "bash" || platformShell(tool);
       return tool.name === selector.replace(/^tool:/, "");
     });
     if (requireMatches && !matches.length && (selector.startsWith("tool:") || selector.startsWith("mcp:"))) {

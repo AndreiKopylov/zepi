@@ -241,14 +241,6 @@ pub trait AgentConnection {
         Task::ready(Err(anyhow::anyhow!("Delivery reconciliation is unavailable")))
     }
 
-    fn zepi_binary_review_resolve(&self, _session_id: acp_v2::SessionId, _path: String, _state: String, _cx: &mut App) -> Task<Result<serde_json::Value>> {
-        Task::ready(Err(anyhow::anyhow!("Binary review is unavailable")))
-    }
-
-    fn zepi_text_review_resolve(&self, _session_id: acp_v2::SessionId, _path: String, _state: String, _cx: &mut App) -> Task<Result<serde_json::Value>> {
-        Task::ready(Err(anyhow::anyhow!("Text review is unavailable")))
-    }
-
     fn zepi_sync_ui(&self, _session_id: acp_v2::SessionId, _state: serde_json::Value, _cx: &mut App) -> Task<Result<()>> {
         Task::ready(Ok(()))
     }

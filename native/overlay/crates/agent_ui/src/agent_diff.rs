@@ -1,7 +1,7 @@
 use agent_client_protocol::v2::schema as acp_v2;
 use crate::{Keep, KeepAll, OpenAgentDiff, Reject, RejectAll};
-use acp_thread::{AcpThread, AcpThreadEvent, ZepiBinaryReview};
-use action_log::{ActionLogTelemetry, DiffStats, LastRejectUndo};
+use acp_thread::{AcpThread, AcpThreadEvent};
+use action_log::{ActionLogTelemetry, LastRejectUndo};
 use agent_settings::AgentSettings;
 use anyhow::Result;
 use buffer_diff::DiffHunkStatus;
@@ -19,7 +19,6 @@ use gpui::{
     Global, SharedString, Subscription, Task, TaskExt, WeakEntity, Window, prelude::*,
 };
 
-use file_icons::FileIcons;
 use language::{Buffer, Capability, OffsetRangeExt, Point};
 use multi_buffer::PathKey;
 use notifications::status_toast::StatusToast;
@@ -266,263 +265,6 @@ impl AgentDiffPane {
         if let AcpThreadEvent::TitleUpdated = event {
             cx.emit(EditorEvent::TitleChanged);
         }
-        if let AcpThreadEvent::ZepiBinaryReviewsChanged = event {
-            cx.notify();
-        }
-    }
-
-    fn render_review_list(
-        &self,
-        changed_buffers: &[(Entity<Buffer>, Entity<buffer_diff::BufferDiff>)],
-        binary_reviews: &[ZepiBinaryReview],
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if changed_buffers.is_empty() && binary_reviews.is_empty() {
-            return None;
-        }
-        let action_log = self.thread.read(cx).action_log().clone();
-        let telemetry = ActionLogTelemetry::from(self.thread.read(cx));
-        let mut rows: Vec<(SharedString, AnyElement)> = Vec::new();
-
-        for (buffer, diff) in changed_buffers {
-            let Some(file) = buffer.read(cx).file().cloned() else { continue };
-            let path = file.path().clone();
-            let name = path.file_name().map(|name| name.to_string()).unwrap_or_default();
-            let stats = DiffStats::single_file(diff.read(cx));
-            let id = SharedString::from(format!("review-text-{}", rows.len()));
-            let keep_log = action_log.clone();
-            let reject_log = action_log.clone();
-            let keep_telemetry = telemetry.clone();
-            let reject_telemetry = telemetry.clone();
-            let keep_buffer = buffer.clone();
-            let reject_buffer = buffer.clone();
-            rows.push((
-                id.clone(),
-                h_flex()
-                    .id(id.clone())
-                    .w_full()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .child(
-                        FileIcons::get_icon(path.as_std_path(), cx)
-                            .map(Icon::from_path)
-                            .map(|icon| icon.color(Color::Muted).size(IconSize::Small))
-                            .unwrap_or_else(|| Icon::new(IconName::File).color(Color::Muted).size(IconSize::Small)),
-                    )
-                    .child(Label::new(name).size(LabelSize::Small))
-                    .child(
-                        Label::new(format!("+{} −{}", stats.lines_added, stats.lines_removed))
-                            .color(Color::Muted)
-                            .size(LabelSize::XSmall),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new(SharedString::from(format!("{id}-keep")), "Keep")
-                            .label_size(LabelSize::Small)
-                            .on_click(move |_, _, cx| {
-                                keep_log.update(cx, |log, cx| {
-                                    log.keep_edits_in_range(
-                                        keep_buffer.clone(),
-                                        text::Anchor::min_max_range_for_buffer(keep_buffer.read(cx).remote_id()),
-                                        Some(keep_telemetry.clone()),
-                                        cx,
-                                    );
-                                });
-                            }),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("{id}-reject")), "Reject")
-                            .label_size(LabelSize::Small)
-                            .on_click(move |_, _, cx| {
-                                reject_log
-                                    .update(cx, |log, cx| {
-                                        log.reject_edits_in_ranges(
-                                            reject_buffer.clone(),
-                                            vec![text::Anchor::min_max_range_for_buffer(reject_buffer.read(cx).remote_id())],
-                                            Some(reject_telemetry.clone()),
-                                            cx,
-                                        )
-                                        .0
-                                    })
-                                    .detach_and_log_err(cx);
-                            }),
-                    )
-                    .into_any_element(),
-            ));
-        }
-
-        for review in binary_reviews {
-            let name = std::path::Path::new(&review.path)
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| review.path.clone());
-            let kind = if review.kind == "created" { "created" } else { "modified" };
-            let id = SharedString::from(format!("review-binary-{}", rows.len()));
-            let path = review.path.clone();
-            let open_path = review.path.clone();
-            let reject_path = review.path.clone();
-            rows.push((
-                id.clone(),
-                h_flex()
-                    .id(id.clone())
-                    .w_full()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .child(
-                        FileIcons::get_icon(std::path::Path::new(&review.path), cx)
-                            .map(Icon::from_path)
-                            .map(|icon| icon.color(Color::Muted).size(IconSize::Small))
-                            .unwrap_or_else(|| Icon::new(IconName::File).color(Color::Muted).size(IconSize::Small)),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("{id}-open")))
-                            .cursor_pointer()
-                            .hover(|style| style.underline())
-                            .on_click(cx.listener(move |this, _event, window, cx| {
-                                this.open_binary_review(open_path.clone(), window, cx);
-                            }))
-                            .child(Label::new(name).size(LabelSize::Small)),
-                    )
-                    .child(
-                        Label::new(format!("({kind}, binary)"))
-                            .color(Color::Muted)
-                            .size(LabelSize::XSmall),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new(SharedString::from(format!("{id}-keep")), "Keep")
-                            .label_size(LabelSize::Small)
-                            .on_click(cx.listener(move |this, _event, window, cx| {
-                                this.resolve_binary_review(path.clone(), "kept", window, cx);
-                            })),
-                    )
-                    .when(review.kind != "modified" || review.backup.is_some(), |this| {
-                        this.child(
-                            Button::new(SharedString::from(format!("{id}-reject")), "Reject")
-                                .label_size(LabelSize::Small)
-                                .on_click(cx.listener(move |this, _event, window, cx| {
-                                    this.resolve_binary_review(reject_path.clone(), "rejected", window, cx);
-                                })),
-                        )
-                    })
-                    .into_any_element(),
-            ));
-        }
-
-        Some(
-            v_flex()
-                .id("review-file-list")
-                .w_full()
-                .max_h(px(240.))
-                .overflow_y_scroll()
-                .border_b_1()
-                .border_color(cx.theme().colors().border)
-                .bg(cx.theme().colors().editor_background)
-                .children(rows.into_iter().map(|(_, row)| row))
-                .into_any_element(),
-        )
-    }
-
-    /// Reports settled text reviews to the agent, so its journal stops offering them
-    /// after a reload. A file stays pending while it is still under review.
-    fn zepi_reconcile_text_reviews(
-        &mut self,
-        before: Vec<String>,
-        state: &str,
-        cx: &mut Context<Self>,
-    ) {
-        if before.is_empty() {
-            return;
-        }
-        let changed: Vec<String> = self
-            .thread
-            .read(cx)
-            .action_log()
-            .read(cx)
-            .changed_buffers(cx)
-            .filter_map(|(buffer, _)| {
-                buffer
-                    .read(cx)
-                    .file()
-                    .map(|file| file.path().as_std_path().to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
-            })
-            .collect();
-        let connection = self.thread.read(cx).connection().clone();
-        let session_id = self.thread.read(cx).session_id().clone();
-        for path in before {
-            if changed.iter().any(|pending| pending == &path) {
-                continue;
-            }
-            let connection = connection.clone();
-            let session_id = session_id.clone();
-            let state = state.to_owned();
-            cx.spawn(async move |_, cx| {
-                let task = cx.update(|cx| {
-                    connection.zepi_text_review_resolve(session_id, path, state, cx)
-                });
-                let _ = task.await;
-                Ok::<_, anyhow::Error>(())
-            })
-            .detach_and_log_err(cx);
-        }
-    }
-
-    fn open_binary_review(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(workspace) = self.workspace.upgrade() else { return };
-        let Some(root) = self
-            .thread
-            .read(cx)
-            .work_dirs()
-            .and_then(|dirs| dirs.ordered_paths().next().cloned())
-        else {
-            return;
-        };
-        workspace
-            .update(cx, |workspace, cx| {
-                workspace.open_abs_path(
-                    root.join(&path),
-                    workspace::OpenOptions::default(),
-                    window,
-                    cx,
-                )
-            })
-            .detach_and_log_err(cx);
-    }
-
-    fn resolve_binary_review(
-        &mut self,
-        path: String,
-        state: &str,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let connection = self.thread.read(cx).connection().clone();
-        let session_id = self.thread.read(cx).session_id().clone();
-        let workspace = self.workspace.clone();
-        let state = state.to_owned();
-        cx.spawn(async move |_, cx| {
-            let task = cx.update(|cx| {
-                connection.zepi_binary_review_resolve(session_id, path, state, cx)
-            });
-            let response = task.await?;
-            if let Some(error) = response.get("error").and_then(|value| value.as_str()) {
-                workspace
-                    .update(cx, |workspace, cx| {
-                        let toast = StatusToast::new(
-                            format!("Could not resolve the binary review: {error}"),
-                            cx,
-                            |this, _| this,
-                        );
-                        workspace.toggle_status_toast(toast, cx);
-                    })
-                    .ok();
-            }
-            Ok::<_, anyhow::Error>(())
-        })
-        .detach_and_log_err(cx);
     }
 
     pub fn move_to_path(&self, path_key: PathKey, window: &mut Window, cx: &mut App) {
@@ -547,17 +289,14 @@ impl AgentDiffPane {
     }
 
     fn keep(&mut self, _: &Keep, window: &mut Window, cx: &mut Context<Self>) {
-        let pending = self.thread.read(cx).zepi_text_review_paths().to_vec();
         let rhs_editor = self.editor.read(cx).rhs_editor().clone();
         rhs_editor.update(cx, |editor, cx| {
             let snapshot = editor.buffer().read(cx).snapshot(cx);
             keep_edits_in_selection(editor, &snapshot, &self.thread, window, cx);
         });
-        self.zepi_reconcile_text_reviews(pending, "kept", cx);
     }
 
     fn reject(&mut self, _: &Reject, window: &mut Window, cx: &mut Context<Self>) {
-        let pending = self.thread.read(cx).zepi_text_review_paths().to_vec();
         let rhs_editor = self.editor.read(cx).rhs_editor().clone();
         rhs_editor.update(cx, |editor, cx| {
             let snapshot = editor.buffer().read(cx).snapshot(cx);
@@ -570,14 +309,9 @@ impl AgentDiffPane {
                 cx,
             );
         });
-        self.zepi_reconcile_text_reviews(pending, "rejected", cx);
     }
 
     fn reject_all(&mut self, _: &RejectAll, window: &mut Window, cx: &mut Context<Self>) {
-        let pending = self.thread.read(cx).zepi_text_review_paths().to_vec();
-        for review in self.thread.read(cx).zepi_binary_reviews().to_vec() {
-            self.resolve_binary_review(review.path, "rejected", window, cx);
-        }
         let rhs_editor = self.editor.read(cx).rhs_editor().clone();
         rhs_editor.update(cx, |editor, cx| {
             let snapshot = editor.buffer().read(cx).snapshot(cx);
@@ -591,16 +325,10 @@ impl AgentDiffPane {
                 cx,
             );
         });
-        self.zepi_reconcile_text_reviews(pending, "rejected", cx);
     }
 
-    fn keep_all(&mut self, _: &KeepAll, window: &mut Window, cx: &mut Context<Self>) {
-        let pending = self.thread.read(cx).zepi_text_review_paths().to_vec();
+    fn keep_all(&mut self, _: &KeepAll, _window: &mut Window, cx: &mut Context<Self>) {
         keep_and_save(&self.thread, None, self.workspace.clone(), cx);
-        for review in self.thread.read(cx).zepi_binary_reviews().to_vec() {
-            self.resolve_binary_review(review.path, "kept", window, cx);
-        }
-        self.zepi_reconcile_text_reviews(pending, "kept", cx);
     }
 }
 
@@ -991,18 +719,9 @@ impl Item for AgentDiffPane {
 }
 
 impl Render for AgentDiffPane {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let binary_reviews = self.thread.read(cx).zepi_binary_reviews().to_vec();
-        let changed_buffers = self
-            .thread
-            .read(cx)
-            .action_log()
-            .read(cx)
-            .changed_buffers(cx)
-            .collect::<Vec<_>>();
-        let is_empty = changed_buffers.is_empty() && binary_reviews.is_empty();
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_empty = self.multibuffer.read(cx).is_empty();
         let focus_handle = &self.focus_handle;
-        let review_list = self.render_review_list(&changed_buffers, &binary_reviews, cx);
 
         div()
             .track_focus(focus_handle)
@@ -1016,9 +735,8 @@ impl Render for AgentDiffPane {
             // here double-composites into a darker patch on transparent windows.
             .when(is_empty, |el| el.bg(cx.theme().colors().editor_background))
             .flex()
-            .flex_col()
             .items_center()
-            .when(is_empty, |el| el.justify_center())
+            .justify_center()
             .size_full()
             .when(is_empty, |el| {
                 el.child(
@@ -1046,12 +764,7 @@ impl Render for AgentDiffPane {
                         ),
                 )
             })
-            .when(!is_empty, |el| {
-                el.when_some(review_list, |el, list| el.child(list))
-                    .when(!changed_buffers.is_empty(), |el| {
-                        el.child(div().flex_1().min_h_0().w_full().child(self.editor.clone()))
-                    })
-            })
+            .when(!is_empty, |el| el.child(self.editor.clone()))
     }
 }
 
@@ -1889,8 +1602,7 @@ impl AgentDiff {
             | AcpThreadEvent::ConfigOptionsUpdated(_)
             | AcpThreadEvent::WorkingDirectoriesUpdated
             | AcpThreadEvent::PromptUpdated
-            | AcpThreadEvent::ZepiUiAction(_)
-            | AcpThreadEvent::ZepiBinaryReviewsChanged => {}
+            | AcpThreadEvent::ZepiUiAction(_) => {}
         }
     }
 

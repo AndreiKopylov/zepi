@@ -63,9 +63,6 @@ use gpui::{
 use language::{
     LanguageRegistry,
 };
-use language_model::{
-    LanguageModel, LanguageModelRegistry,
-};
 use project::{AgentId, Project, ProjectPath};
 use prompt_store::{self, PromptBuilder};
 use rope::Point;
@@ -631,21 +628,6 @@ impl ManageProfiles {
     }
 }
 
-#[derive(Clone)]
-pub(crate) enum ModelUsageContext {
-    InlineAssistant,
-}
-
-impl ModelUsageContext {
-    pub fn model(&self, cx: &App) -> Option<LanguageModel> {
-        match self {
-            Self::InlineAssistant => {
-                LanguageModelRegistry::read_global(cx).inline_assistant_model()
-            }
-        }
-    }
-}
-
 pub(crate) fn humanize_token_count(count: u64) -> String {
     match count {
         0..=999 => count.to_string(),
@@ -739,9 +721,10 @@ mod tests {
     use super::*;
     use agent_settings::{AgentProfileId, AgentSettings};
     use command_palette_hooks::CommandPaletteFilter;
-    use db::kvp::KeyValueStore;
     use editor::actions::AcceptEditPrediction;
+    use feature_flags::FeatureFlagAppExt as _;
     use gpui::{BorrowAppContext, TestAppContext, px};
+    use language::language_settings::{AllLanguageSettings, EditPredictionProvider};
     use project::DisableAiSettings;
     use settings::{
         DockPosition, NotifyWhenAgentWaiting, PlaySoundWhenAgentDone, Settings, SettingsStore,
@@ -825,24 +808,24 @@ mod tests {
                 "NewThread should be visible by default"
             );
             assert!(
-                !filter.is_hidden(&NewTerminalThread),
-                "NewTerminalThread should be visible by default"
+                filter.is_hidden(&NewTerminalThread),
+                "NewTerminalThread is hidden: zepi runs one pi thread per panel"
             );
             assert!(
-                !filter.is_hidden(&zed_actions::assistant::OpenSkillCreator),
-                "OpenSkillCreator should be visible by default"
+                filter.is_hidden(&zed_actions::assistant::OpenSkillCreator),
+                "OpenSkillCreator is hidden: skills come from pi"
             );
             assert!(
-                !filter.is_hidden(&zed_actions::assistant::CreateSkillFromUrl),
-                "CreateSkillFromUrl should be visible by default"
+                filter.is_hidden(&zed_actions::assistant::CreateSkillFromUrl),
+                "CreateSkillFromUrl is hidden: skills come from pi"
             );
             assert!(
-                !filter.is_hidden(&zed_actions::assistant::OpenGlobalAgentsMdRules),
-                "OpenGlobalAgentsMdRules should be visible by default"
+                filter.is_hidden(&zed_actions::assistant::OpenGlobalAgentsMdRules),
+                "OpenGlobalAgentsMdRules is hidden: pi owns its instructions"
             );
             assert!(
-                !filter.is_hidden(&zed_actions::assistant::OpenProjectAgentsMdRules),
-                "OpenProjectAgentsMdRules should be visible by default"
+                filter.is_hidden(&zed_actions::assistant::OpenProjectAgentsMdRules),
+                "OpenProjectAgentsMdRules is hidden: pi owns its instructions"
             );
             assert!(
                 filter.is_hidden(&zed_actions::assistant::ManageSkills),
@@ -864,8 +847,8 @@ mod tests {
         cx.update(|cx| {
             let filter = CommandPaletteFilter::try_global(cx).unwrap();
             assert!(
-                filter.is_hidden(&NewThread),
-                "NewThread should be hidden when agent is disabled"
+                !filter.is_hidden(&NewThread),
+                "NewThread stays visible when AI is disabled: pi is the only agent zepi exposes"
             );
             assert!(
                 filter.is_hidden(&NewTerminalThread),
@@ -899,8 +882,8 @@ mod tests {
         cx.update(|cx| {
             let filter = CommandPaletteFilter::try_global(cx).unwrap();
             assert!(
-                !filter.is_hidden(&AcceptEditPrediction),
-                "EditPrediction should be visible when provider is Copilot"
+                filter.is_hidden(&AcceptEditPrediction),
+                "EditPrediction stays hidden: zepi does not ship edit predictions"
             );
         });
 
@@ -944,8 +927,8 @@ mod tests {
                 "OpenSkillCreator should be hidden when AI is disabled"
             );
             assert!(
-                filter.is_hidden(&NewThread),
-                "NewThread should be hidden when AI is disabled"
+                !filter.is_hidden(&NewThread),
+                "NewThread stays visible: pi is the only agent zepi exposes"
             );
         });
     }

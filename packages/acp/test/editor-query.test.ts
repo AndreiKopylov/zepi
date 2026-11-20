@@ -21,6 +21,12 @@ test("read roles use native queries and never reactivate pi builtin tools as plu
   assert.throws(() => resolveAgentTools(["tool:hidden"], tools), /unavailable/);
 });
 
+test("the bash role category selects the platform shell tool", () => {
+  const info = (name: string, path: string, source: string) => ({name,sourceInfo:{path,source}} as ToolInfo);
+  const tools = [info("powershell", "builtin:powershell", "builtin"), info("bash", "<inline:bash>", "sdk")];
+  assert.deepEqual(resolveAgentTools(["bash"], tools), process.platform === "win32" ? ["powershell", "bash"] : ["bash"]);
+});
+
 test("query adapter rejects private paths and falls back to disk search outside the workspace", async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "zepi-query-path-")));
   const outside = await realpath(await mkdtemp(join(tmpdir(), "zepi-query-outside-")));

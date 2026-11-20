@@ -189,6 +189,10 @@ test("stopping the parent cancels its running child and releases the next turn",
     assert.equal((await running).stopReason, "cancelled");
     assert.equal(childAborted, true);
     assert.equal((await h.prompt("Continue after cancellation.")).stopReason, "end_turn");
+    const final = h.updates.filter(({update}) => update.sessionUpdate === "tool_call_update" && update.toolCallId === h.runs[0]!.toolCallId && update.rawInput).at(-1)?.update;
+    assert.ok(final && final.sessionUpdate === "tool_call_update");
+    assert.match(JSON.stringify(final.rawInput), /"state":"Cancelled"/, "A stopped child must settle instead of staying in Stopping");
+    assert.equal(final.status, "failed");
   } finally {await h.dispose();}
 });
 

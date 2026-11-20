@@ -75,7 +75,6 @@ impl ElicitationFormState {
                                 Editor::auto_height(4, 12, window, cx)
                             } else { Editor::single_line(window, cx) };
                             editor.set_masked(schema.meta.as_ref().and_then(|meta| meta.get("zepiSecret")) == Some(&serde_json::Value::Bool(true)), cx);
-                            let mut editor = Editor::single_line(window, cx);
                             if let Some(default) = default {
                                 editor.set_text(default.clone(), window, cx);
                             }

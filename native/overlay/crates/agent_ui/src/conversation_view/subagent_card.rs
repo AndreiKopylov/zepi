@@ -1,39 +1,17 @@
 use acp_thread::{
-    AcpThread, AgentThreadEntry, MessageIdentity, SessionMessage, SessionMessageSide, ToolCall,
+    AcpThread, AgentThreadEntry, SessionMessage, SessionMessageSide, ToolCall,
     ToolCallContent, ToolCallStatus,
 };
 use agent_client_protocol::v2::schema as acp_v2;
 use gpui::{App, Entity, SharedString};
-use std::{fmt, ops::Range};
-
 use super::thread_view::subagent_label;
 
 /// Native subagent tool calls report a user cancellation as output with this text.
 const USER_CANCELED_OUTPUT: &str = "User canceled";
 
-/// The transcript entry a subagent card stands for. It keys the card's expansion state
-/// and element IDs, since the same subagent can have more than one card.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum SubagentCardId {
-    /// A native `spawn_agent` tool call.
-    ToolCall(acp_v2::ToolCallId),
-    /// An ACP parent's outgoing session message to the subagent.
-    SessionMessage(acp_v2::MessageId),
-}
-
-impl fmt::Display for SubagentCardId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ToolCall(id) => write!(f, "tool-call-{id}"),
-            Self::SessionMessage(id) => write!(f, "session-message-{id}"),
-        }
-    }
-}
-
 /// A session message that an ACP parent sent to one of its own subagents, drawn as a
 /// subagent card in place of its message row.
 pub(crate) struct AcpSubagentCard {
-    pub id: SubagentCardId,
     pub subagent: Entity<AcpThread>,
     /// The subagent entries for this message; `None` covers the whole subagent.
     pub entries: Option<SubagentEntries>,
@@ -59,10 +37,6 @@ pub(crate) fn acp_subagent_card(
         return None;
     };
     let subagent = thread.subagent(recipient)?.clone();
-    let MessageIdentity::Keyed(message_id) = &message.identity else {
-        return None;
-    };
-    let id = SubagentCardId::SessionMessage(message_id.clone());
 
     let subagent_thread = subagent.read(cx);
     if let Some(start) = subagent_thread.linked_session_message(message, own_session_id) {
@@ -81,7 +55,6 @@ pub(crate) fn acp_subagent_card(
                 .then_some(ix)
             });
         return Some(AcpSubagentCard {
-            id,
             subagent,
             entries: Some(SubagentEntries {
                 start,
@@ -99,7 +72,6 @@ pub(crate) fn acp_subagent_card(
         )
     });
     (!sent_earlier).then_some(AcpSubagentCard {
-        id,
         subagent,
         entries: None,
     })
@@ -184,8 +156,11 @@ pub(crate) struct SubagentCardState {
     pub label: Option<SharedString>,
    /// The task the parent agent asked this subagent to do
     pub task: Option<SharedString>,
-    /// Provider-side summary: role, model, state, duration, tokens, cost
+    /// Provider-side summary: role and model
     pub detail: Option<SharedString>,
+    /// Provider-side state line: outcome, duration, tokens, cost. The card keeps this slot
+    /// whether or not it has work to report, so cards do not resize while agents run.
+    pub status_text: Option<SharedString>,
    /// An ACP parent's own label for the subagent describes it in the parent's view, so it
     /// wins over the subagent's title for itself.
     pub label_wins: bool,
@@ -219,10 +194,12 @@ impl SubagentCardState {
         };
         let task = field("task");
         let detail = field("detail");
+        let status_text = field("status");
         Self {
             label: (!label.is_empty()).then(|| label.to_string().into()),
            task,
             detail,
+            status_text,
            label_wins: false,
             status,
             error: tool_call_error(tool_call, cx),
@@ -287,6 +264,7 @@ impl SubagentCardState {
             label_wins: true,
             task: None,
             detail: None,
+            status_text: None,
             status,
             error,
             can_stop: status == SubagentStatus::Running && can_cancel,
@@ -316,22 +294,6 @@ impl SubagentCardState {
     pub(crate) fn fullscreen_entry(&self) -> Option<usize> {
         (self.status != SubagentStatus::Running)
             .then(|| self.entries.map_or(0, |entries| entries.start))
-    }
-
-    /// The last `max_entries` of the entries this card covers.
-    pub(crate) fn preview_range(&self, total_entries: usize, max_entries: usize) -> Range<usize> {
-        let mut range = match self.entries {
-            Some(entries) => {
-                entries.start
-                    ..entries
-                        .end
-                        .map(|end| (end + 1).min(total_entries))
-                        .unwrap_or(total_entries)
-            }
-            None => 0..total_entries,
-        };
-        range.start = range.end.saturating_sub(max_entries).max(range.start);
-        range
     }
 }
 
@@ -370,6 +332,9 @@ mod tests {
     ) -> SubagentCardState {
         SubagentCardState {
             label: label.map(|label| label.to_string().into()),
+            task: None,
+            detail: None,
+            status_text: None,
             label_wins: false,
             status,
             error: None,
@@ -502,38 +467,5 @@ mod tests {
             assert_eq!(card(None, status, part).fullscreen_entry(), Some(4));
             assert_eq!(card(None, status, None).fullscreen_entry(), Some(0));
         }
-    }
-
-    #[test]
-    fn preview_range_shows_the_last_entries_the_card_covers() {
-        let whole_thread = card(None, SubagentStatus::Running, None);
-        assert_eq!(whole_thread.preview_range(20, 8), 12..20);
-        assert_eq!(whole_thread.preview_range(3, 8), 0..3);
-
-        let open_ended = card(
-            None,
-            SubagentStatus::Running,
-            Some(SubagentEntries {
-                start: 4,
-                end: None,
-            }),
-        );
-        assert_eq!(open_ended.preview_range(6, 8), 4..6);
-        assert_eq!(open_ended.preview_range(20, 8), 12..20);
-
-        let finished = card(
-            None,
-            SubagentStatus::Completed,
-            Some(SubagentEntries {
-                start: 4,
-                end: Some(6),
-            }),
-        );
-        assert_eq!(finished.preview_range(20, 8), 4..7);
-        assert_eq!(
-            finished.preview_range(5, 8),
-            4..5,
-            "an end past the thread is clamped"
-        );
     }
 }
