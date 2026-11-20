@@ -16526,7 +16526,9 @@ mod tests {
             cx.run_until_parked();
             let expected_warning = if url == missing_file_uri {
                 format!(
-                    "Could not resolve agent file link to {:?}: no matching file",
+                    "Could not resolve agent file link {:?} against project roots {:?}: {:?}: no matching file",
+                    Path::new(path!("/outside/missing.md")),
+                    [Path::new(path!("/project"))],
                     Path::new(path!("/outside/missing.md"))
                 )
             } else {

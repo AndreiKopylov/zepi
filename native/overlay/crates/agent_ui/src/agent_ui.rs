@@ -808,24 +808,24 @@ mod tests {
                 "NewThread should be visible by default"
             );
             assert!(
-                !filter.is_hidden(&NewTerminalThread),
-                "NewTerminalThread should be visible by default"
+                filter.is_hidden(&NewTerminalThread),
+                "NewTerminalThread is hidden: zepi runs one pi thread per panel"
             );
             assert!(
-                !filter.is_hidden(&zed_actions::assistant::OpenSkillCreator),
-                "OpenSkillCreator should be visible by default"
+                filter.is_hidden(&zed_actions::assistant::OpenSkillCreator),
+                "OpenSkillCreator is hidden: skills come from pi"
             );
             assert!(
-                !filter.is_hidden(&zed_actions::assistant::CreateSkillFromUrl),
-                "CreateSkillFromUrl should be visible by default"
+                filter.is_hidden(&zed_actions::assistant::CreateSkillFromUrl),
+                "CreateSkillFromUrl is hidden: skills come from pi"
             );
             assert!(
-                !filter.is_hidden(&zed_actions::assistant::OpenGlobalAgentsMdRules),
-                "OpenGlobalAgentsMdRules should be visible by default"
+                filter.is_hidden(&zed_actions::assistant::OpenGlobalAgentsMdRules),
+                "OpenGlobalAgentsMdRules is hidden: pi owns its instructions"
             );
             assert!(
-                !filter.is_hidden(&zed_actions::assistant::OpenProjectAgentsMdRules),
-                "OpenProjectAgentsMdRules should be visible by default"
+                filter.is_hidden(&zed_actions::assistant::OpenProjectAgentsMdRules),
+                "OpenProjectAgentsMdRules is hidden: pi owns its instructions"
             );
             assert!(
                 filter.is_hidden(&zed_actions::assistant::ManageSkills),
@@ -847,8 +847,8 @@ mod tests {
         cx.update(|cx| {
             let filter = CommandPaletteFilter::try_global(cx).unwrap();
             assert!(
-                filter.is_hidden(&NewThread),
-                "NewThread should be hidden when agent is disabled"
+                !filter.is_hidden(&NewThread),
+                "NewThread stays visible when AI is disabled: pi is the only agent zepi exposes"
             );
             assert!(
                 filter.is_hidden(&NewTerminalThread),
@@ -882,8 +882,8 @@ mod tests {
         cx.update(|cx| {
             let filter = CommandPaletteFilter::try_global(cx).unwrap();
             assert!(
-                !filter.is_hidden(&AcceptEditPrediction),
-                "EditPrediction should be visible when provider is Copilot"
+                filter.is_hidden(&AcceptEditPrediction),
+                "EditPrediction stays hidden: zepi does not ship edit predictions"
             );
         });
 
@@ -927,8 +927,8 @@ mod tests {
                 "OpenSkillCreator should be hidden when AI is disabled"
             );
             assert!(
-                filter.is_hidden(&NewThread),
-                "NewThread should be hidden when AI is disabled"
+                !filter.is_hidden(&NewThread),
+                "NewThread stays visible: pi is the only agent zepi exposes"
             );
         });
     }

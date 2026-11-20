@@ -4692,7 +4692,7 @@ pub(crate) mod tests {
     async fn test_zepi_recall_and_resend_restored_question_preserve_composer_draft(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
-        let (conversation, cx) = setup_conversation_view(StubAgentServer::new(connection.clone()), cx).await;
+        let (conversation, cx) = setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
         add_to_workspace(conversation.clone(), cx);
         let view = active_thread(&conversation, cx);
         let id = view.read_with(cx, |view, cx| view.thread.read(cx).session_id().clone());
@@ -4730,7 +4730,7 @@ pub(crate) mod tests {
     async fn test_zepi_execution_disclosures_default_closed_and_preview_latest_action(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
-        let (conversation, cx) = setup_conversation_view(StubAgentServer::new(connection.clone()), cx).await;
+        let (conversation, cx) = setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
         add_to_workspace(conversation.clone(), cx);
         let view = active_thread(&conversation, cx);
         let id = view.read_with(cx, |view, cx| view.thread.read(cx).session_id().clone());
@@ -4772,7 +4772,7 @@ pub(crate) mod tests {
     async fn test_zepi_activity_headers_toggle_from_the_label_area(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
-        let (conversation, cx) = setup_conversation_view(StubAgentServer::new(connection.clone()), cx).await;
+        let (conversation, cx) = setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
         add_to_workspace_with_size(conversation.clone(), true, cx);
         let view = active_thread(&conversation, cx);
         let id = view.read_with(cx, |view, cx| view.thread.read(cx).session_id().clone());
@@ -4808,7 +4808,7 @@ pub(crate) mod tests {
     async fn test_zepi_extension_shortcuts_route_only_from_the_composer(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
-        let (view, cx) = setup_conversation_view(StubAgentServer::new(connection.clone()), cx).await;
+        let (view, cx) = setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
         add_to_workspace(view.clone(), cx);
         cx.run_until_parked();
         let active = view.read_with(cx, |view, _| view.root_thread_view().unwrap().clone());
@@ -9101,7 +9101,7 @@ pub(crate) mod tests {
                 .with_supports_load_session(true)
                 .with_receipt_submissions(reported_activity);
             let (conversation_view, cx) =
-                setup_conversation_view(StubAgentServer::new(connection), cx).await;
+                setup_conversation_view(StubAgentServer::zepi(connection), cx).await;
             let previous_view = active_thread(&conversation_view, cx);
             let previous_thread = previous_view.read_with(cx, |view, _| view.thread.clone());
             conversation_view.update_in(cx, |view, window, cx| view.reset(window, cx));
@@ -10841,7 +10841,7 @@ pub(crate) mod tests {
         let connection_store =
             cx.update(|_window, cx| cx.new(|cx| AgentConnectionStore::new(project.clone(), cx)));
 
-        let agent_key = Agent::Custom { id: "Test".into() };
+        let agent_key = Agent::from(agent.agent_id());
 
         let conversation_view = cx.update(|window, cx| {
             cx.new(|cx| {
@@ -10940,11 +10940,23 @@ pub(crate) mod tests {
 
     pub(crate) struct StubAgentServer<C> {
         connection: C,
+        agent_id: AgentId,
     }
 
     impl<C> StubAgentServer<C> {
         pub(crate) fn new(connection: C) -> Self {
-            Self { connection }
+            Self {
+                connection,
+                agent_id: "Test".into(),
+            }
+        }
+
+        /// Behaves like the pi agent, for tests that exercise zepi-only UI.
+        pub(crate) fn zepi(connection: C) -> Self {
+            Self {
+                connection,
+                agent_id: AgentId::new("zepi-pi"),
+            }
         }
     }
 
@@ -10967,7 +10979,7 @@ pub(crate) mod tests {
         }
 
         fn agent_id(&self) -> AgentId {
-            "Test".into()
+            self.agent_id.clone()
         }
 
         fn connect(
