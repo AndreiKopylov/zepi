@@ -1,1 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><g fill="currentColor"><g transform="translate(310.4,310.4) scale(0.72)"><path d="M420 280H280V140H0V0H420V280Z"/><path d="M560 560H420V280H560V560Z"/><path d="M140 560H0V140H140V280H280V420H140V560Z"/></g></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g fill="none" stroke="currentColor" stroke-width="28" stroke-linecap="butt" stroke-linejoin="round">
+    <path d="M 106 318 L 106 128 Q 106 106 128 106 L 406 106 L 344 168"/>
+    <path d="M 140 372 L 106 406 L 384 406 Q 406 406 406 384 L 406 266"/>
+  </g>
+  <g fill="currentColor">
+    <path fill-rule="evenodd" d="M 158 158 H 305 V 256 H 256 V 305 H 207 V 354 H 158 Z M 207 207 V 256 H 256 V 207 Z"/>
+    <rect x="305" y="256" width="49" height="98"/>
+  </g>
+</svg>

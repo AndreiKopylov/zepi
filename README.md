@@ -5,10 +5,11 @@
 **A Windows workspace for code and office documents with an agent built in.**
 
 Zepi wires the [Zed](https://github.com/zed-industries/zed) editor to the
-[pi](https://github.com/badlogic/pi-mono) agent over ACP. One window holds code, terminal, git and a
+[pi](https://github.com/earendil-works/pi) agent over ACP. One window holds code, terminal, git and a
 chat with your model plus viewing and editing `.pptx`, `.docx` and `.xlsx` without Microsoft Office.
 
-> Status: **beta (0.0.1)**. Built on Zed v1.28.1 and pi 1.5.2.
+> Status: **beta**. Every [release](../../releases) lists the Zed base and the bundled pi
+> version it carries.
 
 ## What it does
 
@@ -37,7 +38,8 @@ openpyxl, python-pptx, pypdf and Pillow. Nothing to install.
    `%LOCALAPPDATA%\Zepi\pi\models.json`. No providers ship with the build: bring your own endpoint
    and key.
 
-Settings, sessions and skills live in `%LOCALAPPDATA%\Zepi`; updates never touch them.
+Settings, sessions and skills live in `%LOCALAPPDATA%\Zepi`; updates never touch them. Zepi
+checks [Releases](../../releases) and updates itself through a detached installer prompt.
 
 ### Requirements
 
@@ -112,7 +114,6 @@ Values are re-read when the file changes; no restart is needed.
 ## Beta limitations
 
 - The installer is unsigned, so SmartScreen warns about an unknown publisher.
-- No auto-update: install a newer build over the old one, data is preserved.
 - `.xlsx` has no rasteriser: no visual check for spreadsheets, values are verified programmatically.
 - No models are bundled; without a key the agent stays silent.
 
@@ -121,7 +122,7 @@ Values are re-read when the file changes; no restart is needed.
 - [Zed Industries](https://github.com/zed-industries/zed) — editor and the gpui platform.
 - [tony3liu](https://github.com/tony3liu/eido) — eido: the first Zed + pi pairing on Windows, from
   which Zepi descends.
-- [Mario Zechner](https://github.com/badlogic/pi-mono) — the pi agent and the ACP protocol.
+- [Mario Zechner](https://github.com/earendil-works/pi) — the pi agent and the ACP protocol.
 - [storytold](https://github.com/storytold) — gridcraft, deckcraft, wordcraft (document engines).
 - [browse](https://github.com/anomalyco/browse) (opencode, MIT) — real-browser automation via a Rust relay + Chromium extension.
 - [browser-use](https://github.com/browser-use) — the page text-model helpers (MIT).

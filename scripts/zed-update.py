@@ -133,6 +133,14 @@ def main():
     new_deps, overlay_deps = workspace_deps(new_root_toml), workspace_deps(overlay_root)
     missing_deps = [overlay_deps[key] for key in overlay_deps if key not in new_deps]
     merged = new_root_toml
+    # Insert at the section tail, not after the header: 1.29 opens the section with a
+    # multiline `features = [` array, so inserting at the head corrupts it.
+    if missing_deps:
+        head = merged.index('[workspace.dependencies]')
+        # first line starting a new section, not any '[' (the section holds multiline arrays)
+        tail_match = re.search(r'(?m)^\[', merged[head + 1:])
+        tail = head + 1 + (tail_match.start() if tail_match else 0)
+        merged = merged[:tail] + NL.join(missing_deps) + NL + merged[tail:]
     exclude_match = re.search(r'^exclude = \[.*?\]', overlay_root, re.M)
     if exclude_match and 'exclude =' not in merged:
         merged = merged.replace('resolver = "2"', 'resolver = "2"' + NL + exclude_match.group(0), 1)
