@@ -5,7 +5,7 @@ use crate::AcpThread;
 use anyhow::{Context as _, Result, ensure};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use gpui::{AppContext as _, Context, Task};
+use gpui::{Context, Task};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

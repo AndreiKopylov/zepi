@@ -1,39 +1,17 @@
 use acp_thread::{
-    AcpThread, AgentThreadEntry, MessageIdentity, SessionMessage, SessionMessageSide, ToolCall,
+    AcpThread, AgentThreadEntry, SessionMessage, SessionMessageSide, ToolCall,
     ToolCallContent, ToolCallStatus,
 };
 use agent_client_protocol::v2::schema as acp_v2;
 use gpui::{App, Entity, SharedString};
-use std::fmt;
-
 use super::thread_view::subagent_label;
 
 /// Native subagent tool calls report a user cancellation as output with this text.
 const USER_CANCELED_OUTPUT: &str = "User canceled";
 
-/// The transcript entry a subagent card stands for. It keys the card's expansion state
-/// and element IDs, since the same subagent can have more than one card.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum SubagentCardId {
-    /// A native `spawn_agent` tool call.
-    ToolCall(acp_v2::ToolCallId),
-    /// An ACP parent's outgoing session message to the subagent.
-    SessionMessage(acp_v2::MessageId),
-}
-
-impl fmt::Display for SubagentCardId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ToolCall(id) => write!(f, "tool-call-{id}"),
-            Self::SessionMessage(id) => write!(f, "session-message-{id}"),
-        }
-    }
-}
-
 /// A session message that an ACP parent sent to one of its own subagents, drawn as a
 /// subagent card in place of its message row.
 pub(crate) struct AcpSubagentCard {
-    pub id: SubagentCardId,
     pub subagent: Entity<AcpThread>,
     /// The subagent entries for this message; `None` covers the whole subagent.
     pub entries: Option<SubagentEntries>,
@@ -59,10 +37,6 @@ pub(crate) fn acp_subagent_card(
         return None;
     };
     let subagent = thread.subagent(recipient)?.clone();
-    let MessageIdentity::Keyed(message_id) = &message.identity else {
-        return None;
-    };
-    let id = SubagentCardId::SessionMessage(message_id.clone());
 
     let subagent_thread = subagent.read(cx);
     if let Some(start) = subagent_thread.linked_session_message(message, own_session_id) {
@@ -81,7 +55,6 @@ pub(crate) fn acp_subagent_card(
                 .then_some(ix)
             });
         return Some(AcpSubagentCard {
-            id,
             subagent,
             entries: Some(SubagentEntries {
                 start,
@@ -99,7 +72,6 @@ pub(crate) fn acp_subagent_card(
         )
     });
     (!sent_earlier).then_some(AcpSubagentCard {
-        id,
         subagent,
         entries: None,
     })
@@ -360,9 +332,11 @@ mod tests {
     ) -> SubagentCardState {
         SubagentCardState {
             label: label.map(|label| label.to_string().into()),
+            task: None,
+            detail: None,
+            status_text: None,
             label_wins: false,
             status,
-            status_text: None,
             error: None,
             can_stop: false,
             entries,

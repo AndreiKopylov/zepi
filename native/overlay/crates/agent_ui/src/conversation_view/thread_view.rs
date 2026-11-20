@@ -926,11 +926,11 @@ pub struct TurnFields {
 /// How a tool call is rendered relative to its surroundings.
 ///
 /// `Standalone` draws its own border/margin/location header. `Embedded` is
-/// hosted by a container that provides its own framing (e.g. the subagent
-/// card). `Floating` is like `Embedded`, but used for the floating
-/// awaiting-permission row above the message editor: the tool call's content
-/// is height-capped and scrollable so the row can never grow to consume the
-/// entire panel and squeeze the conversation list out of view.
+/// hosted by a container that provides its own framing (e.g. a permission row
+/// inside a subagent card). `Floating` is like `Embedded`, but used for the
+/// floating awaiting-permission row above the message editor: the tool call's
+/// content is height-capped and scrollable so the row can never grow to consume
+/// the entire panel and squeeze the conversation list out of view.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum ToolCallLayout {
     Standalone,
@@ -8388,7 +8388,7 @@ impl ThreadView {
             AgentThreadEntry::SessionMessage(message) => {
                 let session_message =
                     match acp_subagent_card(self.thread.read(cx), entry_ix, message, cx) {
-                        Some(card) => self.render_acp_subagent_card(entry_ix, &card, cx),
+                        Some(card) => self.render_acp_subagent_card(entry_ix, &card, window, cx),
                         None => self.render_session_message(entry_ix, message, window, cx),
                     };
                 if let Some(handle) = self
@@ -9947,6 +9947,7 @@ impl ThreadView {
         &self,
         entry_ix: usize,
         card: &AcpSubagentCard,
+        window: &Window,
         cx: &Context<Self>,
     ) -> Div {
         let subagent = card.subagent.read(cx);
@@ -9957,9 +9958,12 @@ impl ThreadView {
             .and_then(|server_view| server_view.read(cx).as_connected())
             .and_then(|connected| connected.threads.get(&subagent_session_id));
         let content = self.render_subagent_card(
+            self.thread.read(cx).session_id(),
             entry_ix,
             &SubagentCardState::from_acp_subagent(subagent, card.entries),
             subagent_thread_view,
+            &self.focus_handle(cx),
+            window,
             cx,
         );
 
@@ -10420,12 +10424,15 @@ impl ThreadView {
                 if tool_call.is_subagent() {
                     this.child(
                         self.render_subagent_tool_call(
+                            active_session_id,
                             entry_ix,
                             tool_call,
                             tool_call
                                 .subagent_session_info
                                 .as_ref()
                                 .map(|i| i.session_id.clone()),
+                            focus_handle,
+                            window,
                             cx,
                         ),
                     )
@@ -10889,7 +10896,6 @@ impl ThreadView {
                             .child(self.render_tool_call_label(
                                 entry_ix,
                                 tool_call,
-                                is_edit,
                                 is_cancelled_edit,
                                 has_diff_changes,
                                 use_card_layout,
@@ -10906,7 +10912,7 @@ impl ThreadView {
                                     .when(!use_card_layout, |this| this.pr_0p5())
                                     // Fixed slots keep duration, file icon and status aligned across rows.
                                     .child(
-                                        div().when(!is_zepi, |this| this.w(rems_from_px(64.))).flex().justify_end().when_some(
+                                        div().when(!is_zepi, |this| this.w(rems_from_px(64_f32))).flex().justify_end().when_some(
                                             tool_call.duration.filter(|duration| !is_zepi || duration.as_secs() >= 1),
                                             |this, duration| {
                                                 this.child(Label::new(if is_zepi { duration_alt_display(duration).to_string() } else { zepi_tool_duration_label(duration) })
@@ -10915,7 +10921,7 @@ impl ThreadView {
                                         ),
                                     )
                                     .child(
-                                        div().when(!is_zepi, |this| this.w(rems_from_px(20.))).flex().justify_end().children(
+                                        div().when(!is_zepi, |this| this.w(rems_from_px(20_f32))).flex().justify_end().children(
                                             (is_zepi && has_location && self.zepi_location_is_file(&tool_call.locations[0].path, cx)).then(|| {
                                                 IconButton::new(("open-tool-file", entry_ix), IconName::File)
                                                     .icon_size(IconSize::Small)
@@ -10928,7 +10934,7 @@ impl ThreadView {
                                             }),
                                         ),
                                     )
-                                    .child(div().when(!is_zepi, |this| this.w(rems_from_px(18.))).flex().justify_end()
+                                    .child(div().when(!is_zepi, |this| this.w(rems_from_px(18_f32))).flex().justify_end()
                                     .when(is_collapsible || failed_or_canceled, |this| {
                                         let diff_for_discard = if has_diff_changes
                                             && is_cancelled_edit
@@ -12458,7 +12464,6 @@ impl ThreadView {
         &self,
         entry_ix: usize,
         tool_call: &ToolCall,
-        is_edit: bool,
         has_failed: bool,
         has_diff_changes: bool,
         use_card_layout: bool,
@@ -13011,7 +13016,7 @@ impl ThreadView {
                 cx,
             )
             .or_else(|| {
-                self.render_zepi_plain_output(markdown.clone(), entry_ix, context_ix, tool_call, markdown_style.clone(), cx)
+                self.render_zepi_plain_output(markdown.clone(), entry_ix, context_ix, markdown_style.clone(), cx)
             })
             .unwrap_or_else(|| {
                 self.render_markdown(markdown, markdown_style, cx)
@@ -13066,7 +13071,6 @@ impl ThreadView {
         markdown: Entity<Markdown>,
         entry_ix: usize,
         context_ix: usize,
-        tool_call: &ToolCall,
         markdown_style: MarkdownStyle,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
@@ -13194,9 +13198,12 @@ impl ThreadView {
 
     fn render_subagent_tool_call(
         &self,
+        active_session_id: &acp_v2::SessionId,
         entry_ix: usize,
         tool_call: &ToolCall,
         subagent_session_id: Option<acp_v2::SessionId>,
+        focus_handle: &FocusHandle,
+        window: &Window,
         cx: &Context<Self>,
     ) -> Div {
         let subagent_thread_view = subagent_session_id.and_then(|session_id| {
@@ -13211,17 +13218,27 @@ impl ThreadView {
             subagent_thread_view.map(|view| view.read(cx).thread.read(cx)),
             cx,
         );
-        let content =
-            self.render_subagent_card(entry_ix, &state, subagent_thread_view, cx);
+        let content = self.render_subagent_card(
+            active_session_id,
+            entry_ix,
+            &state,
+            subagent_thread_view,
+            focus_handle,
+            window,
+            cx,
+        );
 
         v_flex().mx_5().my_1p5().gap_3().child(content)
     }
 
     fn render_subagent_card(
         &self,
+        active_session_id: &acp_v2::SessionId,
         entry_ix: usize,
         state: &SubagentCardState,
         thread_view: Option<&Entity<ThreadView>>,
+        focus_handle: &FocusHandle,
+        window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
         let thread = thread_view
@@ -13502,6 +13519,32 @@ impl ThreadView {
                         )
                     }),
             )
+            .when_some(thread_view, |this, thread_view| {
+                // A child waiting for permission is otherwise unanswerable from its card.
+                let thread = &thread_view.read(cx).thread;
+                let child_session_id = thread.read(cx).session_id();
+                let pending = self
+                    .conversation
+                    .read(cx)
+                    .pending_tool_call(child_session_id, cx);
+                if state.status == SubagentStatus::Running
+                    && let Some((_, tool_call_id, _)) = pending
+                    && let Some((call_ix, tool_call)) = thread.read(cx).tool_call(&tool_call_id)
+                {
+                    this.child(Divider::horizontal().color(DividerColor::Border))
+                        .child(thread_view.read(cx).render_any_tool_call(
+                            active_session_id,
+                            call_ix,
+                            tool_call,
+                            focus_handle,
+                            ToolCallLayout::Embedded,
+                            window,
+                            cx,
+                        ))
+                } else {
+                    this
+                }
+            })
             .when_some(error_message, |this, message| {
                 this.child(
                     div().px_3().py_2().child(

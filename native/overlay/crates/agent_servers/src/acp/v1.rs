@@ -1027,7 +1027,7 @@ impl AcpConnection {
             }
         });
         let thread = cx.new(|cx| {
-            let mut thread = AcpThread::new(
+            let thread = AcpThread::new(
                 parent_session_id,
                 title,
                 Some(work_dirs),
@@ -1547,7 +1547,7 @@ fn zepi_send_next(&self, params: acp_v2::PromptRequest, cx: &mut App) -> Task<Re
                 .and_then(|meta| meta.get("zepiCommands"))
                 .and_then(|value| serde_json::from_value::<Vec<acp::AvailableCommand>>(value.clone()).ok());
             let thread: Entity<AcpThread> = cx.new(|cx| {
-                let mut thread = AcpThread::new(
+                let thread = AcpThread::new(
                     parent_session_id,
                     None,
                     Some(work_dirs),

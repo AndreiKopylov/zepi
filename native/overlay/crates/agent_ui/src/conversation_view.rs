@@ -29,8 +29,8 @@ use fs::Fs;
 use futures::FutureExt as _;
 use gpui::{
     Action, Animation, AnimationExt, App, ClickEvent, ClipboardItem, CursorStyle, ElementId, Empty,
-    Entity, EventEmitter, FocusHandle, Focusable, Hsla, ListOffset, ListState, ObjectFit,
-    PlatformDisplay, ScrollHandle, SharedString, StyledText, Subscription, Task, TextRun,
+    Entity, EventEmitter, FocusHandle, Focusable, Hsla, ListOffset, ListState,
+    PlatformDisplay, SharedString, StyledText, Subscription, Task, TextRun,
     TextStyle, WeakEntity, Window, WindowHandle, div, ease_in_out, img, linear_color_stop,
     linear_gradient, list, pulsating_between,
 };
@@ -21663,8 +21663,7 @@ pub(crate) mod tests {
             );
         });
 
-        // The expanded card renders the subagent's own view of the message, a row that
-        // names the parent.
+        // The card stays a header row; the message it links to stays in the subagent's view.
         child
             .update(cx, |child, cx| {
                 child.upsert_session_message(
@@ -21676,12 +21675,6 @@ pub(crate) mod tests {
                 )
             })
             .expect("incoming message");
-        thread_view.update(cx, |view, cx| {
-            view.entry_view_state.update(cx, |state, _| {
-                state.toggle_session_message_card_expansion(&acp_v2::MessageId::new("launch"))
-            });
-            cx.notify();
-        });
         cx.run_until_parked();
         assert!(cx.debug_bounds("subagent-card-0").is_some());
     }
@@ -21824,29 +21817,15 @@ pub(crate) mod tests {
             "the unlinked message is drawn as a row"
         );
 
-        let parent_view = active_thread(&conversation_view, cx);
         let child_view = conversation_view
             .read_with(cx, |view, _| view.thread_view(&child_session_id))
             .expect("subagent view");
         let child_scroll_top = |cx: &mut VisualTestContext| {
             child_view.read_with(cx, |view, _| view.list_state.logical_scroll_top())
         };
-        let open_fullscreen = |message_id: &str,
-                               selector: &'static str,
-                               cx: &mut VisualTestContext| {
+        let open_fullscreen = |selector: &'static str, cx: &mut VisualTestContext| {
             conversation_view.update_in(cx, |view, window, cx| {
                 view.navigate_to_thread(root_session_id.clone(), window, cx)
-            });
-            parent_view.update(cx, |view, cx| {
-                view.entry_view_state.update(cx, |state, _| {
-                    if !state.is_session_message_card_expanded(&acp_v2::MessageId::new(message_id))
-                    {
-                        state.toggle_session_message_card_expansion(&acp_v2::MessageId::new(
-                            message_id,
-                        ));
-                    }
-                });
-                cx.notify();
             });
             cx.run_until_parked();
             let toggle = cx.debug_bounds(selector).expect("full screen button");
@@ -21856,7 +21835,7 @@ pub(crate) mod tests {
         };
 
         child_view.update(cx, |view, cx| view.scroll_to_entry(4, cx));
-        open_fullscreen("follow-up", "subagent-fullscreen-1", cx);
+        open_fullscreen("subagent-fullscreen-1", cx);
         assert_eq!(
             child_scroll_top(cx).item_ix,
             2,
@@ -21864,7 +21843,7 @@ pub(crate) mod tests {
         );
 
         child_view.update(cx, |view, cx| view.scroll_to_entry(3, cx));
-        open_fullscreen("retry", "subagent-fullscreen-2", cx);
+        open_fullscreen("subagent-fullscreen-2", cx);
         assert_eq!(
             child_scroll_top(cx).item_ix,
             3,

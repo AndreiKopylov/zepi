@@ -26,7 +26,8 @@ All notable changes to Zepi are documented here. The format follows
   keeps its slot in every state - `Queued · waiting to start`, the live step while running
   (`Working · 5 steps · powershell · …`), `Completed · 60.8s · … tokens · $…`. The role/model
   line no longer changes when a run ends, so cards stop resizing; Open (full screen) sits in
-  the header next to Stop, and failures keep their error under the header.
+  the header next to Stop, a child that is waiting for permission still shows that prompt in
+  its card, and failures keep their error under the header.
 
 ### Fixed
 

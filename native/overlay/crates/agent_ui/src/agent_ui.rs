@@ -63,9 +63,6 @@ use gpui::{
 use language::{
     LanguageRegistry,
 };
-use language_model::{
-    LanguageModel, LanguageModelRegistry,
-};
 use project::{AgentId, Project, ProjectPath};
 use prompt_store::{self, PromptBuilder};
 use rope::Point;
@@ -631,21 +628,6 @@ impl ManageProfiles {
     }
 }
 
-#[derive(Clone)]
-pub(crate) enum ModelUsageContext {
-    InlineAssistant,
-}
-
-impl ModelUsageContext {
-    pub fn model(&self, cx: &App) -> Option<LanguageModel> {
-        match self {
-            Self::InlineAssistant => {
-                LanguageModelRegistry::read_global(cx).inline_assistant_model()
-            }
-        }
-    }
-}
-
 pub(crate) fn humanize_token_count(count: u64) -> String {
     match count {
         0..=999 => count.to_string(),
@@ -739,9 +721,10 @@ mod tests {
     use super::*;
     use agent_settings::{AgentProfileId, AgentSettings};
     use command_palette_hooks::CommandPaletteFilter;
-    use db::kvp::KeyValueStore;
     use editor::actions::AcceptEditPrediction;
+    use feature_flags::FeatureFlagAppExt as _;
     use gpui::{BorrowAppContext, TestAppContext, px};
+    use language::language_settings::{AllLanguageSettings, EditPredictionProvider};
     use project::DisableAiSettings;
     use settings::{
         DockPosition, NotifyWhenAgentWaiting, PlaySoundWhenAgentDone, Settings, SettingsStore,

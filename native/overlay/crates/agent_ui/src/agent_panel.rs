@@ -11,7 +11,7 @@ use std::{
 };
 
 use acp_thread::{AcpThread, AcpThreadEvent, MentionUri, line_range_suffix};
-use agent::{ContextServerRegistry, SharedThread, ThreadStore};
+use agent::{SharedThread, ThreadStore};
 use agent_client_protocol::v2::schema as acp_v2;
 use agent_servers::AgentServer;
 use collections::HashSet;
