@@ -5,7 +5,7 @@ use std::{env, path::{Path, PathBuf}};
 /// Called from main before the application starts threads or resolves resources.
 /// A bundle carries code/resources only; all mutable state lives in user storage.
 /// Product version shown in the About window and by the installer.
-pub const PRODUCT_VERSION: &str = "0.0.5";
+pub const PRODUCT_VERSION: &str = "0.0.6";
 
 // Assign this process to a job with KILL_ON_JOB_CLOSE so the OS terminates
 // leftover children (language servers, agents, terminals) on any exit path.
@@ -37,7 +37,7 @@ fn reap_descendants_on_exit() {
         let assigned = configured && AssignProcessToJobObject(job, GetCurrentProcess()).is_ok();
         if assigned {
             // Closing the handle now would terminate our own tree via KILL_ON_JOB_CLOSE.
-            std::mem::forget(job);
+            let _ = job;
         } else {
             let _ = CloseHandle(job);
         }

@@ -51,7 +51,7 @@ use node_runtime::{NodeBinaryOptions, NodeRuntime};
 use parking_lot::Mutex;
 use project::{project_settings::ProjectSettings, trusted_worktrees};
 use recent_projects::{RemoteSettings, open_remote_project};
-use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
+use release_channel::{AppCommitSha, AppVersion};
 use session::{AppSession, Session};
 use settings::{BaseKeymap, Settings, SettingsStore, watch_config_file};
 use smol::future::poll_once;
@@ -99,10 +99,12 @@ fn visible_window_count() -> usize {
         fn GetWindowThreadProcessId(h: HWND, pid: *mut u32) -> u32;
     }
     unsafe extern "system" fn cb(hwnd: HWND, l: LPARAM) -> BOOL {
-        let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        if pid == std::process::id() && IsWindowVisible(hwnd) != 0 {
-            *(l as *mut usize) += 1;
+        unsafe {
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid == std::process::id() && IsWindowVisible(hwnd) != 0 {
+                *(l as *mut usize) += 1;
+            }
         }
         1
     }
@@ -356,7 +358,7 @@ fn main() {
             app_version,
             app_commit_sha,
             *release_channel::RELEASE_CHANNEL,
-            client::telemetry::os_name(),
+            client::telemetry::guessed_os_name(),
             client::telemetry::os_version(),
         );
         println!("Zed System Specs (from CLI):\n{}", system_specs);
@@ -868,6 +870,7 @@ fn main() {
         tab_switcher::init(cx);
         outline::init(cx);
         call_hierarchy::init(cx);
+        project_bookmarks::init(cx);
         project_symbols::init(cx);
         project_panel::init(cx);
         outline_panel::init(cx);
@@ -1354,8 +1357,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                                         sha,
                                         repo.downgrade(),
                                         workspace.weak_handle(),
-                                        None,
-                                        None,
+                                        Default::default(),
                                         window,
                                         cx,
                                     );

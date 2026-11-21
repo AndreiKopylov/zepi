@@ -114,18 +114,26 @@ def main():
 
     def workspace_deps(text):
         result = {}
-        inside = False
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped == '[workspace.dependencies]':
-                inside = True
-                continue
-            if inside and stripped.startswith('['):
+        lines = text.splitlines()
+        index = 0
+        while index < len(lines) and lines[index].strip() != '[workspace.dependencies]':
+            index += 1
+        index += 1
+        while index < len(lines):
+            stripped = lines[index].strip()
+            if stripped.startswith('['):
                 break
-            if inside:
-                match = re.match(r'([A-Za-z0-9_-]+)\s*=', stripped)
-                if match:
-                    result[match.group(1)] = stripped
+            match = re.match(r'([A-Za-z0-9_-]+)\s*=\s*(.+)', stripped)
+            if not match:
+                index += 1
+                continue
+            entry = stripped
+            # Multiline values (features = [ ... ]) run until brackets balance.
+            while entry.count('[') != entry.count(']') and index + 1 < len(lines):
+                index += 1
+                entry += ' ' + lines[index].strip()
+            result[match.group(1)] = entry
+            index += 1
         return result
 
     new_members, overlay_members = members(new_root_toml), members(overlay_root)
@@ -133,11 +141,10 @@ def main():
     new_deps, overlay_deps = workspace_deps(new_root_toml), workspace_deps(overlay_root)
     missing_deps = [overlay_deps[key] for key in overlay_deps if key not in new_deps]
     merged = new_root_toml
-    # Insert at the section tail, not after the header: 1.29 opens the section with a
-    # multiline `features = [` array, so inserting at the head corrupts it.
+    # Insert once at the section tail: values may be multiline, so the tail must be
+    # the next section header, and entries are joined single-line by workspace_deps.
     if missing_deps:
         head = merged.index('[workspace.dependencies]')
-        # first line starting a new section, not any '[' (the section holds multiline arrays)
         tail_match = re.search(r'(?m)^\[', merged[head + 1:])
         tail = head + 1 + (tail_match.start() if tail_match else 0)
         merged = merged[:tail] + NL.join(missing_deps) + NL + merged[tail:]
@@ -146,8 +153,6 @@ def main():
         merged = merged.replace('resolver = "2"', 'resolver = "2"' + NL + exclude_match.group(0), 1)
     if extra_members:
         merged = re.sub(r'members = \[', 'members = [' + NL + '    ' + (',' + NL + '    ').join('"' + m + '"' for m in extra_members) + ',', merged, count=1)
-    if missing_deps:
-        merged = merged.replace('[workspace.dependencies]', '[workspace.dependencies]' + NL + NL.join(missing_deps), 1)
     (tree / 'Cargo.toml').write_text(merged, encoding='utf-8')
     # Keep the new Zed lock: incremental resolution preserves its pins (merman and friends)
     # and only adds what the zepi crates need.

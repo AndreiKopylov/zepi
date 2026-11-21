@@ -16,6 +16,8 @@ export async function policyRemote() {
   let names = ['ping', 'slow', 'progress'];
   let initialized = 0;
   let announceTools = false;
+  let listedResolve!: () => void;
+  const firstList = new Promise<void>(resolve => {listedResolve = resolve;});
   const http = createServer(async (req, res) => {
     if (mode === 'unauthorized') {res.writeHead(401, {'www-authenticate':'Bearer'}).end(); return;}
     if (req.method === 'GET') {res.writeHead(405).end(); return;}
@@ -26,7 +28,7 @@ export async function policyRemote() {
     if (mode === 'hang-open' && message.method === 'initialize') {streams.add(res); res.on('close', () => streams.delete(res)); return;}
     let result: unknown = {};
     if (message.method === 'initialize') {initialized++; result = {protocolVersion:'2025-03-26', capabilities:{tools:{listChanged:true}}, serverInfo:{name:'Zepi policy fixture', version:'1'}, instructions:'Use these local fixtures for policy tests.'};}
-    if (message.method === 'tools/list') result = {tools: (mode === 'bad-catalog' ? ['ping','ping'] : names).map(name => ({name, description:`${name} fixture marker`, inputSchema:{type:'object', properties:{}}}))};
+    if (message.method === 'tools/list') {listedResolve(); result = {tools: (mode === 'bad-catalog' ? ['ping','ping'] : names).map(name => ({name, description:`${name} fixture marker`, inputSchema:{type:'object', properties:{}}}))};}
     if (message.method === 'tools/call') {
       calls.push(message.params.name);
       result = {content:[{type:'text', text:`${message.params.name} fixture reached`}]};
@@ -59,7 +61,7 @@ export async function policyRemote() {
   await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
   const address = http.address(); if (!address || typeof address === 'string') throw new Error('Missing fixture port');
   return {
-    url:`http://127.0.0.1:${address.port}/mcp`, calls, streams, initialized:()=>initialized,
+    url:`http://127.0.0.1:${address.port}/mcp`, calls, streams, initialized:()=>initialized, firstList,
     mode(value:typeof mode) {mode = value;}, tools(value:string[]) {names = value;},
     changeTools(value:string[]) {names = value; announceTools = true;},
     async close() {for (const timer of timers) clearInterval(timer); for (const stream of streams) stream.end(); http.closeAllConnections(); await new Promise<void>(resolve => http.close(() => resolve()));},

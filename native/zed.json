@@ -1,9 +1,9 @@
 {
   "repository": "https://github.com/zed-industries/zed",
-  "tag": "v1.28.1",
-  "commit": "e8bc16acee5ae1937600d571d441c4b5d7b0d288",
-  "archiveUrl": "https://codeload.github.com/zed-industries/zed/tar.gz/e8bc16acee5ae1937600d571d441c4b5d7b0d288",
-  "archiveName": "zed-e8bc16a.tar.gz",
-  "sha256": "f33d4592a0948e56aa4e78c9cd71c0a8eff3e8c4546f5bbd01e99f610c325397",
+  "tag": "v1.29.3",
+  "commit": "d01b134cddf5e4f71964deb2d6f81cdb38fcf1e7",
+  "archiveUrl": "https://codeload.github.com/zed-industries/zed/tar.gz/d01b134cddf5e4f71964deb2d6f81cdb38fcf1e7",
+  "archiveName": "zed-d01b134.tar.gz",
+  "sha256": "efbd7a2eec84a60f90964ef4fa90a033e0adaec4af0583063e157fcb44373306",
   "rust": "1.98.1"
 }

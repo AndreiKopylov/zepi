@@ -4,6 +4,42 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.6] - 2026-11-21
+
+### Changed
+
+- Zed base updated from v1.28.1 to v1.29.3 (same Rust 1.98.1): the overlay was ported with
+  the 3-way merge tooling (21 touched upstream files, 6 conflict hunks), adopting the upstream
+  `IntoElement` blanket impl, the padding-aware list re-measure, `root_thread_is_waiting_for_input`
+  for the sidebar thread status and the reworked thread-controls copy button
+  (`agent_message_copy_index` + `CopyButton`), while keeping the zepi resize debounce, the
+  subagent copy fallback and all zepi behavior.
+- Agent file references: when a reply points at a specific place, the link must carry the line
+  (`#L<line>` or `:<line>`); a bare path is only for the file as a whole, never a path plus a
+  line number mentioned separately in prose.
+- Git panel selection reads at a glance: the selected entry is tinted with four times more alpha
+  over `status.info` (0.08 -> 0.25) for both status and directory rows, so the row no longer sinks
+  into the panel background. Hover and active states scale with it; the marked (multi-select) tint
+  stays a separate step.
+
+### Fixed
+
+- Spreadsheet in-cell Ctrl+Z works again and matches Excel: one press reverts the whole cell
+  edit (text, caret and rich runs) instead of doing nothing. The snapshot is taken when editing
+  starts and lives until Enter/Esc, so typing after an undo can be reverted again.
+- Agent file references now point at the line they talk about. The reply style asks for
+  `path:line` / `#L<line>` on every reference to a specific place and forbids the shape it kept
+  falling back to, a bare path with the line named in prose (`` `x.cs` (и `:23`) ``), which opened
+  only the file.
+- Spreadsheet in-cell text selection no longer sticks when dragging bottom-up: a duplicate
+  mouse-move handler on the grid recomputed the caret from the cell rect while the edit canvas
+  is offset by the border and vertical alignment, overwriting the overlay's correct caret and
+  desyncing the highlight. The grid handler now leaves in-cell drags to the edit overlay.
+- Subagent roles with `mcp:` tool selectors start again on pi 1.6.0: MCP registrations settle
+  in the background now, so the strict role check moved from session creation to the first
+  prompt, inside the adapter's MCP turn boundary. A misconfigured role still fails, at that
+  first prompt instead of creation.
+
 ## [0.0.5] - 2026-11-21
 
 ### Added

@@ -105,6 +105,8 @@ export function installAgentToolPolicy(session: AgentSession, selectors: string[
   const policy={allows:(name:string)=>allowed.has(name),changed:()=>{readDefaults();refresh();},
     registered:()=>refresh(),reset:()=>{readDefaults();refresh(true);}};
   Object.defineProperty(session,Symbol.for('zepi.pi.tools'),{value:policy});
-  policy.reset();
+  // pi 1.6 registers MCP tools in the background; the strict role check runs at the
+  // first prompt, inside the adapter's MCP turn boundary (see server.ts).
+  readDefaults();refresh(false);
   return policy;
 }
