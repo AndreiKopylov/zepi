@@ -25,6 +25,13 @@ if ((await stat(join(root, 'auth.json')).catch(() => null))) {
   console.error('smoke refuses a live profile dir (auth.json next to the root): point --root at the repo or a deploy bundle.');
   process.exit(2);
 }
+// Suites import pi from packages node_modules: only a dev deploy (deploy-bundle.ps1 +
+// sync-acp-modules.ps1) carries them; installer staging cuts them on purpose.
+if (!isRepo && !(await stat(join(root, 'packages/acp/node_modules/@earendil-works/pi-coding-agent/package.json')).catch(() => null))) {
+  console.error('smoke needs a dev bundle: run scripts/deploy-bundle.ps1 (it mirrors packages/{acp,runtime}/node_modules).');
+  console.error('the installer staging cuts node_modules and the test tree; the product runs settings/extensions as agent.exe subcommands.');
+  process.exit(2);
+}
 const step = (name) => console.log(`\n### smoke: ${name}`);
 const ok = (name) => console.log(mask(`ok - ${name}`));
 const fail = (name, why) => { failed++; console.log(mask(`FAIL - ${name}: ${why}`)); };
@@ -74,10 +81,12 @@ try {
   // Suites must not see machine credentials: drop every key-like variable, not a hardcoded list.
   const env = {...process.env};
   for (const key of Object.keys(env)) if (/api[_-]?key|auth[_-]?token|secret|private[_-]?key/i.test(key)) delete env[key];
-  const run = spawnSync('npx', ['tsx', '--test', ...suites], {cwd: root, env, shell: true, stdio: 'pipe', encoding: 'utf8', timeout: 600_000});
+  // Run with bun like test:acp: node/tsx trips on one fixture subtest, bun does not.
+  const run = spawnSync('bun', ['test', ...suites], {cwd: root, env, shell: true, stdio: 'pipe', encoding: 'utf8', timeout: 600_000});
   const out = run.stdout + run.stderr;
-  const pass = out.match(/# pass (\d+)/)?.[1] ?? '?';
-  const failedNames = out.split('\n').filter((l) => l.startsWith('not ok')).map((l) => l.replace(/^not ok \d+ - /, '').trim());
+  const pass = out.match(/(\d+) pass/)?.[1] ?? '?';
+  const failedNames = out.split('\n').filter((l) => l.startsWith('(fail)')).map((l) => l.replace(/^\(fail\)\s*/, '').replace(/\s*\[\d+.*\]$/, '').trim());
+  if (run.status !== 0 && !failedNames.length) throw new Error(mask(out.slice(-500)));
   if (failedNames.length) throw new Error(mask(`failures (${failedNames.length}):\n` + failedNames.map((n) => `  - ${n}`).join('\n')));
   ok(`${pass} tests pass`);
 } catch (error) { fail('suites', String(error?.message ?? error)); }

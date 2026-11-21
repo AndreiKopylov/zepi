@@ -446,6 +446,7 @@ pub struct SheetView {
     edit_buffer: String,
     edit_caret: usize,
     edit_sel_anchor: Option<usize>,
+    edit_undo: Option<(String, usize, Option<usize>, Vec<RichRun>)>,
     search_open: bool,
     search_editor: Option<Entity<Editor>>,
     cell_editor: Option<Entity<Editor>>,
@@ -506,6 +507,7 @@ impl SheetView {
             edit_buffer: String::new(),
             edit_caret: 0,
             edit_sel_anchor: None,
+            edit_undo: None,
             search_open: false,
             search_editor: None,
             cell_editor: None,
@@ -1209,6 +1211,7 @@ impl SheetView {
             found.unwrap_or_else(|| vec![RichRun { text: text.clone(), ..Default::default() }])
         };
         self.edit_prev = text.clone();
+        self.edit_undo = Some((text.clone(), self.edit_caret, self.edit_sel_anchor, self.edit_runs.clone()));
         self.editing = true;
         let fh = self.focus_handle.clone();
         window.on_next_frame(move |window, cx| { window.focus(&fh, cx); });
@@ -1222,6 +1225,7 @@ impl SheetView {
         }
         let text = self.edit_buffer.clone();
         self.cell_editor = None;
+        self.edit_undo = None;
         self.editing = false;
         self.refocus_root = true;
         self.caret_task = None;
@@ -1264,6 +1268,7 @@ impl SheetView {
             return;
         }
         self.cell_editor = None;
+        self.edit_undo = None;
         self.edit_buffer.clear();
         self.edit_caret = 0;
         self.edit_sel_anchor = None;
@@ -1369,6 +1374,18 @@ impl SheetView {
                     return true;
                 }
                 "v" => { if let Some(item) = cx.read_from_clipboard() { if let Some(t) = item.text() { self.edit_insert(&t, cx); } } return true; }
+                // Excel-style in-cell Ctrl+Z reverts the whole cell edit in one step
+                "z" if !m.shift => {
+                    if let Some((text, caret, anchor, runs)) = self.edit_undo.clone() {
+                        self.edit_buffer = text.clone();
+                        self.edit_prev = text;
+                        self.edit_caret = caret;
+                        self.edit_sel_anchor = anchor;
+                        self.edit_runs = runs;
+                        cx.notify();
+                    }
+                    return true;
+                }
                 _ => return false,
             }
         }

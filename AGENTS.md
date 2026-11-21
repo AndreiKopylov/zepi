@@ -1,6 +1,6 @@
 # AGENTS.md — zepi
 
-Windows port of zepi: an AI workspace on top of Zed v1.28.1 (pin in `native/zed.json`) with the
+Windows port of zepi: an AI workspace on top of Zed v1.29.3 (pin in `native/zed.json`) with the
 pi 1.6.0 agent (ACP) and office document viewers (xlsx with editing, docx, pptx) on vendored
 crafts. Rust (gpui) + TypeScript (pi layer). See README.md for the human-readable intro.
 
@@ -39,7 +39,7 @@ zepi/
 
 ## Stack
 
-- Native: Rust 1.98.1, Zed v1.28.1 (tarball by pin, sha256 verified), gpui; `release-fast` cargo
+- Native: Rust 1.98.1, Zed v1.29.3 (tarball by pin, sha256 verified), gpui; `release-fast` cargo
   profile (debug is unusable: laggy UI); `release-installer` (strip, thin-LTO) for the installer only;
   target dir outside the repo. Auto-update rides Zed's mechanism (GitHub releases/latest redirect,
   detached non-silent Inno installer). Version single source: `PRODUCT_VERSION` in `zepi_runtime.rs`.
@@ -76,6 +76,11 @@ scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PR
 - zepi_ui has `#[cfg(test)]` units; first run builds the Zed dev chain (~40 min), run on demand.
 - After medium or large changes, offer to run `npm run smoke -- --root <bundle>` (`--full` for
   preview/shell or `packages/acp/helpers`). Propose only; never before a build or without a go-ahead.
+  The smoke needs a **dev bundle**: `deploy-bundle.ps1` mirrors `packages/{acp,runtime}/node_modules`
+  via `sync-acp-modules.ps1` and copies the full `packages/acp/adapter`; the suites run with `bun test`
+  like `test:acp` (node/tsx trips on one fixture subtest). The smoke fails fast (exit 2) on an
+  installer-style root: the shipped product carries no packages node_modules and runs
+  settings/extensions as `agent.exe` subcommands, so only a dev deploy is smoke-checkable.
 
 ## Conventions
 
@@ -101,6 +106,10 @@ scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PR
   `zepi_runtime::prepare_settings`, and the live user keymap.json of existing profiles.
 - Bundle sync only via `robocopy /XJ` (symlink packages/runtime/node_modules/zepi recurses);
   in Git Bash double the slashes (`//MIR //XJ`).
+- Smoke vs installer layout: `build-installer.ps1` cuts packages node_modules, `acp/{adapter,test}`
+  and `runtime/bin/pi-{settings,extensions}.mjs` on purpose (agent.exe subcommands replace them);
+  never "fix" a missing-node_modules failure on a shipped bundle by syncing repo node_modules into
+  it — run the smoke against a dev deploy instead.
 - Installed bundle state lives in `%LOCALAPPDATA%\Zepi\{zed,pi}`; a dev build with an
   `zepi-root.txt` marker next to the exe keeps state next to the exe.
 - Excel holds open xlsx files with a sharing lock: writes fail with os error 32 and surface as the

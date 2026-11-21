@@ -320,18 +320,9 @@ impl gpui::Render for SheetView {
                     cx.notify();
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                if this.editing && this.edit_drag {
-                    if let Some((l, t, w, h)) = this.edit_rect_cache {
-                        let gx = f32::from(event.position.x - this.grid_origin.x);
-                        let gy = f32::from(event.position.y - this.grid_origin.y);
-                        if gx >= l && gx <= l + w && gy >= t && gy <= t + h {
-                            this.edit_caret = this.click_caret(gx - l, gy - t, w, window, cx);
-                            cx.notify();
-                        }
-                    }
-                    return;
-                }
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                // in-cell caret drags belong to the edit overlay, whose canvas origin
+                // differs from the cell rect by the border and vertical alignment
                 if !this.drag_select {
                     return;
                 }
