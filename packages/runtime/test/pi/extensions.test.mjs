@@ -139,6 +139,24 @@ test("extension lock serializes startup, prevents overlapping mutations and reco
   } finally {await rm(dir, {recursive:true, force:true});}
 });
 
+test('MCP add merges one snippet, refuses clashes and stale revisions', async()=> {
+  const dir=await mkdtemp(join(tmpdir(),'zepi-mcp-add-'));
+  const center=createExtensionCenter(dir);
+  try {
+    await center.execute({operation:'mcp-save',text:JSON.stringify({mcpServers:{keep:{command:'node'}}})});
+    const before=await center.execute({operation:'mcp-read'});
+    const added=await center.execute({operation:'mcp-add',text:JSON.stringify({docs:{url:'https://example.invalid/mcp'}}),revision:before.revision});
+    assert.deepEqual(added.mcp.filter(s=>!s.builtin).map(s=>s.name).sort(),['docs','keep']);
+    const stored=JSON.parse(await readFile(join(dir,'mcp.json'),'utf8'));
+    assert.equal(stored.mcpServers.keep.command,'node');
+    assert.equal(stored.mcpServers.docs.url,'https://example.invalid/mcp');
+    await assert.rejects(center.execute({operation:'mcp-add',text:JSON.stringify({keep:{command:'node'}})}),/already configured/);
+    await assert.rejects(center.execute({operation:'mcp-add',text:'not json'}));
+    await assert.rejects(center.execute({operation:'mcp-add',text:JSON.stringify({other:{command:'node'}}),revision:'stale'}),/changed/);
+    assert.deepEqual(JSON.parse(await readFile(join(dir,'mcp.json'),'utf8')),stored);
+  }finally {await rm(dir,{recursive:true,force:true});}
+});
+
 test('MCP follows pi enabled, env interpolation and validation without resolving secrets during inspection', async()=> {
   const dir=await mkdtemp(join(tmpdir(),'zepi-mcp-config-'));
   const center=createExtensionCenter(dir);

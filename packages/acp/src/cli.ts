@@ -42,7 +42,9 @@ if (subcommand === "pi-settings" || subcommand === "pi-extensions") {
       const result = await createPiSettings().execute(input.trim() ? JSON.parse(input) : {});
       process.stdout.write(JSON.stringify({ ok: true, data: result }));
     } catch (error) {
-      const message = error instanceof PiConfigError ? error.message : "Unable to update pi settings. Check file formats and permissions.";
+      const detail = error instanceof Error ? error.message : String(error);
+      const message = error instanceof PiConfigError ? error.message
+        : `Unable to update pi settings: ${detail || "check file formats and permissions"}`;
       process.stdout.write(JSON.stringify({ ok: false, error: message }));
       process.exitCode = 1;
     }

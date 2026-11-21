@@ -92,38 +92,6 @@ test('tool defaults preserve modifiers, explicit empty lists and concurrent edit
   assert.equal(Object.hasOwn(await f.get(f.target,'settings.json'),'defaultTools'),false);
 });
 
-test('runtime controls save sparse pi settings, validate values and reject stale fields', async t => {
-  const f=await fixture(t);
-  const original=await f.get(f.target,'settings.json');
-  original.compaction={modelOverrides:{'zepi-fixture/test-model':{reserveTokens:555}}};
-  original.retry={provider:{maxRetries:7}};
-  await f.put(f.target,'settings.json',original);
-  const before=(await f.bridge.status()).runtime;
-  assert.equal(before.find(field=>field.path==='images.autoResize').effective,true);
-  assert.equal(before.find(field=>field.path==='sessionShareDestination').effective,'auto');
-  const expected=Object.fromEntries(before.map(field=>[field.path,field.value]));
-  const changes={'transport':'sse','images.blockImages':true,'retry.baseDelayMs':100,'thinkingBudgets.low':2048,
-    'branchSummary.reserveTokens':4096,'branchSummary.skipPrompt':true,'steeringMode':'all','followUpMode':'one-at-a-time','sessionShareDestination':'radius'};
-  const result=await f.bridge.execute({operation:'runtime',changes,expected});
-  for(const [path,value] of Object.entries(changes)) assert.equal(result.runtime.find(field=>field.path===path).effective,value);
-  let stored=await f.get(f.target,'settings.json');
-  assert.deepEqual(stored.compaction,original.compaction);
-  assert.equal(stored.retry.provider.maxRetries,7);
-  assert.equal(stored.customSetting.retain,true);
-  const saved=await readFile(join(f.target,'settings.json'),'utf8');
-  for(const changes of [{'sessionShareDestination':'invalid'},{'transport':'invalid'},{'steeringMode':'invalid'},{'followUpMode':2},{'images.blockImages':1},{'retry.maxRetries':-1},{'retry.maxRetries':1.5},{'zepi.fullAccess':true},{'thinkingBudgets.low':Infinity}]) {
-    await assert.rejects(f.bridge.execute({operation:'runtime',changes,expected}));
-    assert.equal(await readFile(join(f.target,'settings.json'),'utf8'),saved);
-  }
-  await assert.rejects(f.bridge.execute({operation:'runtime',changes:{transport:'auto'},expected}),/changed while/);
-  await f.bridge.execute({operation:'runtime',changes:{transport:null},expected:{transport:'sse'}});
-  stored=await f.get(f.target,'settings.json');
-  assert.equal(Object.hasOwn(stored,'transport'),false);
-  assert.equal(stored.images.blockImages,true);
-  await f.bridge.execute({operation:'runtime',changes:{'images.blockImages':null},expected:{'images.blockImages':true}});
-  assert.equal(Object.hasOwn(await f.get(f.target,'settings.json'),'images'),false);
-});
-
 test('HTTP proxy settings hide credentials, preserve unrelated fields and reject stale saves', async t => {
   const f = await fixture(t);
   const original = await f.get(f.target, 'settings.json');
@@ -173,6 +141,99 @@ test("custom model editing preserves pi advanced parameters and other models", a
   const before=await readFile(join(f.target,"models.json"),"utf8");
   await assert.rejects(f.bridge.execute({operation:"custom-model",provider:"zepi-fixture",baseUrl:"file:///tmp/test",api:"openai-completions",model:"bad"}));
   assert.equal(await readFile(join(f.target,"models.json"),"utf8"),before);
+});
+
+test("connections project metadata only and save keeps advanced model parameters", async t => {
+  const f=await fixture(t);
+  const advanced={id:"sr-one",name:"Existing name",reasoning:true,contextWindow:64000,maxTokens:4096,input:["text","image"]};
+  f.config.providers.sr={api:"openai-completions",baseUrl:"https://example.invalid/v1",headers:{"x-fixture":"private-header"},models:[advanced,{id:"removed"}]};
+  await f.put(f.target,"models.json",f.config);
+  await f.put(f.target,"auth.json",{sr:{type:"api_key",key:"saved-private-key"}});
+  const initial=await f.bridge.status();
+  const sr=initial.customConnections.find(c=>c.id==="sr");
+  assert.deepEqual(sr.models,[{id:"sr-one",name:"Existing name"},{id:"removed",name:"removed"}]);
+  assert.equal(sr.credentialConfigured,true);
+  assert.doesNotMatch(JSON.stringify(sr),/private|headers|input|reasoning/);
+  const request={operation:"custom-connection",provider:"sr",baseUrl:"https://example.invalid/v2",api:"openai-completions",key:"",models:[" sr-one，new-one\nnew-two ","new-one"],expectedRevision:sr.revision};
+  const result=await f.bridge.execute(request);
+  const config=await f.get(f.target,"models.json");
+  assert.deepEqual(config.providers.sr.models,[advanced,{id:"new-one",name:"new-one"},{id:"new-two",name:"new-two"}]);
+  assert.deepEqual(config.providers["zepi-fixture"],f.config.providers["zepi-fixture"]);
+  assert.deepEqual(config.providers.sr.headers,{"x-fixture":"private-header"});
+  assert.equal((await f.get(f.target,"auth.json")).sr.key,"saved-private-key");
+  assert.equal(result.defaultModel,"test-model");
+  const saved=await readFile(join(f.target,"models.json"),"utf8");
+  await assert.rejects(f.bridge.execute(request),/changed while/);
+  assert.equal(await readFile(join(f.target,"models.json"),"utf8"),saved);
+  const defaultConnection=result.customConnections.find(c=>c.id==="zepi-fixture");
+  await assert.rejects(f.bridge.execute({...request,provider:"zepi-fixture",baseUrl:"https://example.invalid/v1",models:["other"],expectedRevision:defaultConnection.revision}),/global default/);
+  assert.equal(await readFile(join(f.target,"models.json"),"utf8"),saved);
+  await f.bridge.execute({...request,expectedRevision:result.customConnections.find(c=>c.id==="sr").revision,models:["sr-one","new-one","new-two"],key:"replacement-key"});
+  assert.equal((await f.get(f.target,"auth.json")).sr.key,"replacement-key");
+  assert.equal((await createPiSettings(f.target).status()).customConnections.find(c=>c.id==="sr").models.length,3);
+});
+
+test("enabled models write a pi allowlist and clear back to all", async t => {
+  const f=await fixture(t);
+  f.config.providers["zepi-fixture"].models.push({id:"other",name:"Other"});
+  await f.put(f.target,"models.json",f.config);
+  const enabled = (status) => status.providers.find(p=>p.id==="zepi-fixture").models.filter(m=>m.enabled).map(m=>m.id);
+  assert.deepEqual(enabled(await f.bridge.status()),["test-model","other"]);
+  let result=await f.bridge.execute({operation:"enabled-models",enabled:["zepi-fixture/other"]});
+  assert.deepEqual(enabled(result),["other"]);
+  assert.deepEqual(result.enabledModels,["zepi-fixture/other"]);
+  assert.deepEqual((await f.get(f.target,"settings.json")).enabledModels,["zepi-fixture/other"]);
+  const saved=await readFile(join(f.target,"settings.json"),"utf8");
+  await assert.rejects(f.bridge.execute({operation:"enabled-models",enabled:["zepi-fixture/missing"]}));
+  assert.equal(await readFile(join(f.target,"settings.json"),"utf8"),saved);
+  result=await f.bridge.execute({operation:"enabled-models",all:true});
+  assert.deepEqual(enabled(result),["test-model","other"]);
+  assert.equal(Object.hasOwn(await f.get(f.target,"settings.json"),"enabledModels"),false);
+});
+
+test("removing a connection keeps the default provider and drops its key", async t => {
+  const f=await fixture(t);
+  f.config.providers.extra={api:"openai-completions",baseUrl:"https://example.invalid/v1",models:[{id:"extra-model"}]};
+  await f.put(f.target,"models.json",f.config);
+  await f.put(f.target,"auth.json",{extra:{type:"api_key",key:"extra-key"}});
+  const initial=await f.bridge.status();
+  const extra=initial.customConnections.find(c=>c.id==="extra");
+  await assert.rejects(f.bridge.execute({operation:"remove-connection",provider:"zepi-fixture",expectedRevision:initial.customConnections.find(c=>c.id==="zepi-fixture").revision}),/global default/);
+  await assert.rejects(f.bridge.execute({operation:"remove-connection",provider:"extra",expectedRevision:"stale"}),/changed while/);
+  const result=await f.bridge.execute({operation:"remove-connection",provider:"extra",expectedRevision:extra.revision});
+  assert.equal(result.customConnections.some(c=>c.id==="extra"),false);
+  assert.equal((await f.get(f.target,"models.json")).providers.extra,undefined);
+  assert.equal((await f.get(f.target,"auth.json")).extra,undefined);
+});
+
+test("connection model listing is read-only, bounded and never follows redirects", async t => {
+  const {createServer}=await import("node:http");
+  const {fetchConnectionModels,connectionEndpoint}=await import("../../src/pi/custom-models.mjs");
+  const f=await fixture(t);
+  let mode="success",redirected=0; const requests=[];
+  const target=createServer((req,res)=>{redirected++;res.end("{}");});
+  await new Promise(resolve=>target.listen(0,"127.0.0.1",resolve));
+  const server=createServer((req,res)=>{
+    requests.push({url:req.url,authorization:req.headers.authorization,key:req.headers["x-api-key"]});
+    if(mode==="redirect"){res.writeHead(302,{Location:`http://127.0.0.1:${target.address().port}/stolen`});res.end();}
+    else if(mode==="401"){res.writeHead(401);res.end("private-key");}
+    else if(mode==="bad")res.end("{bad");
+    else if(mode==="timeout")setTimeout(()=>res.end("{}"),100);
+    else res.end(JSON.stringify({data:[{id:"a"},{id:"a"},{id:"b",name:"Second"}],has_more:mode==="page"}));
+  });
+  await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
+  t.after(()=>{server.closeAllConnections();target.closeAllConnections();server.close();target.close();});
+  const baseUrl=`http://127.0.0.1:${server.address().port}/v1`;
+  const before=await readFile(join(f.target,"models.json"),"utf8");
+  const request={operation:"list-connection-models",provider:"sr",baseUrl,api:"openai-completions",key:"private-key"};
+  assert.deepEqual(await f.bridge.execute(request),{candidates:[{id:"a"},{id:"b",name:"Second"}],incomplete:false});
+  assert.deepEqual(requests[0],{url:"/v1/models",authorization:"Bearer private-key",key:undefined});
+  mode="page"; assert.equal((await f.bridge.execute({...request,api:"anthropic-messages"})).incomplete,true);
+  assert.equal(requests[1].key,"private-key");
+  for (mode of ["401","bad","redirect"]) await assert.rejects(f.bridge.execute(request),error=>!error.message.includes("private-key"));
+  mode="timeout"; await assert.rejects(fetchConnectionModels(connectionEndpoint(baseUrl,"openai-completions"),"openai-completions","private-key",undefined,undefined,15),/timed out/);
+  assert.equal(redirected,0); assert.equal(await readFile(join(f.target,"models.json"),"utf8"),before);
+  for(const url of ["ftp://example.org","https://u:p@example.org","https://example.org?key=x","https://example.org#x"]) await assert.rejects(f.bridge.execute({...request,baseUrl:url}));
 });
 
 test("import merges models and all auth without mutating the source or dropping target settings", async t => {

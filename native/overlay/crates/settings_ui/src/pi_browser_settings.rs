@@ -113,7 +113,14 @@ impl PiBrowserSettingsView {
                                 view.update_info = Some(data);
                             }
                             "browse-update" => { view.update_info = None; view.browse = Some(data); view.notice = "browse updated.".into(); }
-                            "browse-settings" | "browse-set" => view.bsettings = Some(data),
+                            "browse-settings" => view.bsettings = Some(data),
+                            "browse-set" => {
+                                let changed: Vec<String> = data["changed"].as_array().into_iter().flatten()
+                                    .filter_map(|item| item["key"].as_str().map(str::to_owned)).collect();
+                                view.notice = if changed.is_empty() { "Setting unchanged.".into() }
+                                    else { format!("Saved: {}.", changed.join(", ")) };
+                                view.bsettings = Some(data);
+                            }
                             "browse-pair" => view.pairing_code = data["code"].as_str().unwrap_or_default().to_owned(),
                             "browse-mcp" => view.notice = "Browser tools mode saved.".into(),
                             _ => {}
@@ -234,12 +241,17 @@ impl Render for PiBrowserSettingsView {
         let installed = self.installed();
         let connected = self.connected();
         let version = browse["versions"]["cli"].as_str().unwrap_or("?");
-        v_flex().id("zepi-pi-browser-settings").size_full().overflow_y_scroll().track_scroll(&self.scroll_handle).px_8().pb_12().gap_6()
-            .child(v_flex().gap_2().pt_4()
-                .child(h_flex().w_full().justify_between().gap_2()
-                    .child(Label::new("Browser"))
-                    .when(!self.notice.is_empty(), |this| this.child(Label::new(self.notice.clone()).size(LabelSize::Small).color(if self.failed { Color::Error } else { Color::Success }))))
+        v_flex().size_full()
+            // Header first, then the status strip, like the rest of the window.
+            .child(v_flex().gap_1().px_8().pt_4()
+                .child(Label::new("Browser"))
                 .child(muted("browse drives your real browser (logins, SSO) via a Chromium extension.")))
+            .child(div().min_h(px(16.)).flex_none().px_8().pt_1().child(Label::new(if self.notice.is_empty() {
+                "browse settings save immediately; a running relay picks them up on its next command.".to_owned()
+            } else { self.notice.clone() }).size(LabelSize::Small).color(if self.notice.is_empty() {
+                Color::Muted
+            } else if self.failed { Color::Error } else { Color::Success })))
+            .child(v_flex().id("zepi-pi-browser-settings").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.scroll_handle).px_8().pb_12().gap_6()
             .child(v_flex().gap_3().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
                 .child(h_flex().w_full().justify_between().items_center()
                     .child(Label::new("Setup"))
@@ -293,7 +305,7 @@ impl Render for PiBrowserSettingsView {
                 .child(self.setting_menu("grouping", "Tab grouping", window, cx))
                 .child(self.setting_menu("window", "Agent tabs window", window, cx))
                 .child(self.setting_menu("idleMinutes", "Idle close (min)", window, cx))
-                .child(self.setting_menu("handoffNotifications", "Handoff notifications", window, cx))))
+                .child(self.setting_menu("handoffNotifications", "Handoff notifications", window, cx)))))
     }
 }
 
