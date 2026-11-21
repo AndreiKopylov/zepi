@@ -175,8 +175,11 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
         };
         installPiCommands(created.session, client, supportsForms, agentDir, supportsNativeUi, () => server.agent.refreshGlobalModelScope());
         const dispatch = created.session.prompt.bind(created.session);
+        let roleChecked = false;
         created.session.prompt = async (...args) => {
-          toolPolicy.changed();
+          // The adapter runs pi.prompt inside the MCP turn boundary, so registrations
+          // have settled here; the strict role check belongs at this first prompt.
+          if (!roleChecked) { roleChecked = true; toolPolicy.reset(); } else toolPolicy.changed();
           try { return await dispatch(...args); } finally { toolPolicy.registered(); }
         };
         return created;

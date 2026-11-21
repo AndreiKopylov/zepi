@@ -35,6 +35,10 @@ All notable changes to Zepi are documented here. The format follows
   mouse-move handler on the grid recomputed the caret from the cell rect while the edit canvas
   is offset by the border and vertical alignment, overwriting the overlay's correct caret and
   desyncing the highlight. The grid handler now leaves in-cell drags to the edit overlay.
+- Subagent roles with `mcp:` tool selectors start again on pi 1.6.0: MCP registrations settle
+  in the background now, so the strict role check moved from session creation to the first
+  prompt, inside the adapter's MCP turn boundary. A misconfigured role still fails, at that
+  first prompt instead of creation.
 
 ## [0.0.5] - 2026-11-21
 

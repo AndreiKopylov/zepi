@@ -473,7 +473,11 @@ test('MCP catalog refresh hides removed tools from scripts and reload preserves 
     context => {assert.match(lastToolText(context,'codemode'),/false/); assert.match(lastToolText(context,'codemode'),/replacement fixture reached/); return 'Current catalog verified.';},
   ]);
   try {
-    const task = await h.newTask(); remote.changeTools(['replacement']);
+    const task = await h.newTask();
+    // The catalog flip announces itself on the next tools/call, so ping must still
+    // be registered when the first script runs: wait for the initial tools/list.
+    await remote.firstList;
+    remote.changeTools(['replacement']);
     assert.equal((await h.prompt(task.sessionId)).stopReason,'end_turn');
     await h.prompt(task.sessionId,'/reload');
     assert.equal((await h.prompt(task.sessionId)).stopReason,'end_turn');
