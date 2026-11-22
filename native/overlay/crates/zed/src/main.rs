@@ -551,6 +551,12 @@ fn main() {
     });
 
     app.run(move |cx| {
+        #[cfg(windows)]
+        cx.set_app_identity(
+            release_channel::app_identifier(),
+            release_channel::RELEASE_CHANNEL.display_name(),
+        );
+
         cx.set_global(app_db);
         let db_trusted_paths = match workspace::WorkspaceDb::global(cx).fetch_trusted_worktrees() {
             Ok(trusted_paths) => trusted_paths,

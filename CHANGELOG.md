@@ -24,6 +24,13 @@ All notable changes to Zepi are documented here. The format follows
   open faster. Explicit row heights are preserved.
 - Right-aligned numbers no longer jump left when edited in place. Copying formatted numbers
   between cells preserves their number format without replacing the destination's visual style.
+- Save All and close prompts now include spreadsheets, including an unfinished cell edit.
+- Spreadsheet undo and redo apply to the sheet where the change was made.
+- Copying cells within Zepi preserves text such as `00123` and text containing tabs or newlines.
+  Pasting can extend the used area and is clipped only at the XLSX row and column limits.
+- The pi agent waits for an active extension operation instead of losing its connection after
+  15 seconds. Empty queues no longer take the startup lock, and pending package changes run at
+  startup or on retry rather than during agent shutdown.
 
 ## [0.0.7] - 2026-11-22
 

@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
 import { renameWithRetry } from "../fs/rename.mjs";
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import lockfile from 'proper-lockfile';
 const revisionOf = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -45,9 +46,17 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
   async function locked(fn, wait = false) {
     await mkdir(directory, {recursive: true, mode: 0o700});
     const lockPath = join(directory, ".extensions.lock");
-    // pi's lock implementation refreshes live operations and recovers crashed owners.
-    const release = await lockfile.lock(lockPath, {realpath: false, stale: 10_000, retries: wait ? {retries: 60, minTimeout: 250, maxTimeout: 250, factor: 1} : 0})
-      .catch(() => {throw new Error("Another extension operation is running. Try again when it finishes.");});
+    let release;
+    for (;;) {
+      try {
+        release = await lockfile.lock(lockPath, {realpath: false, stale: 10_000});
+        break;
+      } catch (error) {
+        if (error.code !== "ELOCKED") throw error;
+        if (!wait) throw new Error("Another extension operation is running. Try again when it finishes.", {cause: error});
+        await delay(250);
+      }
+    }
     try { return await fn(); } finally {await release();}
   }
   async function activeRuntimes() {
@@ -171,7 +180,8 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
       const value = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
       return {text: JSON.stringify(value, null, 2), revision: revisionOf(value)};
     }
-    return locked(async () => {
+    if (operation === "retry" && !(await readJson(queuePath, [])).length) return status();
+    await locked(async () => {
       if (["install", "update", "remove"].includes(operation)) {
         let source = request.source;
         if (typeof source !== "string" || source.length > 4096) throw new Error("Choose a package source.");
@@ -334,8 +344,8 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
         // New servers land on top; the page shows mcp.json order. Keep top-level flags (autoEnableCodemode).
         await atomic(join(directory, "mcp.json"), {...current, mcpServers: {...part.mcpServers, ...current.mcpServers}});
       } else throw new Error("Unsupported extension operation.");
-      return status();
     });
+    return status();
   }
   return {execute, async acquireRuntime() {
     return locked(async () => {
@@ -344,11 +354,10 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
       await renewLease(path, id);
       const renewal = setInterval(() => { renewLease(path, id).catch(() => {}); }, LEASE_RENEWAL_MS);
       renewal.unref();
+      // Package changes may outlive the shutdown deadline and must run under the lock.
       return async () => {
         clearInterval(renewal);
         await rm(path, {force:true}); await rm(join(leases, `${process.pid}.mcp.json`), {force:true});
-        // The last runtime to close is the moment queued package changes can be applied.
-        await applyPending().catch(() => {});
       };
     }, true);
   }};

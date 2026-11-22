@@ -925,10 +925,7 @@ impl gpui::Render for SheetView {
                             if this.editing {
                                 this.commit_edit(cx);
                             }
-                            this.sheet = index;
-                            this.scroll.set_pos(0.0, 0.0);
-                            this.clamp_sel(cx);
-                            cx.notify();
+                            this.select_sheet(index, cx);
                         }),
                     )
                     .child(
@@ -951,7 +948,10 @@ impl gpui::Render for SheetView {
             .on_action(cx.listener(|this, _: &SheetSearchNext, _w, cx| this.search_next(cx)))
             .on_action(cx.listener(|this, _: &SheetSearchPrev, _w, cx| this.search_prev(cx)))
             
-            .on_action(cx.listener(|this, _: &Save, window, cx| this.save(window, cx)))
+            .on_action(cx.listener(|this, _: &Save, window, cx| {
+                this.save_changes(cx)
+                    .detach_and_prompt_err("Failed to save", window, cx, |err, _, _| Some(format!("{err}")));
+            }))
             .on_action(cx.listener(|this, _: &ZoomIn, _window, cx| this.set_zoom(this.zoom + 0.1, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _window, cx| this.set_zoom(this.zoom - 0.1, cx)))
             
@@ -985,14 +985,14 @@ impl gpui::Render for SheetView {
             }))
             .on_action(cx.listener(|this, _: &SheetSearch, window, cx| this.toggle_search(window, cx)))
             .on_action(cx.listener(|this, _: &SheetSend, window, cx| this.send_selection(window, cx)))
-            .on_action(cx.listener(|this, _: &SheetCopy, _window, cx| {
+            .on_action(cx.listener(|this, _: &SheetCopy, window, cx| {
                 if !this.editing {
-                    this.copy_selection(cx);
+                    this.copy_selection(window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &SheetCut, _window, cx| {
+            .on_action(cx.listener(|this, _: &SheetCut, window, cx| {
                 if !this.editing {
-                    this.cut_selection(cx);
+                    this.cut_selection(window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &SheetPaste, window, cx| {
