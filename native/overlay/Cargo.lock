@@ -16915,6 +16915,7 @@ dependencies = [
  "language",
  "log",
  "menu",
+ "open",
  "paths",
  "picker",
  "platform_title_bar",

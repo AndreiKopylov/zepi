@@ -2,7 +2,7 @@ import {createPiSettings, PiConfigError} from '../src/pi/settings.mjs';
 
 let input = "";
 try {
-  for await (const chunk of process.stdin) { input += chunk; if (input.length > 65536) throw new PiConfigError("The request is too large."); }
+  for await (const chunk of process.stdin) { input += chunk; if (input.length > 1_000_000) throw new PiConfigError("The request is too large."); }
   const result = await createPiSettings().execute(input.trim() ? JSON.parse(input) : {});
   process.stdout.write(JSON.stringify({ ok: true, data: result }));
 } catch (error) {

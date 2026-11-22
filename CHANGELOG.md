@@ -4,6 +4,54 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.7] - 2026-11-22
+
+### Added
+
+- The pi settings are pages in the settings navigation (General, Models, Tools, MCP, Skills,
+  Browser use) instead of one long scroll, with a fixed header and a status strip that shows the
+  page hint, the last save or the last error without shifting layout.
+- Custom connections are first-class: edit base URL, protocol, model IDs and key, fetch the model
+  list from the endpoint and tick the models to keep, or import a provider from JSON with pi
+  validation. Known models keep their pi options.
+- Enabled models: pi's `enabledModels` allowlist per provider with `n/m` counters and
+  provider-wide toggles, so unused models stay out of the composer and model choices.
+- MCP page: user-level servers from `mcp.json` as cards with open-task connection state,
+  transport and tool exposure, enable switch, edit, reorder, OAuth sign-in and sign-out, remove
+  behind a confirmation, and adding servers by pasting JSON.
+- Skills page: user-level skills as cards with the routing description, switch, and shortcuts to
+  the skill file or its directory.
+- Tools page names the tool list new tasks actually get, including `mcp__<server>__*` namespaces.
+- Providers show where a credential comes from (`api key stored` / `oauth session` /
+  `environment` / `models.json`) and offer only the actions that can work.
+- Configuration block on the General page opens `settings.json`, and on Models the provider
+  catalogs can be refreshed or `models.json` / `models-store.json` opened.
+
+### Changed
+
+- Provider rows carry icon actions (key, remove, edit) in fixed columns; a connection is deleted
+  from inside its edit form behind a confirmation.
+- Providers and enabled-model groups are ordered built-in first, then custom, alphabetically.
+- The Agent Runtime and Model Overrides blocks are gone: they duplicated `settings.json`. The HTTP
+  proxy moved to the General page. Defaults are saved as soon as a dropdown changes.
+- MCP and Skills left the Extensions panel, which now holds editor extensions and pi plugins only.
+- `pi-extensions` gains `mcp-add`, `mcp-move`, `mcp-entry`; `pi-settings` gains
+  `enabled-models`, `remove-connection`, `import-connection` and `list-connection-models`.
+
+### Fixed
+
+- Model catalog edits now reach open tasks: `models.json` and `settings.json` are watched, so
+  added models, edited connections and the enabled list appear in the model picker of a running
+  task, and the reload action tells live agents to re-read the catalog.
+- A browse behavior change crashed the page (browse only accepts `--set=<json>`); save results
+  report the changed keys.
+- Removing a key kept in the environment or in `models.json` silently did nothing; the bridge now
+  refuses with the reason and the UI hides the action.
+- Skill rows had uneven gaps from a trailing newline in the frontmatter description.
+- Notices no longer jump the page or leak between pages.
+- Long error texts wrap and carry the real cause.
+- Deep links from the agent panel keep their `#ai` tag and open the AI page.
+
 ## [0.0.6] - 2026-11-21
 
 ### Changed

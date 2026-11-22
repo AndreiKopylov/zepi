@@ -90,13 +90,31 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
     }
     const resources = async kind => Promise.all(paths[kind].filter(p => p.metadata.scope === "user").map(async p => {
       let name = basename(p.path), description = "";
-      if (kind === "skills") {try {const {frontmatter} = parseFrontmatter(await readFile(p.path, "utf8")); name = frontmatter.name || basename(dirname(p.path)); description = frontmatter.description || "";} catch {description = "Unable to read skill metadata.";}}
+      if (kind === "skills") {try {const {frontmatter} = parseFrontmatter(await readFile(p.path, "utf8"));
+        name = (frontmatter.name || basename(dirname(p.path))).trim();
+        // Frontmatter values may carry trailing newlines; one line keeps rows the same height.
+        description = String(frontmatter.description ?? "").replace(/\s+/g, " ").trim();} catch {description = "Unable to read skill metadata.";}}
       return {...p, name, description};
     }));
     const mcp = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
     const active = await activeRuntimes();
     const running = await readMcpStatus(directory, active);
-    const servers = [...Object.entries(mcp.mcpServers).map(([name, s]) => ({name, enabled: s.enabled !== false, builtin: false, oauth: usesOAuth(s), signedIn: usesOAuth(s) && !!credentials(directory).tokens(name, s.url), detail: s.command ? "Local process" : s.type === "sse" ? "SSE server" : "HTTP server"}))];
+    const servers = [...Object.entries(mcp.mcpServers).map(([name, s]) => {
+      const signedIn = usesOAuth(s) && !!credentials(directory).tokens(name, s.url);
+      const hasAuthHeader = Object.keys(s.headers ?? {}).some(key => key.toLowerCase() === "authorization");
+      // `auth` describes the configuration only. Whether a server asks for a sign-in is
+      // known from the runtime state (`needs-auth`), not from a missing header.
+      const auth = s.auth?.provider ? `token:${s.auth.provider}`
+        : hasAuthHeader ? "header"
+        : signedIn ? "signed-in"
+        : s.oauth ? "oauth-configured"
+        : s.url ? "unknown" : "none";
+      return {name, enabled: s.enabled !== false, builtin: false, signedIn, auth,
+        transport: s.command ? "stdio" : s.type === "sse" ? "sse" : "http",
+        exposure: s.exposure ?? "codemode",
+        toolExposure: Object.keys(s.toolExposure ?? {}).length,
+        detail: s.command ? "Local process" : s.type === "sse" ? "SSE server" : "HTTP server"};
+    })];
     for (const state of running) if (!servers.some(server => server.name === state.name)) {
       servers.push({name:state.name, enabled:true, builtin:false, runtimeOnly:true,
         detail:state.origin === 'plugin' ? `Registered by pi plugin${state.plugin ? ` · ${state.plugin}` : ''}` : 'Retained by an open task'});
@@ -106,6 +124,7 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
         ? state.origin !== 'global' || state.revision !== mcpRevision(mcp.mcpServers[server.name], mcp.autoEnableCodemode)
         : state.origin === 'global'}));
     return {packages, extensions: await resources("extensions"), skills: await resources("skills"), mcp:servers,
+      mcpCodemode: mcp.autoEnableCodemode !== false,
       mcpObservedAt:new Date().toISOString(), pending: await readJson(queuePath, []), activeRuntimes:active.length};
   }
   async function applyPending() {
@@ -141,6 +160,13 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
     // Network check for newer package versions; an unreachable registry means "nothing known".
     if (operation === "updates") return {updates: await manager(settings()).checkForAvailableUpdates().then(list => list.map(item => item.source), () => [])};
     if (operation === "search") return search(request.query ?? "");
+    if (operation === "mcp-entry") {
+      const name = String(request.name ?? "");
+      const value = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
+      const server = value.mcpServers[name];
+      if (!server) throw new Error(`${name || "This server"} is not configured. Refresh the page.`);
+      return {name, text: JSON.stringify(server, null, 2)};
+    }
     if (operation === "mcp-read") {
       const value = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
       return {text: JSON.stringify(value, null, 2), revision: revisionOf(value)};
@@ -192,9 +218,15 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
             if (i < 0 || c.zepi?.disabledPackages?.[resource.metadata.source]) throw new Error("Enable the owning package first.");
             const p = typeof c.packages[i] === "string" ? {source: c.packages[i]} : c.packages[i];
             const file = relative(resource.metadata.packageRoot, resource.path).split("\\").join("/");
-            p[kind] = [...(p[kind] ?? []).filter(v => ![file, `+${file}`, `-${file}`, `!${file}`].includes(v)), `${request.enabled ? "+" : "-"}${file}`];
+            // Package lists may be include-allowlists (plain entries): keep those intact and
+            // normalize only this file's +/-/! markers, so disabling one skill never enables the rest.
+            const entries = (p[kind] ?? []).filter(v => v !== `+${file}` && v !== `-${file}` && v !== `!${file}`);
+            p[kind] = [...entries, `${request.enabled ? "+" : "-"}${file}`];
             c.packages[i] = p;
-          } else c[kind] = [...(c[kind] ?? []).filter(v => ![`+${request.path}`, `-${request.path}`, `!${request.path}`].includes(v)), `${request.enabled ? "+" : "-"}${request.path}`];
+          } else {
+            const entries = (c[kind] ?? []).filter(v => ![request.path, `+${request.path}`, `-${request.path}`, `!${request.path}`].includes(v));
+            c[kind] = request.enabled ? entries : [...entries, `-${request.path}`];
+          }
           return c;
         });
       } else if (operation === "mcp-save") {
@@ -202,6 +234,18 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
         const current = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
         if (request.revision !== undefined && request.revision !== revisionOf(current)) throw new Error("MCP configuration changed. Reopen the editor before saving again.");
         await atomic(join(directory, "mcp.json"), value);
+      } else if (operation === "mcp-move") {
+        const value = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
+        const names = Object.keys(value.mcpServers);
+        const index = names.indexOf(String(request.name ?? ""));
+        if (index < 0) throw new Error("This MCP server is not configured.");
+        const target = request.direction === "up" ? index - 1 : index + 1;
+        if (target < 0 || target >= names.length) return;
+        const ordered = [...names];
+        [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
+        const servers = Object.create(null);
+        for (const name of ordered) servers[name] = value.mcpServers[name];
+        await atomic(join(directory, "mcp.json"), {...value, mcpServers: servers});
       } else if (["mcp-toggle", "mcp-remove", "mcp-signout"].includes(operation)) {
         const value = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
         if (!value.mcpServers[request.name]) throw new Error("This MCP server is not configured.");
@@ -215,6 +259,80 @@ export function createExtensionCenter(directory = piDirectory(root), fetcher = f
         }
         else {if (typeof request.enabled !== "boolean") throw new Error("Choose enabled or disabled."); value.mcpServers[request.name].enabled = request.enabled;}
         await atomic(join(directory, "mcp.json"), value);
+      } else if (operation === "mcp-set") {
+        const name = String(request.name ?? "").trim();
+        if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new Error("Keep the server name. Refresh the page.");
+        let body;
+        try { body = JSON.parse(String(request.text ?? "").trim()); }
+        catch { throw new Error("Enter the server settings as a JSON object. Nothing was changed."); }
+        if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Enter the server settings as a JSON object. Nothing was changed.");
+        const part = validateMcp({mcpServers: {[name]: body}});
+        const current = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
+        if (request.revision !== undefined && request.revision !== revisionOf(current)) throw new Error("MCP configuration changed. Reopen the page before saving again.");
+        if (!current.mcpServers[name]) throw new Error(`${name} is no longer configured. Refresh the page.`);
+        const servers = {};
+        for (const [existing, config] of Object.entries(current.mcpServers)) {
+          servers[existing] = existing === name ? part.mcpServers[name] : config;
+        }
+        await atomic(join(directory, "mcp.json"), {...current, mcpServers: servers});
+      } else if (operation === "mcp-add") {
+        // A pasted entry may arrive without the surrounding braces, with trailing commas
+        // or with the comments people keep in mcp.json.
+        const relax = text => {
+          // Pass 1: drop // line comments, staying aware of quoted strings.
+          let stripped = "", inString = false, escaped = false;
+          for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+            if (inString) {
+              stripped += ch;
+              if (escaped) escaped = false;
+              else if (ch === "\\") escaped = true;
+              else if (ch === '"') inString = false;
+              continue;
+            }
+            if (ch === '"') { inString = true; stripped += ch; continue; }
+            if (ch === "/" && text[i + 1] === "/") { while (i < text.length && text[i] !== "\n") i++; stripped += "\n"; continue; }
+            stripped += ch;
+          }
+          // Pass 2: drop trailing commas (comments are gone now), still string-aware.
+          let out = ""; inString = false; escaped = false;
+          for (let i = 0; i < stripped.length; i++) {
+            const ch = stripped[i];
+            if (inString) {
+              out += ch;
+              if (escaped) escaped = false;
+              else if (ch === "\\") escaped = true;
+              else if (ch === '"') inString = false;
+              continue;
+            }
+            if (ch === '"') { inString = true; out += ch; continue; }
+            if (ch === ",") {
+              let j = i + 1;
+              while (j < stripped.length && /\s/.test(stripped[j])) j++;
+              // A fragment may end with a comma that only becomes trailing once braces wrap it.
+              if (stripped[j] === undefined || stripped[j] === "}" || stripped[j] === "]") continue;
+            }
+            out += ch;
+          }
+          return out;
+        };
+        const parse = text => {
+          const relaxed = relax(text);
+          for (const candidate of [text, relaxed, `{${text}}`, `{${relaxed}}`]) {
+            try { return JSON.parse(candidate); } catch {}
+          }
+          throw new Error("Enter MCP servers as a JSON object. Nothing was changed.");
+        };
+        const parsed = parse(String(request.text ?? "").trim());
+        const part = validateMcp({mcpServers: parsed?.mcpServers ?? parsed});
+        const names = Object.keys(part.mcpServers);
+        if (!names.length) throw new Error("Enter MCP servers as a JSON object. Nothing was changed.");
+        const current = validateMcp(await readJson(join(directory, "mcp.json"), {mcpServers: {}}));
+        if (request.revision !== undefined && request.revision !== revisionOf(current)) throw new Error("MCP configuration changed. Reopen the page before saving again.");
+        const clash = names.filter(name => current.mcpServers[name]);
+        if (clash.length) throw new Error(`${clash.join(", ")} is already configured. Use the edit action to change it.`);
+        // New servers land on top; the page shows mcp.json order. Keep top-level flags (autoEnableCodemode).
+        await atomic(join(directory, "mcp.json"), {...current, mcpServers: {...part.mcpServers, ...current.mcpServers}});
       } else throw new Error("Unsupported extension operation.");
       return status();
     });

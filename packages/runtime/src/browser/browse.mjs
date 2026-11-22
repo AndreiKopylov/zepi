@@ -174,7 +174,7 @@ export function pairBrowse(dir) {
 }
 
 export async function setBrowseSettings(dir, changes) {
-  const { stdout } = await exec(join(dir, "bun.exe"), [join(dir, "cli.mjs"), "settings", "--set", JSON.stringify(changes)], { timeout: 30000 });
+  const { stdout } = await exec(join(dir, "bun.exe"), [join(dir, "cli.mjs"), "settings", `--set=${JSON.stringify(changes)}`], { timeout: 30000 });
   return JSON.parse(stdout);
 }
 

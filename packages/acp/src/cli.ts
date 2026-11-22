@@ -38,11 +38,13 @@ if (subcommand === "pi-settings" || subcommand === "pi-extensions") {
     const { createPiSettings, PiConfigError } = await import("../../runtime/src/pi/settings.mjs");
     let input = "";
     try {
-      for await (const chunk of process.stdin) { input += chunk; if (input.length > 65536) throw new PiConfigError("The request is too large."); }
+      for await (const chunk of process.stdin) { input += chunk; if (input.length > 1_000_000) throw new PiConfigError("The request is too large."); }
       const result = await createPiSettings().execute(input.trim() ? JSON.parse(input) : {});
       process.stdout.write(JSON.stringify({ ok: true, data: result }));
     } catch (error) {
-      const message = error instanceof PiConfigError ? error.message : "Unable to update pi settings. Check file formats and permissions.";
+      const detail = error instanceof Error ? error.message : String(error);
+      const message = error instanceof PiConfigError ? error.message
+        : `Unable to update pi settings: ${detail || "check file formats and permissions"}`;
       process.stdout.write(JSON.stringify({ ok: false, error: message }));
       process.exitCode = 1;
     }

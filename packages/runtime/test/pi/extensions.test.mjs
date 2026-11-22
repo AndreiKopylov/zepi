@@ -38,6 +38,61 @@ test("pi package lifecycle preserves filters, queues changes while loaded, and m
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 
+test("disabling a skill writes a minus entry, enabling it removes the entry", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zepi-skill-toggle-"));
+  try {
+    await mkdir(join(dir, "skills", "plain"), {recursive: true});
+    await writeFile(join(dir, "skills", "plain", "SKILL.md"),
+      ["---", "name: plain", "description: Standalone skill", "---", "Body.", ""].join(String.fromCharCode(10)));
+    await writeFile(join(dir, "settings.json"), JSON.stringify({}));
+    const center = createExtensionCenter(dir);
+    let state = await center.execute();
+    const skill = state.skills.find(entry => entry.name === "plain");
+    assert.ok(skill, "the standalone skill is discovered");
+    assert.equal(skill.enabled, true);
+
+    state = await center.execute({operation:"toggle-resource", kind:"skills", path:skill.path, enabled:false});
+    assert.equal(state.skills.find(entry => entry.path === skill.path).enabled, false);
+    let config = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.deepEqual(config.skills, [`-${skill.path}`]);
+
+    state = await center.execute({operation:"toggle-resource", kind:"skills", path:skill.path, enabled:true});
+    assert.equal(state.skills.find(entry => entry.path === skill.path).enabled, true);
+    config = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+    assert.equal((config.skills ?? []).some(entry => entry.includes("plain")), false, "no plus entry is written");
+  } finally { await rm(dir, {recursive:true, force:true}); }
+});
+
+test("disabling a package skill kept as a plain include never enables the other skills", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zepi-package-allowlist-"));
+  const pkg = join(dir, "pkg"), agent = join(dir, "agent");
+  await mkdir(pkg); await mkdir(agent);
+  await writeFile(join(pkg, "package.json"), JSON.stringify({name:"pi-allow",version:"1.0.0",pi:{skills:["a.md","b.md"]}}));
+  await writeFile(join(pkg, "a.md"), "---\nname: alpha\ndescription: First skill\n---\nA.\n");
+  await writeFile(join(pkg, "b.md"), "---\nname: beta\ndescription: Second skill\n---\nB.\n");
+  await writeFile(join(agent, "settings.json"), JSON.stringify({}));
+  const center = createExtensionCenter(agent);
+  try {
+    let state = await center.execute({operation:"install", source:pkg});
+    const source = state.packages[0].source;
+    // Hand-written include-allowlist: only a.md autoloads, b.md is excluded by absence.
+    const config = JSON.parse(await readFile(join(agent, "settings.json"), "utf8"));
+    const i = config.packages.findIndex(p => (typeof p === "string" ? p : p.source) === source);
+    config.packages[i] = {source, skills:["a.md"]};
+    await writeFile(join(agent, "settings.json"), JSON.stringify(config));
+    state = await center.execute();
+    const alpha = state.skills.find(s => s.name === "alpha"), beta = state.skills.find(s => s.name === "beta");
+    assert.equal(alpha.enabled, true); assert.equal(beta.enabled, false, "allowlist excludes beta");
+
+    state = await center.execute({operation:"toggle-resource", kind:"skills", path:alpha.path, enabled:false});
+    assert.equal(state.skills.find(s => s.path === alpha.path).enabled, false);
+    assert.equal(state.skills.find(s => s.path === beta.path).enabled, false, "disabling alpha must not enable beta");
+
+    state = await center.execute({operation:"toggle-resource", kind:"skills", path:beta.path, enabled:true});
+    assert.equal(state.skills.find(s => s.path === beta.path).enabled, true, "force-include enables beta against the allowlist");
+  } finally { await rm(dir, {recursive:true, force:true}); }
+});
+
 test("update checks report only packages with a newer version", async () => {
   const dir = await mkdtemp(join(tmpdir(), "zepi-extension-updates-"));
   await writeFile(join(dir, "settings.json"), "{}");
@@ -137,6 +192,31 @@ test("extension lock serializes startup, prevents overlapping mutations and reco
     await release();
     await assert.rejects(readFile(lock), {code:"ENOENT"});
   } finally {await rm(dir, {recursive:true, force:true});}
+});
+
+test('MCP add merges one snippet, refuses clashes and stale revisions', async()=> {
+  const dir=await mkdtemp(join(tmpdir(),'zepi-mcp-add-'));
+  const center=createExtensionCenter(dir);
+  try {
+    await center.execute({operation:'mcp-save',text:JSON.stringify({autoEnableCodemode:false,mcpServers:{keep:{command:'node'}}})});
+    const before=await center.execute({operation:'mcp-read'});
+    const added=await center.execute({operation:'mcp-add',text:JSON.stringify({docs:{url:'https://example.invalid/mcp'}}),revision:before.revision});
+    assert.deepEqual(added.mcp.filter(s=>!s.builtin).map(s=>s.name).sort(),['docs','keep']);
+    const stored=JSON.parse(await readFile(join(dir,'mcp.json'),'utf8'));
+    assert.equal(stored.mcpServers.keep.command,'node');
+    assert.equal(stored.mcpServers.docs.url,'https://example.invalid/mcp');
+    assert.equal(stored.autoEnableCodemode,false,'add preserves top-level flags');
+    await assert.rejects(center.execute({operation:'mcp-add',text:JSON.stringify({keep:{command:'node'}})}),/already configured/);
+    await assert.rejects(center.execute({operation:'mcp-add',text:'not json'}));
+    await assert.rejects(center.execute({operation:'mcp-add',text:JSON.stringify({other:{command:'node'}}),revision:'stale'}),/changed/);
+    assert.deepEqual(JSON.parse(await readFile(join(dir,'mcp.json'),'utf8')),stored);
+    // A pasted fragment tolerates a line comment and a trailing comma together.
+    const relaxed=await center.execute({operation:'mcp-add',text:'"relaxed": { "url": "https://example.invalid/mcp" }, // trailing note\n'});
+    assert.ok(relaxed.mcp.some(s=>s.name==='relaxed'),'comment + trailing comma fragment parses');
+    const storedRelaxed=JSON.parse(await readFile(join(dir,'mcp.json'),'utf8'));
+    assert.equal(storedRelaxed.autoEnableCodemode,false);
+    assert.equal(storedRelaxed.mcpServers.relaxed.url,'https://example.invalid/mcp');
+  }finally {await rm(dir,{recursive:true,force:true});}
 });
 
 test('MCP follows pi enabled, env interpolation and validation without resolving secrets during inspection', async()=> {

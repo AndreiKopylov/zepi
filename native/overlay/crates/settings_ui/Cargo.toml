@@ -17,6 +17,7 @@ default = []
 test-support = []
 
 [dependencies]
+open.workspace = true
 anyhow.workspace = true
 audio.workspace = true
 client.workspace = true

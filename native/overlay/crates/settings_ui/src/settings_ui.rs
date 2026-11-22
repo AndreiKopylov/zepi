@@ -456,14 +456,17 @@ pub fn init(cx: &mut App) {
         workspace
             .register_action(|_, action: &OpenSettingsAt, window, cx| {
                 let window_handle = window.window_handle().downcast::<MultiWorkspace>();
+
                 open_settings_editor_at_target(
                     Some(
                         if std::env::var_os("ZEPI_ROOT").is_some()
                             && (action.path.starts_with("agent")
                                 || action.path.starts_with("language_model")
-                                || action.path.starts_with("edit_prediction")
-                                || action.path == "context_servers"
-                                || action.path == "llm_providers")
+                                || action.path.starts_with("edit_prediction"))
+                        {
+                            "ai"
+                        } else if std::env::var_os("ZEPI_ROOT").is_some()
+                            && (action.path == "context_servers" || action.path == "llm_providers")
                         {
                             "ai"
                         } else {
@@ -1030,7 +1033,7 @@ impl Drop for SubPage {
 
 #[derive(Debug)]
 struct NavBarEntry {
-    title: &'static str,
+    title: SharedString,
     is_root: bool,
     expanded: bool,
     page_index: usize,
@@ -1046,6 +1049,7 @@ struct SettingsPage {
 #[derive(PartialEq)]
 enum SettingsPageItem {
     SectionHeader(&'static str),
+    Guide(&'static str),
     SettingItem(SettingItem),
     SubPageLink(SubPageLink),
     DynamicItem(DynamicItem),
@@ -1056,6 +1060,7 @@ impl std::fmt::Debug for SettingsPageItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SettingsPageItem::SectionHeader(header) => write!(f, "SectionHeader({})", header),
+            SettingsPageItem::Guide(text) => write!(f, "Guide({})", text),
             SettingsPageItem::SettingItem(setting_item) => {
                 write!(f, "SettingItem({})", setting_item.title)
             }
@@ -1172,6 +1177,11 @@ impl SettingsPageItem {
                     .child(field_with_padding)
                     .when(bottom_border, |this| this.child(Divider::horizontal()))
                     .into_any_element()
+            }
+            SettingsPageItem::SubPageLink(sub_page_link)
+                if sub_page_link.r#type != SubPageType::Language =>
+            {
+                div().into_any_element()
             }
             SettingsPageItem::SubPageLink(sub_page_link) => v_flex()
                 .group("setting-item")
@@ -1309,6 +1319,14 @@ impl SettingsPageItem {
 
                 return content.into_any_element();
             }
+            SettingsPageItem::Guide(text) => v_flex()
+                .px_8()
+                .py_3()
+                .gap_1()
+                .children(text.split('\n').map(|line| {
+                    Label::new(line).size(LabelSize::Small).color(Color::Muted)
+                }))
+                .into_any_element(),
             SettingsPageItem::ActionLink(action_link) => v_flex()
                 .group("setting-item")
                 .px_8()
@@ -2047,7 +2065,7 @@ impl SettingsWindow {
 
         for (page_index, page) in self.pages.iter().enumerate() {
             navbar_entries.push(NavBarEntry {
-                title: page.title,
+                title: SharedString::from(page.title),
                 is_root: true,
                 expanded: false,
                 page_index,
@@ -2056,8 +2074,12 @@ impl SettingsWindow {
             });
 
             for (item_index, item) in page.items.iter().enumerate() {
-                let SettingsPageItem::SectionHeader(title) = item else {
-                    continue;
+                let title = match item {
+                    SettingsPageItem::SectionHeader(title) => SharedString::from(*title),
+                    SettingsPageItem::SubPageLink(link) if link.r#type != SubPageType::Language => {
+                        link.title.clone()
+                    }
+                    _ => continue,
                 };
                 navbar_entries.push(NavBarEntry {
                     title,
@@ -2171,6 +2193,9 @@ impl SettingsWindow {
                         } else {
                             any_found_since_last_header = true;
                         }
+                    }
+                    SettingsPageItem::Guide(_) => {
+                        any_found_since_last_header = true;
                     }
                 }
             }
@@ -2405,6 +2430,12 @@ impl SettingsWindow {
                         for alias in sub_page_link.search_aliases {
                             push_candidates(&mut fuzzy_match_candidates, key_index, alias);
                         }
+                    }
+                    SettingsPageItem::Guide(text) => {
+                        documents.push(SearchDocument {
+                            id: key_index,
+                            words: split_into_words(&[page.title, header_str, text]),
+                        });
                     }
                     SettingsPageItem::ActionLink(action_link) => {
                         documents.push(SearchDocument {
@@ -3187,7 +3218,7 @@ impl SettingsWindow {
                                     .map(|(entry_index, entry)| {
                                         TreeViewItem::new(
                                             ("settings-ui-navbar-entry", entry_index),
-                                            entry.title,
+                                            entry.title.clone(),
                                         )
                                         .track_focus(&entry.focus_handle)
                                         .root_item(entry.is_root)
@@ -3207,7 +3238,7 @@ impl SettingsWindow {
                                         .on_click({
                                             let category = this.pages[entry.page_index].title;
                                             let subcategory =
-                                                (!entry.is_root).then_some(entry.title);
+                                                (!entry.is_root).then_some(entry.title.to_string());
 
                                             cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                 if this.toggle_navbar_entry_on_double_click(
@@ -3267,6 +3298,30 @@ impl SettingsWindow {
             )
     }
 
+    fn sub_page_link_for_nav_entry(&self, index: usize) -> Option<(SubPageLink, SharedString)> {
+        let entry = self.navbar_entries.get(index)?;
+        if entry.is_root {
+            return None;
+        }
+        let page = self.pages.get(entry.page_index)?;
+        let item_index = entry.item_index?;
+        let SettingsPageItem::SubPageLink(link) = page.items.get(item_index)? else {
+            return None;
+        };
+        if link.r#type == SubPageType::Language {
+            return None;
+        }
+        let header = page.items[..item_index]
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                SettingsPageItem::SectionHeader(header) => Some(SharedString::from(*header)),
+                _ => None,
+            })
+            .unwrap_or_default();
+        Some((link.clone(), header))
+    }
+
     fn open_and_scroll_to_navbar_entry(
         &mut self,
         navbar_entry_index: usize,
@@ -3275,6 +3330,12 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some((link, header)) = self.sub_page_link_for_nav_entry(navbar_entry_index) {
+            self.navbar_entry = navbar_entry_index;
+            self.sub_page_stack.clear();
+            self.push_sub_page(link, header, window, cx);
+            return;
+        }
         self.open_navbar_entry_page(navbar_entry_index);
         cx.notify();
 
@@ -3509,7 +3570,7 @@ impl SettingsWindow {
                             .iter()
                             .enumerate()
                             .flat_map(|(index, page)| {
-                                (index == 0)
+                                (index == 0 && !page.section_header.is_empty())
                                     .then(|| page.section_header.clone())
                                     .into_iter()
                                     .chain(std::iter::once(page.link.title.clone()))
@@ -3573,14 +3634,14 @@ impl SettingsWindow {
                 .navbar_entries
                 .iter()
                 .find(|entry| entry.is_root && entry.page_index == self.current_page_index())
-                .map(|entry| entry.title);
+                .map(|entry| entry.title.clone());
 
             let render_item = cx.processor(move |settings_window, index, window, cx| {
                 if index == 0 {
                     return div()
                         .px_8()
                         .when(settings_window.sub_page_stack.is_empty(), |element| {
-                            element.when_some(root_nav_label, |element, title| {
+                            element.when_some(root_nav_label.clone(), |element, title| {
                                 element
                                     .child(Label::new(title).size(LabelSize::Large).mt_2().mb_3())
                             })
@@ -3719,7 +3780,7 @@ impl SettingsWindow {
                 .navbar_entries
                 .iter()
                 .find(|entry| entry.is_root && entry.page_index == self.current_page_index())
-                .map(|entry| entry.title);
+                .map(|entry| entry.title.clone());
 
             page_content
                 .when(self.sub_page_stack.is_empty(), |this| {

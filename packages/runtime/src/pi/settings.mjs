@@ -1,12 +1,12 @@
 import {piDirectory, runtimeRoot as root} from '../paths.mjs';
-import {ModelRuntime, SettingsManager, readStoredCredential, FileSettingsStorage, AuthStorage, ReadOnlyAuthStorage, ModelConfig, getSupportedThinkingLevels, piManifest} from './embed.mjs';
+import {ModelRuntime, SettingsManager, readStoredCredential, FileSettingsStorage, AuthStorage, ReadOnlyAuthStorage, ModelConfig, getSupportedThinkingLevels, resolveModelScopeFromModels, piManifest} from './embed.mjs';
 import { readFile, writeFile, mkdir, chmod, rename, mkdtemp, rm, access } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { installBrowse, updateBrowse, checkBrowseUpdate, browseStatus, pairBrowse, setBrowseSettings, writeBrowseMcp, removeBrowseMcp, ensureBrowseMcp, restartBrowseRelay } from "../browser/browse.mjs";
-import {runtimeSettings, mergeRuntimeSettings, modelSettings, mergeModelSettings, PiRuntimeSettingsError} from './runtime-settings.mjs';
 import {httpProxyStatus, mergeHttpProxy, PiHttpSettingsError} from './http-settings.mjs';
 import {refreshModelCatalogs} from './model-catalog.mjs';
+import {connectionRevision, projectConnections, normalizeModelIds, connectionEndpoint, fetchConnectionModels, resolveDraftKey, specEntry} from './custom-models.mjs';
 
 export class PiConfigError extends Error {}
 
@@ -71,27 +71,49 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
   async function status(refreshModels = false) {
     const manager = settings();
     if (manager.drainErrors().length) throw new PiConfigError("Unable to read pi settings.json. Fix the configuration and try again.");
-    await validateModels(modelsPath);
+    const validated = await validateModels(modelsPath);
     const modelRuntime = await runtime();
     if (modelRuntime.getError()) throw new PiConfigError("Invalid pi model configuration. Fix models.json and try again.");
     const modelCatalogNotice = refreshModels ? await refreshModelCatalogs(modelRuntime, true) : '';
+    // Open agents watch models.json; rewriting it identically tells them to reload.
+    if (refreshModels) await atomicJson(modelsPath, await readJson(modelsPath, {providers: {}}));
     const credentials = await new ReadOnlyAuthStorage(authPath).list();
+    const patterns = manager.getEnabledModels() ?? [];
+    const enabledRefs = patterns.length ? new Set(resolveModelScopeFromModels(patterns, modelRuntime.getModels()).scopedModels
+      .map(({model}) => `${model.provider}/${model.id}`)) : null;
+    const customIds = new Set(validated.providers.keys());
+    const credentialSource = provider => {
+      const stored = credentials.find(entry => entry.providerId === provider.id)?.type;
+      if (stored) return stored;
+      const inline = validated.providers.get(provider.id)?.apiKey;
+      if (typeof inline === "string" && inline.trim()) {
+        const value = inline.trim();
+        return value.startsWith("$") ? `models.json $${value.slice(1)}` : "models.json";
+      }
+      return modelRuntime.getProviderAuthStatus(provider.id).configured ? "environment" : "none";
+    };
     const providers = modelRuntime.getProviders().map(provider => {
       const credential = credentials.find(entry => entry.providerId === provider.id);
       const state = modelRuntime.getProviderAuthStatus(provider.id);
-      return { id: provider.id, name: provider.name ?? provider.id,
+      return { id: provider.id, name: provider.name ?? provider.id, custom: customIds.has(provider.id),
         credential: credential?.type ?? (state.configured ? state.source ?? "configured" : "none"),
+        credentialSource: credentialSource(provider),
         models: modelRuntime.getModels(provider.id).map(model => ({ id: model.id, name: model.name,
-          thinkingLevels: getSupportedThinkingLevels(model), settings: modelSettings(manager, model) })) };
-    }).filter(provider => provider.models.length).sort((a, b) => a.name.localeCompare(b.name));
+          enabled: enabledRefs ? enabledRefs.has(`${provider.id}/${model.id}`) : true,
+          thinkingLevels: getSupportedThinkingLevels(model) })) };
+    }).filter(provider => provider.models.length)
+      // Built-in providers first, then custom connections, each alphabetically.
+      .sort((a, b) => Number(a.custom) - Number(b.custom) || a.name.localeCompare(b.name));
     return { version: bundledVersion, adapterVersion: "0.9.4", directory, modelCatalogNotice,
       defaultProvider: manager.getDefaultProvider() ?? "",
       defaultModel: manager.getDefaultModel() ?? "",
       defaultThinkingLevel: manager.getDefaultThinkingLevel() ?? "off",
+      enabledModels: patterns,
       defaultTools: (await readJson(join(directory, "settings.json"))).defaultTools ?? null,
-      runtime: runtimeSettings(manager),
+      defaultToolsEffective: (() => { try { return manager.getDefaultTools() ?? null; } catch { return null; } })(),
       httpProxy: httpProxyStatus(manager.getGlobalSettings()),
       browser: await browserStatus(),
+      customConnections: projectConnections(validated.providers, modelRuntime),
       providers, update: await readJson(join(directory, "pi-update.json"), null) };
   }
 
@@ -103,22 +125,6 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       new FileSettingsStorage(directory, directory).withLock('global', current => {
         try { return JSON.stringify(mergeHttpProxy(current ? JSON.parse(current) : {}, request.proxy, request.expected), null, 2) + '\n'; }
         catch (error) { throw new PiConfigError(error instanceof PiHttpSettingsError ? error.message : 'Unable to read global HTTP proxy settings. Repair settings.json before saving.'); }
-      });
-      await chmod(join(directory, 'settings.json'), 0o600);
-    } else if (operation === 'model-settings') {
-      const provider = providerId(request.provider);
-      const model = (await runtime()).getModel(provider, text(request.model, 'Model'));
-      if (!model) throw new PiConfigError('The selected model is not in the pi catalog.');
-      new FileSettingsStorage(directory, directory).withLock('global', current => {
-        try {return JSON.stringify(mergeModelSettings(current ? JSON.parse(current) : {}, `${provider}/${model.id}`,
-          request.changes, request.expected, getSupportedThinkingLevels(model)), null, 2) + '\n';}
-        catch (error) {throw new PiConfigError(error instanceof PiRuntimeSettingsError ? error.message : 'Unable to read model settings. Repair settings.json before saving.');}
-      });
-      await chmod(join(directory, 'settings.json'), 0o600);
-    } else if (operation === 'runtime') {
-      new FileSettingsStorage(directory, directory).withLock('global', current => {
-        try {return JSON.stringify(mergeRuntimeSettings(current?JSON.parse(current):{},request.changes,request.expected),null,2)+'\n';}
-        catch(error) {throw new PiConfigError(error instanceof PiRuntimeSettingsError ? error.message : 'Unable to read runtime settings. Repair settings.json before saving.');}
       });
       await chmod(join(directory, 'settings.json'), 0o600);
     } else if (operation === "tool-defaults") {
@@ -223,7 +229,115 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
         ...(current?.type === "api_key" && current.env ? { env: current.env } : {}) }));
       await chmod(authPath, 0o600);
     } else if (operation === "remove-key") {
-      await AuthStorage.create(authPath).delete(providerId(request.provider));
+      const provider = providerId(request.provider);
+      const stored = (await new ReadOnlyAuthStorage(authPath).list()).some(entry => entry.providerId === provider);
+      if (!stored) {
+        const inline = (await validateModels(modelsPath)).providers.get(provider)?.apiKey;
+        const where = typeof inline === "string" && inline.trim()
+          ? (inline.trim().startsWith("$") ? `models.json (${inline.trim()})` : "models.json")
+          : "the environment";
+        throw new PiConfigError(`No stored credential for ${provider}: it comes from ${where}. Nothing was changed.`);
+      }
+      await AuthStorage.create(authPath).delete(provider);
+    } else if (operation === "list-connection-models") {
+      try {
+        const provider = providerId(request.provider);
+        const endpoint = connectionEndpoint(request.baseUrl, request.api);
+        const config = await validateModels(modelsPath);
+        const current = config.providers.get(provider);
+        const modelRuntime = await runtime();
+        const key = request.key?.trim() ? resolveDraftKey(request.key) : undefined;
+        let auth;
+        try { auth = modelRuntime.getProvider(provider) ? await modelRuntime.getAuth(provider, key ? {apiKey:key} : undefined) : undefined; }
+        catch { throw new PiConfigError("Unable to resolve connection credentials."); }
+        return await fetchConnectionModels(endpoint, request.api, key, auth, auth?.auth.headers ?? current?.headers);
+      } catch (error) { throw new PiConfigError(error instanceof PiConfigError || error?.name === 'ConnectionError' ? error.message : "Unable to fetch models. Your draft was not changed."); }
+    } else if (operation === "custom-connection") {
+      const provider = providerId(request.provider);
+      try { connectionEndpoint(request.baseUrl, request.api); }
+      catch (error) { throw new PiConfigError(error.message); }
+      let ids;
+      try { ids = normalizeModelIds(request.models); } catch (error) { throw new PiConfigError(error.message); }
+      const key = request.key?.trim() || undefined;
+      if (key && (key.length > 8192 || /[\r\n]/.test(key) || key.startsWith('!'))) throw new PiConfigError("Use an API key or a $ENV_VAR reference for this connection.");
+      if (key) await new ReadOnlyAuthStorage(authPath).list();
+      const config = await validateModels(modelsPath);
+      const providers = Object.fromEntries(config.providers);
+      const current = providers[provider];
+      if ((request.expectedRevision ?? null) !== (current ? connectionRevision(current) : null)) throw new PiConfigError("Connection changed while this page was open. Reload before saving.");
+      const previous = new Map((current?.models ?? []).map(model => [model.id, model]));
+      const specs = request.specs && typeof request.specs === 'object' && !Array.isArray(request.specs) ? request.specs : {};
+      providers[provider] = {...current, baseUrl:request.baseUrl.trim(), api:request.api,
+        models:ids.map(id => previous.get(id) ?? specEntry(id, specs[id]?.name, specs[id]))};
+      const checked = await writeModels(providers, true);
+      const manager = settings();
+      if (manager.getDefaultProvider() === provider && manager.getDefaultModel() && !checked.getModel(manager.getDefaultProvider(), manager.getDefaultModel())) throw new PiConfigError("This would remove the global default model. Choose another default before saving.");
+      await writeModels(providers);
+      if (key) {
+        try {
+          await AuthStorage.create(authPath).modify(provider, async current => ({type:'api_key', key,
+            ...(current?.type === 'api_key' && current.env ? {env:current.env} : {})}));
+          await chmod(authPath, 0o600);
+        } catch { throw new PiConfigError("Connection saved, but its API key could not be saved. Reload and enter the key again."); }
+      }
+    } else if (operation === "enabled-models") {
+      const manager = settings();
+      if (manager.drainErrors().length) throw new PiConfigError("Unable to read pi settings. Configuration was not changed.");
+      const all = (await runtime()).getModels().map(model => `${model.provider}/${model.id}`);
+      let patterns;
+      if (request.all === true) patterns = undefined;
+      else {
+        if (!Array.isArray(request.enabled) || request.enabled.length > 2000) throw new PiConfigError("Choose the models to enable.");
+        const known = new Set(all);
+        const refs = [...new Set(request.enabled.map(ref => typeof ref === "string" ? ref.trim() : "").filter(Boolean))];
+        if (refs.some(ref => !known.has(ref))) throw new PiConfigError("The model list changed. Reload the page and try again.");
+        patterns = refs.length === all.length && all.every(ref => refs.includes(ref)) ? undefined : refs;
+      }
+      manager.setEnabledModels(patterns);
+      await manager.flush();
+      if (manager.drainErrors().length) throw new PiConfigError("Unable to save pi settings. Try again.");
+      await chmod(join(directory, "settings.json"), 0o600);
+    } else if (operation === "import-connection") {
+      let parsed;
+      try { parsed = JSON.parse(request.text ?? ""); }
+      catch { throw new PiConfigError("Paste a provider JSON object. Nothing was changed."); }
+      const incoming = parsed?.providers ?? parsed;
+      if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) throw new PiConfigError("Paste a provider JSON object. Nothing was changed.");
+      const names = Object.keys(incoming);
+      if (!names.length) throw new PiConfigError("Paste a provider JSON object. Nothing was changed.");
+      for (const name of names) providerId(name);
+      const config = await validateModels(modelsPath);
+      const providers = Object.fromEntries(config.providers);
+      for (const name of names) providers[name] = incoming[name];
+      const checked = await writeModels(providers, true);
+      const manager = settings();
+      const defaultProvider = manager.getDefaultProvider();
+      const defaultModel = manager.getDefaultModel();
+      if (defaultProvider && defaultModel && providers[defaultProvider]
+        && !checked.getModel(defaultProvider, defaultModel)) {
+        throw new PiConfigError("This import would remove the global default model. Choose another default before importing.");
+      }
+      await writeModels(providers);
+    } else if (operation === "remove-connection") {
+      const provider = providerId(request.provider);
+      const config = await validateModels(modelsPath);
+      const providers = Object.fromEntries(config.providers);
+      const current = providers[provider];
+      if ((request.expectedRevision ?? null) !== (current ? connectionRevision(current) : null)) throw new PiConfigError("Connection changed while this page was open. Reload before saving.");
+      if (settings().getDefaultProvider() === provider) throw new PiConfigError("This connection provides the global default model. Choose another default before removing it.");
+      delete providers[provider];
+      await writeModels(providers);
+      await AuthStorage.create(authPath).delete(provider).catch(() => {});
+      // The enabled-models allowlist would otherwise keep dead references to this provider.
+      const manager = settings();
+      const patterns = manager.getEnabledModels();
+      if (Array.isArray(patterns)) {
+        const kept = patterns.filter(pattern => !pattern.startsWith(`${provider}/`) && pattern !== provider);
+        if (kept.length !== patterns.length) {
+          manager.setEnabledModels(kept.length ? kept : undefined);
+          await manager.flush();
+        }
+      }
     } else if (operation === "custom-model") {
       const provider = providerId(request.provider);
       const baseUrl = text(request.baseUrl, "Base URL");

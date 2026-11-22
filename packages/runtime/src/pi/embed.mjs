@@ -7,6 +7,7 @@ export {
 export { FileSettingsStorage } from "../../../acp/node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js";
 export { AuthStorage, ReadOnlyAuthStorage } from "../../../acp/node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js";
 export { ModelConfig } from "../../../acp/node_modules/@earendil-works/pi-coding-agent/dist/core/model-config.js";
+export { resolveModelScopeFromModels } from "../../../acp/node_modules/@earendil-works/pi-coding-agent/dist/core/model-resolver.js";
 export { getSupportedThinkingLevels } from "../../../acp/node_modules/@earendil-works/pi-ai/dist/index.js";
 export { takeOverStdout, restoreStdout, writeRawStdout, flushRawStdout } from "../../../acp/node_modules/@earendil-works/pi-coding-agent/dist/core/output-guard.js";
 export { KeybindingsManager } from "../../../acp/node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";

@@ -6,6 +6,11 @@ import {tmpdir} from 'node:os';
 import {client, methods} from '@agentclientprotocol/sdk';
 import {startZepiAgent} from '../src/server.ts';
 import {call, fixtureModel, type FixtureStep} from './fixture-model.ts';
+import {ModelRuntime} from '@earendil-works/pi-coding-agent';
+
+// The model config option carries a list; the ACP union type hides it behind a discriminated type.
+const modelValues = (options: typeof undefined | readonly {id: string; [key: string]: unknown}[]) =>
+  ((options ?? []).find(option => option.id === 'model') as {options?: {value: string}[]} | undefined)?.options?.map(option => option.value) ?? [];
 
 test('model defaults flow through ACP selection and pi compaction after reload', {timeout:30_000}, async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'zepi-model-settings-')));
@@ -104,6 +109,46 @@ test('global pi queue modes control actual consumption and reload in an open tas
       assert.equal((await send('Queue two follow-ups using the fixture tool.')).stopReason,'end_turn');
       assert.equal(model.requests(),steps.length);
     }
+  } finally {await server.agent.dispose();connection.close();server.connection.close();await rm(dir,{recursive:true,force:true});}
+});
+
+test('models.json edits reach an open session without restarting it', {timeout:30_000}, async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'zepi-model-watch-')));
+  const modelsPath = join(dir,'models.json'), authPath = join(dir,'auth.json');
+  const write = (extra: boolean) => writeFile(modelsPath, JSON.stringify({providers:{extra:{
+    api:'openai-completions', baseUrl:'https://example.invalid/v1',
+    models:[{id:'first',name:'First',reasoning:false,contextWindow:32000,maxTokens:2048},
+      ...(extra ? [{id:'added',name:'Added',reasoning:false,contextWindow:64000,maxTokens:4096}] : [])]}}}));
+  await write(false);
+  await writeFile(authPath, JSON.stringify({extra:{type:'api_key',key:'fixture-key'}}));
+  await writeFile(join(dir,'settings.json'),JSON.stringify({defaultProvider:'zepi-fixture',defaultModel:'scripted',cacheWarming:'off',compaction:{enabled:false}}));
+  const runtime = await ModelRuntime.create({authPath, modelsPath, refreshOnCreate:false, allowModelNetwork:false});
+  const model = await fixtureModel(dir,[()=> 'ok'],{runtime});
+  const toAgent = new TransformStream(), toClient = new TransformStream();
+  const server = await startZepiAgent(dir,join(dir,'sessions'),{readable:toAgent.readable,writable:toClient.writable},runtime);
+  const updates: string[][] = [];
+  const connection = client({name:'model-watch-test'})
+    .onNotification(methods.client.session.update, ({params}) => {
+      const update = params.update;
+      if (update.sessionUpdate === 'config_option_update') {
+        updates.push(modelValues(update.configOptions as never));
+      }
+    })
+    .connect({readable:toClient.readable,writable:toAgent.writable});
+  try {
+    await connection.agent.request(methods.agent.initialize,{protocolVersion:1,clientCapabilities:{}});
+    const task = await connection.agent.request(methods.agent.session.new,{cwd:dir,mcpServers:[]});
+    const values: string[] = modelValues(task.configOptions as never);
+    assert.ok(values.some((value: string) => value.includes('first')), `initial model list: ${values.join(', ')}`);
+    assert.equal(values.some((value: string) => value.endsWith('/added')), false);
+
+    await write(true);
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline && !updates.some(list => list.some(value => value.endsWith('/added')))) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.ok(updates.some(list => list.some(value => value.endsWith('/added'))),
+      `no config_option_update with the new model; got ${JSON.stringify(updates)}`);
   } finally {await server.agent.dispose();connection.close();server.connection.close();await rm(dir,{recursive:true,force:true});}
 });
 
