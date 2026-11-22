@@ -1,4 +1,7 @@
 
+use gpui::TextAlign;
+use gridcraft_model::style::HAlign;
+
 use super::*;
 
 impl gpui::Render for SheetView {
@@ -109,6 +112,19 @@ impl gpui::Render for SheetView {
                     .color(UiColor::Muted),
             )
             .child(div().flex_1());
+        let partial_import = risks_data_loss(&item.import_report);
+        if !item.import_report.warnings.is_empty() {
+            header = header.child(
+                ui::Button::new("sheet-import-warnings", if partial_import { "Partial import" } else { "Import notes" })
+                    .on_click(cx.listener(|this, _, window, cx| this.show_import_warnings(window, cx))),
+            );
+        }
+        if partial_import || item.revision.is_dirty() {
+            header = header.child(
+                ui::Button::new("sheet-save-copy", "Save a Copy")
+                    .on_click(cx.listener(|this, _, window, cx| this.save_copy(window, cx))),
+            );
+        }
         let view_for_header = cx.entity();
         header = header
             .child(
@@ -574,30 +590,23 @@ impl gpui::Render for SheetView {
                     if !formatted.text.is_empty() || is_edited {
                         let font_size = (style.font.size * office_knob_f("sheet.fontScale", 4.0 / 3.0) as f32 * zoom).clamp(1.0, 40.0);
                         let color = model_color_hsla(&style.font.color, text_color, &wb.theme.colors);
-                        let numeric = formatted.numeric;
+                        let align = cell_text_align(style.align.h, formatted.numeric);
+                        let right_padding = if style.align.h == HAlign::General {
+                            f32::from(window.rem_size()) * 0.25
+                        } else {
+                            2.0
+                        };
                         let mut text_div = div()
                             .w_full()
                             .line_height(px(font_size * 1.2))
                             .text_size(px(font_size))
                             .text_color(color)
                             .font_family(SharedString::from(style.font.name.clone()));
-                        match style.align.h {
-                            gridcraft_model::style::HAlign::Center
-                            | gridcraft_model::style::HAlign::CenterAcross => {
-                                text_div = text_div.text_center();
-                            }
-                            gridcraft_model::style::HAlign::Right
-                            | gridcraft_model::style::HAlign::Fill
-                            | gridcraft_model::style::HAlign::Justify => {
-                                text_div = text_div.text_right().pr(px(2.));
-                            }
-                            gridcraft_model::style::HAlign::General if numeric => {
-                                text_div = text_div.text_right().pr_1();
-                            }
-                            _ => {
-                                text_div = text_div.text_left().pl(px(2.));
-                            }
-                        }
+                        text_div = match align {
+                            TextAlign::Center => text_div.text_center(),
+                            TextAlign::Right => text_div.text_right().pr(px(right_padding)),
+                            TextAlign::Left => text_div.text_left().pl(px(2.0)),
+                        };
                         if style.align.wrap {
                             text_div = text_div.whitespace_normal();
                         } else {
@@ -635,7 +644,10 @@ impl gpui::Render for SheetView {
                                 runs.push((run.text.clone(), (run.size.unwrap_or(style.font.size) * knob * zoom).clamp(1.0, 40.0), run.color.map(|cc| gpui::rgb(cc).into()).unwrap_or(base_color), run.bold || style.font.bold, run.italic || style.font.italic, run.underline, run.strike));
                             }
                             let inner_w = (width + 2.0).max(10.0);
-                            let center = matches!(style.align.h, gridcraft_model::style::HAlign::Center | gridcraft_model::style::HAlign::CenterAcross);
+                            // The edit frame insets the canvas but the grid's right text edge stays put.
+                            let right_edge = width - right_padding
+                                - if has_border { 0.0 } else { 1.0 }
+                                - if editing_this { 2.0 } else { 0.0 };
                             let mut lines: Vec<Vec<(String, f32, Hsla, bool, bool, bool, bool, f32, f32, usize)>> = vec![Vec::new()];
                             let mut cur_w = 0.0f32;
                             let mut off = 0usize;
@@ -664,23 +676,26 @@ impl gpui::Render for SheetView {
                                 let sh = window.text_system().shape_line(SharedString::from(" "), px(font_size), &[r], None);
                                 f32::from(sh.ascent + sh.descent)
                             };
-                            let line_hs: Vec<f32> = lines.iter().map(|l| if l.is_empty() { base_h } else { l.iter().map(|w| w.8).fold(0.0f32, f32::max) }).collect();
-                            let total_h: f32 = line_hs.iter().sum();
+                            let line_geometry: Vec<_> = lines.iter().map(|line| {
+                                let width = line.iter().map(|word| word.7).sum();
+                                let height = if line.is_empty() { base_h } else {
+                                    line.iter().map(|word| word.8).fold(0.0f32, f32::max)
+                                };
+                                (line_start_px(align, inner_w, right_edge, width), height)
+                            }).collect();
+                            let total_h: f32 = line_geometry.iter().map(|(_, height)| height).sum();
                             rich_total = Some(total_h);
                             if editing_this {
                                 let mut lay = Vec::new();
                                 let mut yy = 0.0f32;
-                                for (li, line) in lines.iter().enumerate() {
-                                    let lh = line_hs[li];
-                                    let lw: f32 = line.iter().map(|w| w.7).sum();
-                                    let mut xx = if center { ((inner_w - lw) / 2.0).max(0.0) } else { 0.0 };
+                                for (line, &(mut xx, lh)) in lines.iter().zip(&line_geometry) {
                                     let mut words = Vec::new();
                                     for w in line {
                                         let ce = w.9 + w.0.chars().count();
                                         let font = gpui::Font { family: family.clone(), weight: if w.3 { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if w.4 { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
                                         let run = gpui::TextRun { len: w.0.len(), font, color: w.2, background_color: None, underline: None, strikethrough: None };
                                         let shaped = window.text_system().shape_line(SharedString::from(w.0.clone()), px(w.1), &[run], None);
-                                        words.push((w.9, ce, xx + 2.0, w.7, char_xs(&shaped, &w.0)));
+                                        words.push((w.9, ce, xx, w.7, char_xs(&shaped, &w.0)));
                                         xx += w.7;
                                     }
                                     lay.push((yy, lh, words));
@@ -701,10 +716,7 @@ impl gpui::Render for SheetView {
                                 move |bounds, _, window, cx| {
                                     if et { *eo.lock().unwrap() = (f32::from(bounds.origin.x), f32::from(bounds.origin.y)); }
                                     let mut y = 0.0f32;
-                                    for (li, line) in lines.iter().enumerate() {
-                                        let lh = line_hs[li];
-                                        let lw: f32 = line.iter().map(|w| w.7).sum();
-                                        let mut x = if center { ((inner_w - lw) / 2.0).max(0.0) } else { 0.0 };
+                                    for (line, &(mut x, lh)) in lines.iter().zip(&line_geometry) {
                                         for (word, sz, col, b, i, u, st, w, _h, cs) in line {
                                             let ce = cs + word.chars().count();
                                             let font = gpui::Font { family: family.clone(), weight: if *b { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if *i { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
@@ -717,18 +729,18 @@ impl gpui::Render for SheetView {
                                                 if let Some((hx0, hx1)) = hit_span(&shaped, word, *cs, aa, bb) {
                                                     let is_cur = cur.map(|(ca, cb)| *hs == ca && *he == cb).unwrap_or(false);
                                                     let bg = if is_cur { gpui::hsla(0.58, 0.9, 0.5, 0.6) } else { gpui::hsla(0.58, 0.8, 0.6, 0.3) };
-                                                    window.paint_quad(gpui::fill(gpui::Bounds { origin: gpui::point(bounds.origin.x + px(2.0 + x + hx0), bounds.origin.y + px(y)), size: gpui::size(px(hx1 - hx0), px(lh)) }, bg));
+                                                    window.paint_quad(gpui::fill(gpui::Bounds { origin: gpui::point(bounds.origin.x + px(x + hx0), bounds.origin.y + px(y)), size: gpui::size(px(hx1 - hx0), px(lh)) }, bg));
                                                 }
                                             }
                                             if let Some((sa, sb)) = e_sel {
                                                 let aa = sa.max(*cs); let bb = sb.min(ce);
                                                 if aa < bb { if let Some((mut hx0, mut hx1)) = hit_span(&shaped, word, *cs, aa, bb) {
-                                                    if e_drag { if let Some((mx, my)) = e_mouse { if my >= y && my < y + lh { if let Some(h) = e_caret { if h == sb && bb == sb { hx1 = (mx - 2.0 - x).clamp(hx0, *w); } if h == sa && aa == sa { hx0 = (mx - 2.0 - x).clamp(0.0, hx1); } } } } }
-                                                    window.paint_quad(gpui::fill(gpui::Bounds { origin: gpui::point(bounds.origin.x + px(2.0 + x + hx0), bounds.origin.y + px(y)), size: gpui::size(px(hx1 - hx0), px(lh)) }, gpui::hsla(0.0, 0.0, 0.82, 1.0)));
+                                                    if e_drag { if let Some((mx, my)) = e_mouse { if my >= y && my < y + lh { if let Some(h) = e_caret { if h == sb && bb == sb { hx1 = (mx - x).clamp(hx0, *w); } if h == sa && aa == sa { hx0 = (mx - x).clamp(0.0, hx1); } } } } }
+                                                    window.paint_quad(gpui::fill(gpui::Bounds { origin: gpui::point(bounds.origin.x + px(x + hx0), bounds.origin.y + px(y)), size: gpui::size(px(hx1 - hx0), px(lh)) }, gpui::hsla(0.0, 0.0, 0.82, 1.0)));
                                                 } }
                                             }
-                                            if let Some(cc) = e_caret { if !e_drag && cc >= *cs && cc <= ce { let cx0 = if cc == ce { *w } else { hit_span(&shaped, word, *cs, cc, (cc + 1).min(ce)).map(|(a, _)| a).unwrap_or(*w) }; window.paint_quad(gpui::fill(gpui::Bounds { origin: gpui::point(bounds.origin.x + px(2.0 + x + cx0), bounds.origin.y + px(y)), size: gpui::size(px(1.0), px(lh)) }, gpui::black())); } }
-                                            let _ = shaped.paint(gpui::point(bounds.origin.x + px(2.0 + x), bounds.origin.y + px(y)), px(lh), gpui::TextAlign::Left, None, window, cx);
+                                            if let Some(cc) = e_caret { if !e_drag && cc >= *cs && cc <= ce { let cx0 = if cc == ce { *w } else { hit_span(&shaped, word, *cs, cc, (cc + 1).min(ce)).map(|(a, _)| a).unwrap_or(*w) }; window.paint_quad(gpui::fill(gpui::Bounds { origin: gpui::point(bounds.origin.x + px(x + cx0), bounds.origin.y + px(y)), size: gpui::size(px(1.0), px(lh)) }, gpui::black())); } }
+                                            let _ = shaped.paint(gpui::point(bounds.origin.x + px(x), bounds.origin.y + px(y)), px(lh), TextAlign::Left, None, window, cx);
                                             x += w;
                                         }
                                         y += lh;
@@ -1048,6 +1060,23 @@ impl gpui::Render for SheetView {
 }
 
 
+fn cell_text_align(align: HAlign, numeric: bool) -> TextAlign {
+    match align {
+        HAlign::Center | HAlign::CenterAcross => TextAlign::Center,
+        HAlign::Right | HAlign::Fill | HAlign::Justify => TextAlign::Right,
+        HAlign::General if numeric => TextAlign::Right,
+        _ => TextAlign::Left,
+    }
+}
+
+fn line_start_px(align: TextAlign, inner_width: f32, right_edge: f32, line_width: f32) -> f32 {
+    match align {
+        TextAlign::Left => 2.0,
+        TextAlign::Center => 2.0 + ((inner_width - line_width) / 2.0).max(0.0),
+        TextAlign::Right => (right_edge - line_width).max(2.0),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn search_styled(text: &str, hits: &[(usize, usize)], cur: Option<(usize, usize)>, color: Hsla, style: &gridcraft_model::style::Style) -> gpui::StyledText {
     let n = text.chars().count();
@@ -1099,4 +1128,26 @@ fn hit_span(shaped: &gpui::ShapedLine, word: &str, cs: usize, aa: usize, bb: usi
     let x0 = x0?;
     let x1 = x1.unwrap_or_else(|| f32::from(shaped.width));
     if x1 > x0 { Some((x0, x1)) } else { None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn general_number_stays_right_aligned_inside_the_edit_frame() {
+        let format = NumberFormat::parse_cached("General");
+        let date_system = gridcraft_core::DateSystem::D1900;
+        let number = format_value(&Value::Number(1250.0), &format, date_system);
+        let text = format_value(&Value::Text("1250".into()), &format, date_system);
+        let align = cell_text_align(HAlign::General, number.numeric);
+        assert_eq!(align, TextAlign::Right);
+        assert_eq!(cell_text_align(HAlign::General, text.numeric), TextAlign::Left);
+        assert_eq!(cell_text_align(HAlign::Left, number.numeric), TextAlign::Left);
+
+        let normal_x = line_start_px(align, 102.0, 95.0, 30.0);
+        let edit_x = 2.0 + line_start_px(align, 102.0, 93.0, 30.0);
+        assert_eq!(normal_x, 65.0);
+        assert_eq!(edit_x, normal_x);
+    }
 }

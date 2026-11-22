@@ -14,6 +14,17 @@ All notable changes to Zepi are documented here. The format follows
   PNGs go where `--out` says (default: the current directory). The office skills verify spreadsheets
   visually now, with no LibreOffice fallback.
 
+### Fixed
+
+- Background spreadsheet saves and reloads no longer discard newer edits. If the file changed
+  on disk, Zepi refuses to overwrite it and offers **Save a Copy**.
+- Partially imported workbooks show warnings and can be saved as copies without replacing the
+  original.
+- Auto-fit checks only stored cells, so sparse workbooks with cells far down or across the sheet
+  open faster. Explicit row heights are preserved.
+- Right-aligned numbers no longer jump left when edited in place. Copying formatted numbers
+  between cells preserves their number format without replacing the destination's visual style.
+
 ## [0.0.7] - 2026-11-22
 
 ### Added
