@@ -7,9 +7,9 @@ import {createDeliveryLedger, DELIVERY} from './delivery.ts';
 import {nativeUiAction} from './native-ui.ts';
 import { runAcp } from "../adapter/src/lib.js";
 import { createAgentSession, ModelRuntime, type AgentSession } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { readdir, rm, stat } from "node:fs/promises";
-import {basename} from "node:path";
+import { watch } from "node:fs";
 import { ndJsonStream, type AgentContext, type McpServer, type Stream } from "@agentclientprotocol/sdk";
 import {Readable, Writable} from 'node:stream';
 import { editorTools } from "./editor-tools.ts";
@@ -34,6 +34,40 @@ export const sweepDeadRuntimes = (root: string) => (async () => {
     }
   }
 })();
+
+/**
+ * Calls `onChange` after the watched files settle; failures are logged, never thrown.
+ * One directory watcher and one debounce gate serve every file, so a save that touches
+ * several of them refreshes once; an event arriving mid-refresh is replayed afterwards.
+ * The directory is watched because each file is replaced atomically on every save.
+ */
+function watchModelsFile(paths: string[], onChange: () => Promise<void>) {
+  const names = new Set(paths.map(path => basename(path)));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running = false;
+  let pending = false;
+  const run = () => {
+    if (running) { pending = true; return; }
+    running = true;
+    void onChange()
+      .catch((error: unknown) => console.error("model catalog reload failed", error))
+      .finally(() => {
+        running = false;
+        if (pending) { pending = false; run(); }
+      });
+  };
+  try {
+    const watcher = watch(dirname(paths[0] ?? "."), (_event, file) => {
+      if (file && !names.has(file)) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(run, 500);
+      timer.unref?.();
+    });
+    watcher.on("error", (error: unknown) => console.error("models.json watch failed", error));
+  } catch (error) {
+    console.error("models.json watch unavailable", error);
+  }
+}
 
 export async function startZepiAgent(agentDir: string, sessionDir: string, stream?: Stream, modelRuntime?: ModelRuntime) {
   const runtime = modelRuntime ?? await ModelRuntime.create({
@@ -228,6 +262,13 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
   server.agent.newSession = async context => create(await withMcp(context));
   server.agent.loadSession = async context => load(await withMcp(context));
   connectClient(server.connection.client);
+  // Settings edits to models.json must reach open threads without restarting them.
+  // models.json changes the catalog; settings.json changes the enabled shortlist.
+  const refreshCatalogScope = async () => {
+    await runtime.refresh({ allowNetwork: false });
+    await server.agent.refreshGlobalModelScope();
+  };
+  watchModelsFile([join(agentDir, "models.json"), join(agentDir, "settings.json")], refreshCatalogScope);
   void refreshModelCatalogs(runtime).then(() => server.agent.refreshGlobalModelScope())
     .catch((error: unknown) => console.error("background model catalog refresh failed", error));
   void browseSelfHeal().catch((error: unknown) => console.error("browse self-heal failed", error));

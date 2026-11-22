@@ -9086,14 +9086,14 @@ fn ai_page(_: &App) -> SettingsPage {
     SettingsPage {
         title: "AI",
         items: vec![
-            SettingsPageItem::Guide("Everything the pi agent uses for tasks lives in this section.\nOverview: pi version, updates, configuration import and the HTTP proxy.\nModels: providers, credentials, the default model, which models are enabled and per-model overrides.\nTools: the default tool list that new tasks start with.\nMCP: user-level servers from mcp.json, with sign-in and per-server exposure.\nSkills: user-level skills that tasks can load on demand.\nBrowser use: the browser Zepi drives for web tasks."),
+            SettingsPageItem::Guide("Everything the pi agent uses for tasks lives in this section.\nGeneral: pi version, updates, configuration files and the HTTP proxy.\nModels: providers, credentials, the default model, which models are enabled and per-model overrides.\nTools: the default tool list that new tasks start with.\nMCP: user-level servers from mcp.json, with sign-in and per-server exposure.\nSkills: user-level skills that tasks can load on demand.\nBrowser use: the browser Zepi drives for web tasks."),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "Overview".into(),
+                title: "General".into(),
                 r#type: Default::default(),
                 json_path: Some("ai.pi.overview"),
-                description: Some("Version, updates, proxy and configuration import.".into()),
+                description: Some("Version, updates, configuration files and the proxy.".into()),
                 search_aliases: &[
-                    "ai", "pi", "version", "update", "proxy", "import", "configuration",
+                    "ai", "pi", "general", "overview", "version", "update", "proxy", "import", "configuration",
                 ],
                 in_json: false,
                 files: USER,

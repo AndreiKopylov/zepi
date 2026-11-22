@@ -33,6 +33,52 @@ export function resolveDraftKey(value) {
   }
   return key;
 }
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const NON_CHAT_TYPES = new Set(['embedding', 'decision', 'image', 'audio', 'rerank', 'classifier']);
+
+// Providers list chat models next to embeddings and classifiers; those never reach the model list.
+const isChatModel = item => {
+  const type = typeof item?.type === 'string' ? item.type.toLowerCase() : '';
+  return !NON_CHAT_TYPES.has(type);
+};
+
+// `thinkingLevelMap` mirrors pi's levels; every level the provider does not offer maps to null.
+const thinkingMap = (efforts, mandatory) => Object.fromEntries(THINKING_LEVELS.map(level => {
+  if (level === 'off') return ['off', mandatory ? null : 'off'];
+  return [level, efforts.includes(level) ? level : null];
+}));
+
+// Spec fields a provider can report. Anything missing stays absent so pi keeps its defaults.
+export const modelSpec = item => {
+  const spec = {};
+  const context = Number(item?.context_length ?? item?.context_window ?? item?.architecture?.context_length);
+  if (Number.isFinite(context) && context > 0) spec.contextWindow = context;
+  const maxTokens = Number(item?.max_completion_tokens ?? item?.top_provider?.max_completion_tokens);
+  if (Number.isFinite(maxTokens) && maxTokens > 0) spec.maxTokens = maxTokens;
+  const reasoning = item?.reasoning;
+  const efforts = Array.isArray(reasoning?.supported_efforts)
+    ? reasoning.supported_efforts.filter(effort => typeof effort === 'string')
+    : [];
+  if (efforts.length) {
+    spec.reasoning = true;
+    spec.thinkingLevelMap = thinkingMap(efforts, reasoning.mandatory === true);
+  }
+  const modalities = item?.architecture?.input_modalities ?? item?.input_modalities;
+  if (Array.isArray(modalities)) {
+    const input = modalities.filter(value => value === 'text' || value === 'image');
+    if (input.length) spec.input = input;
+  }
+  return spec;
+};
+
+const SPEC_FIELDS = ['contextWindow', 'maxTokens', 'reasoning', 'thinkingLevelMap', 'input'];
+
+export function specEntry(id, name, raw) {
+  const spec = {};
+  for (const field of SPEC_FIELDS) if (raw && raw[field] !== undefined) spec[field] = raw[field];
+  return {...spec, id, name: typeof name === 'string' && name.trim() ? name : id};
+}
+
 export async function fetchConnectionModels(endpoint, api, key, resolvedAuth, customHeaders, timeoutMs = 10_000) {
   const headers = {Accept:'application/json'};
   // Saved headers stay inside the runtime and use pi's literal/$ENV convention.
@@ -64,7 +110,10 @@ export async function fetchConnectionModels(endpoint, api, key, resolvedAuth, cu
     let body;
     try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail('The model list response has an unsupported format.'); }
     if (!Array.isArray(body.data) || body.data.some(item => !item || typeof item.id !== 'string' || !item.id.trim() || item.id.length > 512)) fail('The model list response has an unsupported format.');
-    const candidates = [...new Map(body.data.map(item => [item.id, {id:item.id, ...(typeof item.name === 'string' ? {name:item.name.slice(0,256)} : {})}])).values()].slice(0,500);
+    const candidates = [...new Map(body.data
+      .filter(item => isChatModel(item))
+      .map(item => [item.id, {id:item.id, ...(typeof item.name === 'string' ? {name:item.name.slice(0,256)} : {}), ...modelSpec(item)}]))
+      .values()].slice(0,500);
     const incomplete = body.data.length > 500 || body.has_more === true || !!body.next || !!body.next_page || !!body.next_cursor || !!body.links?.next;
     return {candidates, incomplete};
   } catch (error) {

@@ -1,9 +1,9 @@
 use std::{collections::{HashMap, HashSet}, io::{BufRead, BufReader, Write}, process::{ChildStdin, Stdio}, sync::mpsc, time::Duration};
 
 use editor::Editor;
-use gpui::{Context, Entity, IntoElement, Render, Window};
+use gpui::{Context, Entity, IntoElement, MouseButton, Render, Window};
 use serde_json::{Value, json};
-use ui::{Checkbox, ContextMenu, DropdownMenu, DropdownStyle, Tooltip, prelude::*};
+use ui::{Checkbox, ContextMenu, DropdownMenu, DropdownStyle, Switch, Tooltip, ToggleState, prelude::*};
 
 pub(crate) mod sections {
     pub(crate) const GENERAL: &str = "general";
@@ -13,13 +13,6 @@ pub(crate) mod sections {
     pub(crate) const SKILLS: &str = "skills";
 }
 
-struct ModelSettingsDraft {
-    expected: Value,
-    thinking: Value,
-    reserve: Entity<Editor>,
-    recent: Entity<Editor>,
-}
-
 pub(crate) struct PiSettingsView {
     data: Option<Value>,
     section: &'static str,
@@ -27,8 +20,6 @@ pub(crate) struct PiSettingsView {
     provider: String,
     model: String,
     thinking: String,
-    model_settings_open: bool,
-    model_settings: HashMap<String, ModelSettingsDraft>,
     enabled_open: HashSet<String>,
     default_tools: Entity<Editor>,
     http_proxy: Entity<Editor>,
@@ -48,7 +39,10 @@ pub(crate) struct PiSettingsView {
     custom_incomplete: bool,
     delete_confirm: Option<String>,
     import_open: bool,
+    import_confirm: bool,
     import_text: Entity<Editor>,
+    mcp_edit: Option<String>,
+    mcp_confirm_remove: Option<String>,
     extensions: Option<Value>,
     ext_busy: bool,
     mcp_text: Entity<Editor>,
@@ -74,7 +68,7 @@ impl PiSettingsView {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self {
             data: None, section: sections::GENERAL, scroll_handle: gpui::ScrollHandle::new(), provider: String::new(), model: String::new(), thinking: "off".into(),
-            model_settings_open: false, model_settings: HashMap::new(), enabled_open: HashSet::new(),
+            enabled_open: HashSet::new(), import_confirm: false,
             default_tools: input("Leave blank to use Zepi defaults", false, window, cx),
             http_proxy: input("HTTP(S) proxy URL; leave blank to keep", true, window, cx), http_proxy_expected: Value::Null,
             key: input("API key or $ENV_VAR reference", true, window, cx), key_provider: None,
@@ -85,7 +79,7 @@ impl PiSettingsView {
             custom_key: input("Leave blank to keep the stored key", true, window, cx),
             custom_model_open: false, custom_editing: None, custom_revision: Value::Null,
             custom_candidates: Vec::new(), custom_selected: HashSet::new(), custom_incomplete: false, delete_confirm: None,
-            import_open: false,
+            import_open: false, mcp_edit: None, mcp_confirm_remove: None,
             import_text: cx.new(|cx| { let mut editor = Editor::auto_height(6, 18, window, cx); editor.set_placeholder_text("Paste a provider JSON object, for example { \"my-gateway\": { \"baseUrl\": ..., \"api\": \"openai-completions\", \"models\": [...] } }", window, cx); editor }),
             extensions: None, ext_busy: false, mcp_add_open: false,
             mcp_text: cx.new(|cx| { let mut editor = Editor::auto_height(4, 12, window, cx); editor.set_placeholder_text("{ \"docs\": { \"url\": \"https://example.com/mcp\" } }", window, cx); editor }),
@@ -100,6 +94,8 @@ impl PiSettingsView {
     pub(crate) fn set_section(&mut self, section: &'static str) {
         if self.section != section {
             self.section = section;
+            self.delete_confirm = None;
+            self.mcp_confirm_remove = None;
             // A notice belongs to the page that produced it.
             self.notice.clear();
             self.failed = false;
@@ -110,10 +106,11 @@ impl PiSettingsView {
         if self.busy { return; }
         self.busy = true;
         self.delete_confirm = None;
+        self.mcp_confirm_remove = None;
+        self.import_confirm = false;
         self.notice.clear();
         self.failed = false;
         let operation = request["operation"].as_str().unwrap_or("status").to_owned();
-        let saved_model = format!("{}/{}", request["provider"].as_str().unwrap_or_default(), request["model"].as_str().unwrap_or_default());
         let root = std::env::var_os("ZEPI_ROOT").map(std::path::PathBuf::from);
         let node = std::env::var_os("ZEPI_NODE");
         let task = cx.background_spawn(async move {
@@ -182,8 +179,6 @@ impl PiSettingsView {
                             view.thinking = data["defaultThinkingLevel"].as_str().unwrap_or("off").into();
                         }
                         view.data = Some(data);
-                        if matches!(operation.as_str(), "status" | "import") { view.model_settings.clear(); }
-                        if operation == "model-settings" { view.model_settings.remove(&saved_model); }
                         if view.provider.is_empty() {
                             let saved_provider = view.data.as_ref().and_then(|d| d["defaultProvider"].as_str()).unwrap_or_default().to_owned();
                             let saved_model = view.data.as_ref().and_then(|d| d["defaultModel"].as_str()).unwrap_or_default().to_owned();
@@ -194,13 +189,11 @@ impl PiSettingsView {
                             if view.models().iter().any(|m| m["id"].as_str() == Some(saved_model.as_str())) { view.model = saved_model; }
                             else { view.select_first_model(); }
                         }
-                        view.ensure_model_settings(window, cx);
                         view.notice = match operation.as_str() {
                             "status" => model_catalog_notice,
                             "check-update" => String::new(),
                             "import" => "Local pi configuration imported. New tasks will use these settings.".into(),
                             "defaults" => "Defaults saved for new tasks. Existing tasks keep their models.".into(),
-                            "model-settings" => "Model overrides saved. New tasks use them; /reload updates compaction in open tasks. Thinking applies when selecting this model.".into(),
                             "tool-defaults" => "Tool defaults saved. New tasks use this list; /reload adds newly selected tools to the current task.".into(),
                             "http-proxy" => "HTTP proxy saved. Restart Zepi to apply this change to all tasks.".into(),
                             "enabled-models" => "Enabled models saved. New tasks and the composer use this list.".into(),
@@ -222,6 +215,8 @@ impl PiSettingsView {
     fn ext_request(&mut self, request: Value, window: &mut Window, cx: &mut Context<Self>) {
         if self.ext_busy { return; }
         self.ext_busy = true;
+        self.mcp_confirm_remove = None;
+        self.delete_confirm = None;
         self.notice.clear();
         self.failed = false;
         let operation = request["operation"].as_str().unwrap_or("status").to_owned();
@@ -254,14 +249,24 @@ impl PiSettingsView {
                 view.ext_busy = false;
                 match result {
                     Ok(data) => {
-                        if operation == "mcp-add" {
+                        if operation == "mcp-add" || operation == "mcp-set" {
                             view.mcp_add_open = false;
+                            view.mcp_edit = None;
                             view.mcp_text.update(cx, |editor, cx| editor.set_text("", window, cx));
+                        }
+                        if operation == "mcp-entry" {
+                            let text = data["text"].as_str().unwrap_or_default().to_owned();
+                            view.mcp_text.update(cx, |editor, cx| editor.set_text(text, window, cx));
+                            view.mcp_add_open = true;
+                            cx.notify();
+                            return;
                         }
                         view.extensions = Some(data);
                         view.notice = match operation.as_str() {
                             "status" => String::new(),
                             "mcp-add" => "MCP servers added. New tasks connect to them.".into(),
+                            "mcp-move" => "MCP server order saved.".into(),
+                            "mcp-set" => "MCP server updated. New tasks connect with the new configuration.".into(),
                             "mcp-toggle" => "MCP server updated. New tasks use this setting.".into(),
                             "mcp-remove" => "MCP server removed.".into(),
                             "mcp-signout" => "Signed out of this MCP server.".into(),
@@ -282,74 +287,6 @@ impl PiSettingsView {
     }
 
     fn model_key(&self) -> String { format!("{}/{}", self.provider, self.model) }
-
-    fn ensure_model_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.model_settings_open || self.model.is_empty() { return; }
-        let key = self.model_key();
-        if self.model_settings.contains_key(&key) { return; }
-        let expected = self.models().iter().find(|model| model["id"].as_str() == Some(&self.model))
-            .map(|model| model["settings"]["values"].clone()).unwrap_or_else(|| json!({}));
-        let reserve = input("Use global default", false, window, cx);
-        let recent = input("Use global default", false, window, cx);
-        reserve.update(cx, |editor, cx| editor.set_text(runtime_text(&expected["reserveTokens"]), window, cx));
-        recent.update(cx, |editor, cx| editor.set_text(runtime_text(&expected["keepRecentTokens"]), window, cx));
-        self.model_settings.insert(key, ModelSettingsDraft {thinking: expected["thinkingLevel"].clone(), expected, reserve, recent});
-    }
-
-    fn save_model_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(draft) = self.model_settings.get(&self.model_key()) else { return; };
-        let mut values = json!({"thinkingLevel": draft.thinking});
-        for (key, editor) in [("reserveTokens", &draft.reserve), ("keepRecentTokens", &draft.recent)] {
-            let text = editor.read(cx).text(cx);
-            values[key] = if text.trim().is_empty() { Value::Null }
-                else if let Ok(value) = text.trim().parse::<u64>() { json!(value) }
-                else { self.failed = true; self.notice = "Enter a non-negative whole token count, or leave blank for the global default.".into(); cx.notify(); return; };
-        }
-        let changes: serde_json::Map<String, Value> = values.as_object().unwrap().iter()
-            .filter(|(key, value)| *value != &draft.expected[*key]).map(|(key, value)| (key.clone(), value.clone())).collect();
-        if changes.is_empty() { self.failed = false; self.notice = "No model overrides to save.".into(); cx.notify(); return; }
-        self.request(json!({"operation":"model-settings", "provider": self.provider, "model": self.model,
-            "changes": changes, "expected": draft.expected}), window, cx);
-    }
-
-    fn model_settings_section(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut section = v_flex().gap_3().child(h_flex().child(Button::new("pi-model-overrides", "Model Overrides")
-            .start_icon(Icon::new(if self.model_settings_open { IconName::ChevronDown } else { IconName::ChevronRight }))
-            .on_click(cx.listener(|view, _, window, cx| {
-                view.model_settings_open = !view.model_settings_open; view.ensure_model_settings(window, cx); cx.notify();
-            }))));
-        if !self.model_settings_open { return section.into_any_element(); }
-        let key = self.model_key();
-        let Some(draft) = self.model_settings.get(&key) else { return section.into_any_element(); };
-        let selected = draft.thinking.clone();
-        let levels = self.levels();
-        let weak = cx.entity().downgrade();
-        let menu = ContextMenu::build(window, cx, move |mut menu, _, _| {
-            for value in std::iter::once(Value::Null).chain(levels.into_iter().map(Value::String)) {
-                let weak = weak.clone(); let key = key.clone();
-                let label = if value.is_null() { "Use global default".to_owned() } else { runtime_choice(&value) };
-                menu = menu.entry(label, None, move |_, cx| { let _ = weak.update(cx, |view, cx| {
-                    if view.busy { return; }
-                    if let Some(draft) = view.model_settings.get_mut(&key) { draft.thinking = value.clone(); }
-                    cx.notify();
-                }); });
-            }
-            menu
-        });
-        let effective = self.models().iter().find(|model| model["id"].as_str() == Some(&self.model))
-            .map(|model| model["settings"]["effective"].clone()).unwrap_or(Value::Null);
-        section = section
-            .child(Label::new(format!("Global overrides for {}", self.model_key())).size(LabelSize::Small).color(Color::Muted))
-            .child(field("Thinking Level", DropdownMenu::new("pi-model-thinking", if selected.is_null() {"Use global default".to_owned()} else {runtime_choice(&selected)}, menu)
-                .style(DropdownStyle::Outlined).full_width(true).into_any_element()))
-            .child(field("Reserved Tokens", text_field(draft.reserve.clone(), cx)))
-            .child(field("Recent Tokens to Keep", text_field(draft.recent.clone(), cx)))
-            .child(Label::new(format!("Effective token limits: {} reserved · {} recent. Blank fields inherit global compaction settings.",
-                runtime_text(&effective["reserveTokens"]), runtime_text(&effective["keepRecentTokens"]))).size(LabelSize::Small).color(Color::Muted))
-            .child(h_flex().child(Button::new("pi-save-model-overrides", "Save Model Overrides").style(ButtonStyle::Outlined).disabled(self.busy)
-                .on_click(cx.listener(|view, _, window, cx| view.save_model_settings(window, cx)))));
-        section.into_any_element()
-    }
 
     fn proxy_section(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let configured = self.data.as_ref().is_some_and(|data| data["httpProxy"]["configured"] == true);
@@ -437,11 +374,44 @@ impl PiSettingsView {
         cx.notify();
     }
 
+    fn open_config_file_button(&self, id: &'static str, label: &'static str, file: &'static str, cx: &mut Context<Self>) -> gpui::AnyElement {
+        Button::new(id, label).style(ButtonStyle::Outlined).disabled(self.busy)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let directory = this.data.as_ref().and_then(|data| data["directory"].as_str()).unwrap_or_default().to_owned();
+                if directory.is_empty() {
+                    this.failed = true;
+                    this.notice = "The pi configuration directory is unavailable.".into();
+                    cx.notify();
+                    return;
+                }
+                let path = std::path::Path::new(&directory).join(file);
+                if let Err(error) = open::that(&path) {
+                    this.failed = true;
+                    this.notice = format!("Unable to open {}: {error}", path.display());
+                    cx.notify();
+                }
+            }))
+            .into_any_element()
+    }
+
+    fn save_defaults(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.model.is_empty() { return; }
+        self.request(json!({"operation":"defaults", "provider":self.provider, "model":self.model, "thinking":self.thinking}), window, cx);
+    }
+
     fn connection_request(&self, operation: &str, cx: &App) -> Value {
         let models = self.custom_model.read(cx).text(cx).split([',', '\n', '\r']).map(str::trim)
             .filter(|s| !s.is_empty()).map(str::to_owned).collect::<Vec<_>>();
+        // Specs discovered from the endpoint travel with the save so new models keep them.
+        // Only the ids being saved: a full catalog would overflow the pi-settings request cap.
+        let selected: HashSet<&str> = models.iter().map(String::as_str).collect();
+        let specs: serde_json::Map<String, Value> = self.custom_candidates.iter().filter_map(|item| {
+            let id = item["id"].as_str()?;
+            if !selected.contains(id) { return None; }
+            Some((id.to_owned(), item.clone()))
+        }).collect();
         json!({"operation":operation, "provider":self.custom_editing.clone().unwrap_or_else(|| self.custom_provider.read(cx).text(cx)),
-            "baseUrl":self.custom_url.read(cx).text(cx), "api":self.custom_api, "models":models,
+            "baseUrl":self.custom_url.read(cx).text(cx), "api":self.custom_api, "models":models, "specs":specs,
             "key":self.custom_key.read(cx).text(cx), "expectedRevision":self.custom_revision})
     }
 
@@ -451,6 +421,7 @@ impl PiSettingsView {
         self.failed = false;
         self.notice = format!("Sign in to {name} in your browser.");
         self.auth_name = Some(name.clone());
+        self.mcp_confirm_remove = None;
         let (sender, receiver) = mpsc::channel();
         cx.background_spawn(async move { run_mcp_sign_in(name, sender); }).detach();
         self.auth_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -507,12 +478,12 @@ impl PiSettingsView {
                                 }
                                 view.key.update(cx, |editor, cx| editor.set_text("", window, cx));
                                 view.key_provider = None;
+                                view.save_defaults(window, cx);
                             }
-                            "pi-thinking" => view.thinking = value.clone(),
+                            "pi-thinking" => { view.thinking = value.clone(); view.save_defaults(window, cx); }
                             "pi-custom-api" => view.custom_api = value.clone(),
                             _ => {}
                         }
-                        view.ensure_model_settings(window, cx);
                         cx.notify();
                     });
                 });
@@ -526,6 +497,14 @@ impl PiSettingsView {
 impl Render for PiSettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex().size_full()
+            // A click outside the armed button (which stops propagation) disarms it.
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if this.mcp_confirm_remove.is_some() || this.delete_confirm.is_some() {
+                    this.mcp_confirm_remove = None;
+                    this.delete_confirm = None;
+                    cx.notify();
+                }
+            }))
             .child(div().px_8().pt_3().child(Label::new(self.header_text())))
             // Status strip: a hint by default, the last save or error after an action.
             .child(div().min_h(px(16.)).flex_none().px_8().pt_1().child(Label::new(if self.notice.is_empty() {
@@ -571,6 +550,25 @@ impl PiSettingsView {
     fn general_page(&self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let directory = self.data.as_ref().and_then(|d| d["directory"].as_str()).unwrap_or_default().to_owned();
         let update = self.data.as_ref().map(|d| &d["update"]);
+        let import_click = |this: &mut Self, _: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
+            if !this.import_confirm {
+                this.import_confirm = true;
+                let weak = cx.entity().downgrade();
+                cx.spawn_in(window, async move |_, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
+                    let _ = weak.update(cx, |view, cx| {
+                        if view.import_confirm {
+                            view.import_confirm = false;
+                            cx.notify();
+                        }
+                    });
+                }).detach();
+                cx.notify();
+                return;
+            }
+            this.import_confirm = false;
+            this.request(json!({"operation":"import"}), window, cx);
+        };
         let update_label = match update.and_then(|u| u["status"].as_str()) {
             Some("up_to_date") => "You are using the latest stable pi release.".to_owned(),
             Some("update_available") => format!("pi {} is available. Your installed version has not changed.", update.and_then(|u| u["latest"].as_str()).unwrap_or_default()),
@@ -590,10 +588,27 @@ impl PiSettingsView {
                     .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"check-update"}), window, cx))))
                 .child(Label::new("Checks the latest release without replacing the running agent.").size(LabelSize::Small).color(Color::Muted)))
             .child(v_flex().gap_2().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
-                .child(Label::new("Import"))
-                .child(Label::new("Copies models, credentials and defaults from your local pi configuration. Existing entries win.").size(LabelSize::Small).color(Color::Muted))
-                .child(Button::new("pi-import", "Import Local pi Configuration").style(ButtonStyle::Outlined).disabled(self.busy)
-                    .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"import"}), window, cx)))))
+                .child(Label::new("Configuration"))
+                .child(Label::new("pi keeps its defaults, enabled models and agent settings in these files. Open tasks reload them when a file changes.").size(LabelSize::Small).color(Color::Muted))
+                .child({
+                    let mut row: Vec<gpui::AnyElement> = vec![
+                        self.open_config_file_button("pi-open-settings", "Open settings.json", "settings.json", cx),
+                        Button::new("pi-import", if self.import_confirm { "Confirm import" } else { "Import from local pi" })
+                            .style(if self.import_confirm { ButtonStyle::Tinted(ui::TintColor::Warning) } else { ButtonStyle::Outlined })
+                            .disabled(self.busy)
+                            .on_click(cx.listener(import_click))
+                            .into_any_element(),
+                    ];
+                    if self.import_confirm {
+                        row.push(Button::new("pi-import-cancel", "Cancel").disabled(self.busy)
+                            .on_click(cx.listener(|this, _, _, cx| { this.import_confirm = false; cx.notify(); }))
+                            .into_any_element());
+                    }
+                    h_flex().gap_2().flex_wrap().children(row)
+                })
+                .when(self.import_confirm, |section| section.child(Label::new(
+                    "Import copies models and credentials from the local pi installation into this one. Existing entries win. Click Confirm import to continue.")
+                    .size(LabelSize::XSmall).color(Color::Warning))))
             .child(self.proxy_section(cx))
             .into_any_element()
     }
@@ -620,14 +635,16 @@ impl PiSettingsView {
         v_flex().gap_4()
             .child(field("Default Model", self.selector("pi-default-model", default_label, choices, window, cx)))
             .child(field("Thinking Level", self.selector("pi-thinking", self.thinking.clone(), levels, window, cx)))
-            .child(h_flex().gap_2()
-                .child(Button::new("pi-save-defaults", "Save Defaults").style(ButtonStyle::Filled).disabled(self.busy || self.model.is_empty())
-                    .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"defaults", "provider":this.provider,"model":this.model,"thinking":this.thinking}), window, cx))))
-                .child(Button::new("pi-refresh", "Reload & update models").disabled(self.busy)
-                    .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"status", "refreshModels":true}), window, cx)))))
-            .child(self.model_settings_section(window, cx))
             .child(self.providers_section(window, cx))
             .child(self.enabled_section(window, cx))
+            .child(v_flex().gap_2().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
+                .child(Label::new("Provider catalogs"))
+                .child(Label::new("Model edits, connections and the enabled list are picked up by open tasks automatically. Only models that a provider added upstream need a network check.").size(LabelSize::XSmall).color(Color::Muted))
+                .child(h_flex().gap_2().flex_wrap()
+                    .child(Button::new("pi-refresh-models", "Check for new models").style(ButtonStyle::Outlined).disabled(self.busy)
+                        .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"status", "refreshModels":true}), window, cx))))
+                    .child(self.open_config_file_button("pi-open-models", "Open models.json", "models.json", cx))
+                    .child(self.open_config_file_button("pi-open-models-store", "Open models-store.json", "models-store.json", cx))))
             .into_any_element()
     }
 
@@ -781,7 +798,7 @@ impl PiSettingsView {
                 let accent = Color::Accent.color(cx);
                 let target = reference.clone();
                 let mut checkbox = Checkbox::new(SharedString::from(format!("pi-model-candidate-{reference}")), selected.into())
-                    .label(reference)
+                    .label(candidate_label(item, &reference))
                     .label_color(if selected { Color::Default } else { Color::Muted })
                     .disabled(self.busy)
                     .on_click(move |_, _, cx| {
@@ -797,27 +814,44 @@ impl PiSettingsView {
                 .child(Label::new("Models found on the endpoint").size(LabelSize::Small).color(Color::Muted))
                 .child(div().w_full().child(grid));
         }
-        card.child(h_flex().gap_2().items_center()
+        card.child(h_flex().gap_2().items_center().w_full().min_w_0()
             .children(self.custom_editing.clone().map(|id| {
                 let armed = self.delete_confirm.as_deref() == Some(id.as_str());
                 let confirm_id = id.clone();
-                let state_id = id.clone();
                 h_flex().gap_2()
-                    .child(Button::new("pi-delete-connection", if armed { "Confirm delete" } else { "Delete connection" })
-                        .style(ButtonStyle::Tinted(ui::TintColor::Error)).disabled(self.busy)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if this.delete_confirm.as_deref() != Some(confirm_id.as_str()) {
-                                this.delete_confirm = Some(confirm_id.clone());
-                                cx.notify();
-                                return;
+                    .child(div()
+                        .id(SharedString::from(format!("pi-delete-connection-wrap-{confirm_id}")))
+                        .on_mouse_down(MouseButton::Left, cx.listener({
+                            let confirm_id = confirm_id.clone();
+                            move |this, _, window, cx| {
+                                if this.busy { return; }
+                                cx.stop_propagation();
+                                if this.delete_confirm.as_deref() != Some(confirm_id.as_str()) {
+                                    this.delete_confirm = Some(confirm_id.clone());
+                                    let weak = cx.entity().downgrade();
+                                    let armed = confirm_id.clone();
+                                    cx.spawn_in(window, async move |_, cx| {
+                                        cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
+                                        let _ = weak.update(cx, |view, cx| {
+                                            if view.delete_confirm.as_deref() == Some(armed.as_str()) {
+                                                view.delete_confirm = None;
+                                                cx.notify();
+                                            }
+                                        });
+                                    }).detach();
+                                    cx.notify();
+                                    return;
+                                }
+                                let revision = this.data.as_ref().and_then(|d| d["customConnections"].as_array()).and_then(|list| list.iter()
+                                    .find(|c| c["id"].as_str() == Some(confirm_id.as_str())).map(|c| c["revision"].clone())).unwrap_or(Value::Null);
+                                this.delete_confirm = None;
+                                this.request(json!({"operation":"remove-connection", "provider":confirm_id.clone(), "expectedRevision":revision}), window, cx);
                             }
-                            let revision = this.data.as_ref().and_then(|d| d["customConnections"].as_array()).and_then(|list| list.iter()
-                                .find(|c| c["id"].as_str() == Some(confirm_id.as_str())).map(|c| c["revision"].clone())).unwrap_or(Value::Null);
-                            this.delete_confirm = None;
-                            this.request(json!({"operation":"remove-connection", "provider":confirm_id.clone(), "expectedRevision":revision}), window, cx);
-                        })))
+                        }))
+                        .child(Button::new("pi-delete-connection", if armed { "Confirm delete" } else { "Delete connection" })
+                            .style(ButtonStyle::Tinted(ui::TintColor::Error)).disabled(self.busy)))
                     .when(armed, |row| row.child(Button::new("pi-delete-connection-cancel", "Cancel").disabled(self.busy)
-                        .on_click(cx.listener(move |this, _, _, cx| { let _ = &state_id; this.delete_confirm = None; cx.notify(); }))))
+                        .on_click(cx.listener(|this, _, _, cx| { this.delete_confirm = None; cx.notify(); }))))
                     .into_any_element()
             }))
             .child(div().flex_1())
@@ -825,7 +859,7 @@ impl PiSettingsView {
                 Button::new("pi-add-model-candidates", "Add selected").disabled(self.busy)
                     .on_click(cx.listener(|this, _, window, cx| {
                         let current = this.custom_model.read(cx).text(cx);
-                        let mut ids = current.split([',', '\n', '\r']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect::<Vec<_>>();
+                        let mut ids = current.split([',', '\n', '\r']) .map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect::<Vec<_>>();
                         for item in &this.custom_candidates {
                             if let Some(id) = item["id"].as_str() {
                                 if this.custom_selected.contains(id) && !ids.iter().any(|value| value == id) { ids.push(id.to_owned()); }
@@ -835,7 +869,7 @@ impl PiSettingsView {
                         this.custom_candidates.clear(); this.custom_selected.clear(); this.custom_incomplete = false;
                         cx.notify();
                     }))))
-            .child(Button::new("pi-fetch-models", "Fetch models").disabled(self.busy)
+            .child(Button::new("pi-fetch-models", "Fetch models").style(ButtonStyle::Outlined).disabled(self.busy)
                 .on_click(cx.listener(|this, _, window, cx| { let request = this.connection_request("list-connection-models", cx); this.request(request, window, cx); })))
             .child(Button::new("pi-cancel-connection", "Cancel").disabled(self.busy)
                 .on_click(cx.listener(|this, _, _, cx| { this.custom_model_open = false; this.custom_candidates.clear(); this.custom_selected.clear(); cx.notify(); })))
@@ -948,13 +982,17 @@ impl PiSettingsView {
             .into_any_element()
     }
 
-    fn mcp_page(&self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn mcp_page(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let servers = self.extensions.as_ref().and_then(|data| data["mcp"].as_array()).cloned().unwrap_or_default();
         let loaded = self.extensions.is_some();
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
-        for server in servers.iter().filter(|server| server["builtin"] != true) {
+        let session_only = servers.iter().filter(|server| server["builtin"] != true && server["runtimeOnly"] == true).count();
+        let visible: Vec<&Value> = servers.iter().filter(|server| server["builtin"] != true && server["runtimeOnly"] != true).collect();
+        for (index, server) in visible.iter().copied().enumerate() {
             let name = server["name"].as_str().unwrap_or_default().to_owned();
             let enabled = server["enabled"] != false;
+            let signed_in = server["signedIn"] == true;
+            let auth = server["auth"].as_str().unwrap_or("none").to_owned();
             let transport = server["transport"].as_str().unwrap_or_default();
             let exposure = server["exposure"].as_str().unwrap_or_default();
             let extra_exposure = server["toolExposure"].as_u64().unwrap_or(0);
@@ -965,9 +1003,6 @@ impl PiSettingsView {
                 (false, false) if extra_exposure > 0 => format!("{transport} · {exposure} · {extra_exposure} per-tool"),
                 (false, false) => format!("{transport} · {exposure}"),
             };
-            let oauth = server["oauth"] == true;
-            let signed_in = server["signedIn"] == true;
-            let runtime_only = server["runtimeOnly"] == true;
             let connections = server["connections"].as_array().cloned().unwrap_or_default();
             let mut label = "not connected in any open task".to_owned();
             let mut healthy = None;
@@ -979,108 +1014,262 @@ impl PiSettingsView {
                 healthy = Some(state == "connected");
                 if state == "connected" { break; }
             }
-            // Parked sessions keep old settings; the page footnote explains /reload, so the row
-            // only reports the connection state itself.
+            let needs_sign_in = connections.iter().any(|connection| connection["state"] == "needs-auth");
             let sessions = connections.iter().filter_map(|connection| connection["sessionId"].as_str()).collect::<HashSet<_>>().len();
-            let status = if sessions > 1 { format!("{label} · {sessions} sessions") } else { label };
-            let (status, healthy) = (status, healthy);
+            let status = if !enabled { "disabled".to_owned() }
+                else if sessions > 1 { format!("{label} · {sessions} sessions") }
+                else { label };
             let toggle_name = name.clone();
-            let remove_name = name.clone();
             let signout_name = name.clone();
             let signin_name = name.clone();
-            let mut row = h_flex().gap_2().items_center()
-                .child(Label::new(name.clone()))
-                .when(!route.is_empty(), |row| row.child(Label::new(route.clone()).size(LabelSize::XSmall).color(Color::Muted)))
-                .child(Label::new(status).size(LabelSize::XSmall).color(match healthy {
+            let edit_name = name.clone();
+            let first = index == 0;
+            let last = index == visible.len() - 1;
+            let up_name = name.clone();
+            let down_name = name.clone();
+            let weak_toggle = cx.weak_entity();
+
+            let mut meta = h_flex().gap_2().items_center();
+            if !route.is_empty() {
+                meta = meta.child(Label::new(route).size(LabelSize::XSmall).color(if enabled { Color::Muted } else { Color::Hidden }));
+            }
+            meta = meta.child(Label::new(status).size(LabelSize::XSmall).color(if !enabled {
+                Color::Hidden
+            } else {
+                match healthy {
                     Some(true) => Color::Success,
                     Some(false) => Color::Warning,
                     None => Color::Muted,
-                }));
-            if oauth {
-                row = row.child(Label::new(if signed_in { "Signed in" } else { "Sign-in required" }).size(LabelSize::XSmall)
-                    .color(if signed_in { Color::Muted } else { Color::Warning }));
-            }
-            row = row.child(div().flex_1());
-            if !runtime_only {
-                row = row.child(Button::new(SharedString::from(format!("pi-mcp-toggle-{name}")), if enabled { "Disable" } else { "Enable" })
-                    .disabled(self.ext_busy)
-                    .on_click(cx.listener(move |this, _, window, cx| this.ext_request(json!({"operation":"mcp-toggle", "name":toggle_name.clone(), "enabled":!enabled}), window, cx))));
-            }
-            if oauth {
+                }
+            }));
+            if enabled {
                 if signed_in {
-                    row = row.child(Button::new(SharedString::from(format!("pi-mcp-sign-out-{name}")), "Sign out").disabled(self.ext_busy)
-                        .on_click(cx.listener(move |this, _, window, cx| this.ext_request(json!({"operation":"mcp-signout", "name":signout_name.clone()}), window, cx))));
-                } else {
-                    row = row.child(Button::new(SharedString::from(format!("pi-mcp-sign-in-{name}")), "Sign in").disabled(self.ext_busy)
-                        .on_click(cx.listener(move |this, _, window, cx| this.sign_in_mcp(signin_name.clone(), window, cx))));
+                    meta = meta.child(Label::new("signed in").size(LabelSize::XSmall).color(Color::Muted));
+                } else if needs_sign_in {
+                    meta = meta.child(Label::new("sign-in required").size(LabelSize::XSmall).color(Color::Warning));
+                } else if auth != "none" && auth != "unknown" {
+                    meta = meta.child(Label::new(format!("auth: {auth}")).size(LabelSize::XSmall).color(Color::Hidden));
                 }
             }
-            if !runtime_only {
-                row = row.child(Button::new(SharedString::from(format!("pi-mcp-remove-{name}")), "Remove").disabled(self.ext_busy)
-                    .on_click(cx.listener(move |this, _, window, cx| this.ext_request(json!({"operation":"mcp-remove", "name":remove_name.clone()}), window, cx))));
+
+            let mut actions: Vec<gpui::AnyElement> = Vec::new();
+            // Editing works whether or not the server is enabled.
+            actions.push(Button::new(SharedString::from(format!("pi-mcp-edit-{name}")), "Edit")
+                .style(ButtonStyle::Outlined)
+                .disabled(self.ext_busy)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.mcp_edit = Some(edit_name.clone());
+                    this.ext_request(json!({"operation":"mcp-entry", "name":edit_name.clone()}), window, cx);
+                }))
+                .into_any_element());
+            if enabled && signed_in {
+                actions.push(Button::new(SharedString::from(format!("pi-mcp-auth-{name}")), "Sign out")
+                    .style(ButtonStyle::Outlined)
+                    .disabled(self.ext_busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.ext_request(json!({"operation":"mcp-signout", "name":signout_name.clone()}), window, cx)))
+                    .into_any_element());
+            } else if enabled && needs_sign_in {
+                actions.push(Button::new(SharedString::from(format!("pi-mcp-auth-{name}")), "Sign in")
+                    .style(ButtonStyle::Outlined)
+                    .disabled(self.ext_busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.sign_in_mcp(signin_name.clone(), window, cx)))
+                    .into_any_element());
             }
-            rows.push(row.into_any_element());
-            if runtime_only {
-                rows.push(Label::new("Provided by a pi plugin or an open task; it is not in mcp.json.").size(LabelSize::XSmall).color(Color::Muted).into_any_element());
-            }
+            let confirming = self.mcp_confirm_remove.as_deref() == Some(name.as_str());
+            actions.push(div()
+                .id(SharedString::from(format!("pi-mcp-remove-wrap-{name}")))
+                .on_mouse_down(MouseButton::Left, cx.listener({
+                    let confirm_name = name.clone();
+                    move |this, _, window, cx| {
+                        if this.ext_busy { return; }
+                        cx.stop_propagation();
+                        if this.mcp_confirm_remove.as_deref() != Some(confirm_name.as_str()) {
+                            this.mcp_confirm_remove = Some(confirm_name.clone());
+                            cx.notify();
+                            return;
+                        }
+                        this.mcp_confirm_remove = None;
+                        this.ext_request(json!({"operation":"mcp-remove", "name":confirm_name.clone()}), window, cx);
+                    }
+                }))
+                .child(Button::new(SharedString::from(format!("pi-mcp-remove-{name}")),
+                    if confirming { "Confirm remove" } else { "Remove" })
+                    .style(if confirming { ButtonStyle::Tinted(ui::TintColor::Error) } else { ButtonStyle::Outlined })
+                    .disabled(self.ext_busy))
+                .into_any_element());
+
+            let card = v_flex().id(SharedString::from(format!("pi-mcp-card-{name}"))).gap_2().p_3().rounded_md().border_1()
+                .border_color(if enabled { cx.theme().colors().border } else { cx.theme().colors().border_variant })
+                .bg(cx.theme().colors().background)
+                .child(h_flex().gap_2().items_start()
+                    .child(v_flex().gap_0p5()
+                        .child(Label::new(name.clone()).size(LabelSize::Large).color(if enabled { Color::Default } else { Color::Muted }))
+                        .child(meta))
+                    .child(div().flex_1())
+                    .child(Switch::new(SharedString::from(format!("pi-mcp-switch-{name}")), enabled.into())
+                        .aria_label(format!("Enable {name}"))
+                        .disabled(self.ext_busy)
+                        .on_click(move |state, window, cx| {
+                            let enabled = *state == ToggleState::Selected;
+                            let _ = weak_toggle.update(cx, |this, cx| {
+                                this.ext_request(json!({"operation":"mcp-toggle", "name":toggle_name.clone(), "enabled":enabled}), window, cx)
+                            });
+                        })))
+                .child(h_flex().gap_2().items_center()
+                    .children(actions)
+                    .child(div().flex_1())
+                    .child(h_flex().items_center()
+                        .child(IconButton::new(SharedString::from(format!("pi-mcp-up-{name}")), IconName::ArrowUp)
+                            .icon_size(IconSize::XSmall)
+                            .aria_label("Move up")
+                            .tooltip(Tooltip::text("Move up"))
+                            .disabled(self.ext_busy || first)
+                            .on_click(cx.listener(move |this, _, window, cx| this.ext_request(json!({"operation":"mcp-move", "name":up_name.clone(), "direction":"up"}), window, cx))))
+                        .child(IconButton::new(SharedString::from(format!("pi-mcp-down-{name}")), IconName::ArrowDown)
+                            .icon_size(IconSize::XSmall)
+                            .aria_label("Move down")
+                            .tooltip(Tooltip::text("Move down"))
+                            .disabled(self.ext_busy || last)
+                            .on_click(cx.listener(move |this, _, window, cx| this.ext_request(json!({"operation":"mcp-move", "name":down_name.clone(), "direction":"down"}), window, cx))))));
+            rows.push(card.into_any_element());
         }
+
         v_flex().gap_3()
-            .child(h_flex().gap_2().justify_end()
-                .child(Button::new("pi-mcp-refresh", "Refresh").disabled(self.ext_busy)
+            .child(h_flex().gap_2().justify_end().pt_2()
+                .child(Button::new("pi-mcp-open-file", "Open mcp.json").disabled(self.ext_busy)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let directory = this.data.as_ref().and_then(|data| data["directory"].as_str()).unwrap_or_default().to_owned();
+                        if directory.is_empty() {
+                            this.failed = true;
+                            this.notice = "The pi configuration directory is unavailable.".into();
+                            cx.notify();
+                            return;
+                        }
+                        let path = std::path::Path::new(&directory).join("mcp.json");
+                        if let Err(error) = open::that(&path) {
+                            this.failed = true;
+                            this.notice = format!("Unable to open {}: {error}", path.display());
+                            cx.notify();
+                        }
+                    })))
+                .child(Button::new("pi-mcp-refresh", "Refresh").start_icon(Icon::new(IconName::RotateCw))
+                    .disabled(self.ext_busy)
                     .on_click(cx.listener(|this, _, window, cx| this.ext_request(json!({"operation":"status"}), window, cx))))
                 .child(Button::new("pi-mcp-add-toggle", if self.mcp_add_open { "Cancel" } else { "Add server" })
                     .start_icon(Icon::new(if self.mcp_add_open { IconName::ChevronDown } else { IconName::Plus }))
                     .disabled(self.ext_busy)
-                    .on_click(cx.listener(|this, _, _, cx| { this.mcp_add_open = !this.mcp_add_open; cx.notify(); }))))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.mcp_add_open = !this.mcp_add_open;
+                        this.mcp_edit = None;
+                        this.mcp_confirm_remove = None;
+                        cx.notify();
+                    }))))
             .when(!loaded, |body| body.child(Label::new(if self.ext_busy { "Loading servers..." } else { "No server data yet. Choose Refresh." })
                 .size(LabelSize::Small).color(Color::Muted)))
             .when(self.mcp_add_open, |body| body.child(v_flex().gap_2()
-                .child(Label::new("Paste servers as JSON, for example { \"docs\": { \"url\": \"https://example.com/mcp\" } } or a full mcpServers object.").size(LabelSize::Small).color(Color::Muted))
+                .child(Label::new(match self.mcp_edit.as_deref() {
+                    Some(name) => format!("Editing {name}. This is the server's own settings; changing the name is not possible here."),
+                    None => "Paste servers as JSON, for example { \"docs\": { \"url\": \"https://example.com/mcp\" } } or a full mcpServers object.".to_owned(),
+                }).size(LabelSize::Small).color(Color::Muted))
                 .child(text_field(self.mcp_text.clone(), cx))
-                .child(h_flex().child(Button::new("pi-mcp-add", "Add servers").style(ButtonStyle::Filled).disabled(self.ext_busy)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let text = this.mcp_text.read(cx).text(cx);
-                        this.ext_request(json!({"operation":"mcp-add", "text":text}), window, cx);
-                    }))))))
+                .child(h_flex().gap_2()
+                    .child(Button::new("pi-mcp-add-cancel", "Cancel").disabled(self.ext_busy)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.mcp_add_open = false;
+                            this.mcp_edit = None;
+                            this.mcp_text.update(cx, |editor, cx| editor.set_text("", window, cx));
+                            cx.notify();
+                        })))
+                    .child(Button::new("pi-mcp-add", if self.mcp_edit.is_some() { "Save server" } else { "Add servers" }).style(ButtonStyle::Filled).disabled(self.ext_busy)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let text = this.mcp_text.read(cx).text(cx);
+                            let request = match this.mcp_edit.clone() {
+                                Some(name) => json!({"operation":"mcp-set", "name":name, "text":text}),
+                                None => json!({"operation":"mcp-add", "text":text}),
+                            };
+                            this.ext_request(request, window, cx);
+                        }))))))
             .when(loaded && rows.is_empty(), |body| body
                 .child(Label::new("No user-level MCP servers configured.").size(LabelSize::Small).color(Color::Muted)))
-            .when_some(self.extensions.as_ref().map(|data| data["mcpCodemode"] == true), |body, codemode| body
-                .child(Label::new(if codemode {
-                    "Exposure: direct is declared to the model, codemode is reachable from scripts, deferred needs tool search, hidden is not exposed. Codemode activates automatically."
-                } else {
-                    "Exposure: direct is declared to the model, codemode is reachable from scripts, deferred needs tool search, hidden is not exposed. Codemode auto-activation is off in mcp.json."
-                }).size(LabelSize::XSmall).color(Color::Muted)))
+            .when(session_only > 0, |body| body.child(Label::new(format!(
+                "{session_only} server{} registered only by open sessions (a plugin or a parked task); they disappear when those tasks restart.",
+                if session_only == 1 { "" } else { "s" })).size(LabelSize::XSmall).color(Color::Muted)))
             .children(rows)
-            .child(Label::new("Connections belong to open tasks. A dropped server reconnects on its next call, and mcp.json changes apply after /reload in the task.").size(LabelSize::XSmall).color(Color::Muted))
+            .child(Label::new("Arrows change the order in mcp.json. Connections belong to open tasks: a dropped server reconnects on its next call, and mcp.json changes apply after /reload in the task.").size(LabelSize::XSmall).color(Color::Muted))
             .child(Label::new("Project servers live in the project's .pi/mcp.json and load only in a trusted project.").size(LabelSize::XSmall).color(Color::Muted))
             .into_any_element()
     }
 
     fn skills_page(&self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let skills = self.extensions.as_ref().and_then(|data| data["skills"].as_array()).cloned().unwrap_or_default();
+        let mut cards: Vec<gpui::AnyElement> = Vec::new();
+        for skill in &skills {
+            let name = skill["name"].as_str().unwrap_or_default().to_owned();
+            let description = skill["description"].as_str().unwrap_or_default()
+                .split_whitespace().collect::<Vec<_>>().join(" ");
+            let path = skill["path"].as_str().unwrap_or_default().to_owned();
+            let enabled = skill["enabled"] != false;
+            let folder = std::path::Path::new(&path).parent().map(|parent| parent.display().to_string()).unwrap_or_else(|| path.clone());
+            let open_skill = path.clone();
+            let open_folder = folder.clone();
+            let weak_toggle = cx.weak_entity();
+            let toggle_path = path.clone();
+            let toggle_label = name.clone();
+            let mut actions: Vec<gpui::AnyElement> = Vec::new();
+            actions.push(Button::new(SharedString::from(format!("pi-skill-open-{path}")), "Open skill")
+                .style(ButtonStyle::Outlined)
+                .disabled(self.ext_busy)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Err(error) = open::that(&open_skill) {
+                        this.failed = true;
+                        this.notice = format!("Unable to open {}: {error}", open_skill);
+                        cx.notify();
+                    }
+                }))
+                .into_any_element());
+            actions.push(Button::new(SharedString::from(format!("pi-skill-folder-{path}")), "Open directory")
+                .style(ButtonStyle::Outlined)
+                .disabled(self.ext_busy)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Err(error) = open::that(&open_folder) {
+                        this.failed = true;
+                        this.notice = format!("Unable to open {}: {error}", open_folder);
+                        cx.notify();
+                    }
+                }))
+                .into_any_element());
+            let card = v_flex().id(SharedString::from(format!("pi-skill-card-{path}"))).gap_2().p_3().rounded_md().border_1()
+                .border_color(if enabled { cx.theme().colors().border } else { cx.theme().colors().border_variant })
+                .bg(cx.theme().colors().background)
+                .child(h_flex().gap_2().items_start()
+                    .child(v_flex().gap_0p5().min_w_0()
+                        .child(Label::new(name.clone()).size(LabelSize::Large)
+                            .color(if enabled { Color::Default } else { Color::Muted }))
+                        .when(!description.is_empty(), |column| column
+                            .child(Label::new(description.clone()).size(LabelSize::Small).color(Color::Muted)))
+                        .child(Label::new(folder).size(LabelSize::XSmall).color(Color::Hidden)))
+                    .child(div().flex_1())
+                    .child(Switch::new(SharedString::from(format!("pi-skill-switch-{path}")), enabled.into())
+                        .aria_label(format!("Enable {toggle_label}"))
+                        .disabled(self.ext_busy)
+                        .on_click(move |state, window, cx| {
+                            let enabled = *state == ToggleState::Selected;
+                            let _ = weak_toggle.update(cx, |this, cx| {
+                                this.ext_request(json!({"operation":"toggle-resource", "kind":"skills", "path":toggle_path.clone(), "enabled":enabled}), window, cx)
+                            });
+                        })))
+                .child(h_flex().gap_2().children(actions));
+            cards.push(card.into_any_element());
+        }
+
         v_flex().gap_3()
             .child(h_flex().gap_2().justify_end()
-                .child(Button::new("pi-skills-refresh", "Refresh").disabled(self.ext_busy)
+                .child(Button::new("pi-skills-refresh", "Refresh").start_icon(Icon::new(IconName::RotateCw)).disabled(self.ext_busy)
                     .on_click(cx.listener(|this, _, window, cx| this.ext_request(json!({"operation":"status"}), window, cx)))))
             .when(self.extensions.is_none(), |body| body.child(Label::new(if self.ext_busy { "Loading skills..." } else { "Open this page to load the installed skills." }).size(LabelSize::Small).color(Color::Muted)))
-            .when(self.extensions.is_some() && skills.is_empty(), |body| body
+            .when(self.extensions.is_some() && cards.is_empty(), |body| body
                 .child(Label::new("No user-level skills installed. Skills from pi packages appear here automatically.").size(LabelSize::Small).color(Color::Muted)))
-            .children(skills.iter().map(|skill| {
-                let name = skill["name"].as_str().unwrap_or_default().to_owned();
-                let description = skill["description"].as_str().unwrap_or_default()
-                    .split_whitespace().collect::<Vec<_>>().join(" ");
-                let path = skill["path"].as_str().unwrap_or_default().to_owned();
-                let enabled = skill["enabled"] != false;
-                let target = path.clone();
-                v_flex().gap_1().py_1()
-                    .child(h_flex().gap_2().items_center()
-                        .child(Label::new(name))
-                        .child(div().flex_1())
-                        .child(Button::new(SharedString::from(format!("pi-skill-toggle-{}", path)), if enabled { "Disable" } else { "Enable" }).disabled(self.ext_busy)
-                            .on_click(cx.listener(move |this, _, window, cx| this.ext_request(json!({"operation":"toggle-resource", "kind":"skills", "path":target, "enabled":!enabled}), window, cx)))))
-                    .when(!description.is_empty(), |card| card.child(Label::new(description).size(LabelSize::Small).color(Color::Muted)))
-                    .child(Label::new(path).size(LabelSize::XSmall).color(Color::Muted))
-            }))
+            .children(cards)
             .child(Label::new("Project skills live in .pi/skills/<name>/SKILL.md inside the project (.agents/skills also works) and load only in a trusted project. The list above shows user-level skills.").size(LabelSize::XSmall).color(Color::Muted))
             .into_any_element()
     }
@@ -1092,6 +1281,20 @@ fn visible_providers(providers: &[Value]) -> Vec<&Value> {
             || provider["credential"].as_str().unwrap_or("none") != "none"
             || provider["models"].as_array().into_iter().flatten().any(|model| model["enabled"] == true)
     }).collect()
+}
+
+fn candidate_label(item: &Value, id: &str) -> String {
+    let mut parts = vec![id.to_owned()];
+    if let Some(context) = item["contextWindow"].as_u64() {
+        parts.push(if context >= 1000 { format!("{}k", context / 1000) } else { context.to_string() });
+    }
+    if item["reasoning"] == true {
+        parts.push("thinking".to_owned());
+    }
+    if item["input"].as_array().is_some_and(|input| input.iter().any(|value| value == "image")) {
+        parts.push("vision".to_owned());
+    }
+    parts.join(" · ")
 }
 
 fn runtime_text(value: &Value) -> String {

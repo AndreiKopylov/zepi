@@ -35,47 +35,6 @@ test("defaults roundtrip uses pi model validation and preserves unrelated settin
   assert.equal(await readFile(join(f.target,"settings.json"),"utf8"),before);
 });
 
-test('model overrides use pi precedence and preserve other models and concurrent fields', async t => {
-  const f = await fixture(t);
-  const id = 'family/model.v1';
-  f.config.providers['zepi-fixture'].models.push({id, name:'Thinking fixture', reasoning:true, contextWindow:64000, maxTokens:4096});
-  await f.put(f.target, 'models.json', f.config);
-  const original = await f.get(f.target, 'settings.json');
-  original.compaction = {reserveTokens:2048, keepRecentTokens:8192,
-    modelOverrides:{'other/provider-model':{reserveTokens:100}}};
-  original.modelThinkingLevels = {'other/provider-model':'high'};
-  await f.put(f.target, 'settings.json', original);
-  const model = status => status.providers.find(p=>p.id==='zepi-fixture').models.find(m=>m.id===id);
-  const initial = model(await f.bridge.status()).settings;
-  assert.deepEqual(initial.values, {thinkingLevel:null, reserveTokens:null, keepRecentTokens:null});
-  assert.deepEqual(initial.effective, {reserveTokens:2048, keepRecentTokens:8192});
-  const update = (changes, expected) => f.bridge.execute({operation:'model-settings',provider:'zepi-fixture',model:id,changes,expected});
-  const changed = {thinkingLevel:'high',reserveTokens:4096};
-  let result = await update(changed, initial.values);
-  assert.equal(model(result).settings.values.thinkingLevel,'high');
-  assert.deepEqual(model(result).settings.effective, {reserveTokens:4096,keepRecentTokens:8192});
-  let stored = await f.get(f.target,'settings.json');
-  assert.equal(stored.compaction.modelOverrides['zepi-fixture/'+id].reserveTokens,4096);
-  assert.equal(stored.compaction.modelOverrides['other/provider-model'].reserveTokens,100);
-  assert.equal(stored.modelThinkingLevels['other/provider-model'],'high');
-  assert.equal(stored.defaultThinkingLevel,'off');
-  assert.equal(stored.customSetting.retain,true);
-  const saved = await readFile(join(f.target,'settings.json'),'utf8');
-  for (const changes of [{thinkingLevel:'not-a-level'},{reserveTokens:-1},{keepRecentTokens:0.1},{other:true}]) {
-    await assert.rejects(update(changes,model(result).settings.values));
-    assert.equal(await readFile(join(f.target,'settings.json'),'utf8'),saved);
-  }
-  await assert.rejects(update({reserveTokens:6000},initial.values),/changed while/);
-  await assert.rejects(f.bridge.execute({operation:'model-settings',provider:'zepi-fixture',model:'test-model',changes:{thinkingLevel:'high'},expected:{thinkingLevel:null}}));
-  // An unrelated field written since opening must survive a sparse save.
-  stored.compaction.modelOverrides['zepi-fixture/'+id].keepRecentTokens = 9999;
-  await f.put(f.target,'settings.json',stored);
-  result = await update({reserveTokens:null,thinkingLevel:null},model(result).settings.values);
-  assert.equal(model(result).settings.effective.keepRecentTokens,9999);
-  await update({keepRecentTokens:null},model(result).settings.values);
-  assert.deepEqual(await f.get(f.target,'settings.json'),original);
-});
-
 test('tool defaults preserve modifiers, explicit empty lists and concurrent edits', async t => {
   const f = await fixture(t);
   assert.equal((await f.bridge.status()).defaultTools, null);
@@ -234,6 +193,33 @@ test("connection model listing is read-only, bounded and never follows redirects
   mode="timeout"; await assert.rejects(fetchConnectionModels(connectionEndpoint(baseUrl,"openai-completions"),"openai-completions","private-key",undefined,undefined,15),/timed out/);
   assert.equal(redirected,0); assert.equal(await readFile(join(f.target,"models.json"),"utf8"),before);
   for(const url of ["ftp://example.org","https://u:p@example.org","https://example.org?key=x","https://example.org#x"]) await assert.rejects(f.bridge.execute({...request,baseUrl:url}));
+});
+
+test("connection model discovery carries provider specs and drops non-chat models", async t => {
+  const {createServer} = await import("node:http");
+  const {modelSpec} = await import("../../src/pi/custom-models.mjs");
+  const f = await fixture(t);
+  const server = createServer((req,res) => {
+    res.end(JSON.stringify({data: [
+      {id:"chat", object:"model", type:"llm", context_length:512000, name:"Chat"},
+      {id:"vision", type:"llm", context_length:128000,
+        architecture:{input_modalities:["text","image"]},
+        reasoning:{supported_efforts:["high","max"], mandatory:true}},
+      {id:"embed", type:"embedding", context_length:8000},
+      {id:"classifier", type:"decision"},
+    ]}));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+  const result = await f.bridge.execute({operation:"list-connection-models", provider:"srvdev", baseUrl, api:"openai-completions"});
+  assert.deepEqual(result.candidates.map(c => c.id), ["chat", "vision"], "chat models only");
+  assert.equal(result.candidates[0].contextWindow, 512000);
+  const vision = result.candidates[1];
+  assert.deepEqual(vision.input, ["text", "image"]);
+  assert.equal(vision.reasoning, true);
+  assert.deepEqual(vision.thinkingLevelMap, {off:null, minimal:null, low:null, medium:null, high:"high", xhigh:null, max:"max"});
+  assert.deepEqual(modelSpec({type:"llm"}), {}, "nothing invented when the provider stays silent");
 });
 
 test("import merges models and all auth without mutating the source or dropping target settings", async t => {

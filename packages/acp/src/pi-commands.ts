@@ -313,6 +313,9 @@ export function installPiCommands(pi: AgentSession, client: AgentContext, suppor
           case "reload": {
             if (argument) throw new Error("Usage: /reload (no arguments).");
             await pi.reload();
+            // models.json is read once when the runtime is created; pick up settings edits too.
+            await pi.modelRuntime.refresh({ allowNetwork: false });
+            await refreshModelScope?.();
             const errors = pi.resourceLoader.getExtensions().errors;
             context.enqueue({sessionUpdate: "available_commands_update", availableCommands: catalogue()});
             context.enqueue({sessionUpdate: "config_option_update", configOptions: context.configOptions()});
