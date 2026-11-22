@@ -27,6 +27,7 @@ markup5ever_rcdom = "0.39"
 base64 = "0.22"
 wordcraft-layout = { path = "../../vendor/wordcraft/crates/layout" }
 wordcraft-render = { path = "../../vendor/wordcraft/crates/render" }
+wordcraft-geom = { path = "../../vendor/wordcraft/crates/geom" }
 gridcraft-core = { path = "../../vendor/gridcraft/crates/core" }
 gridcraft-model = { path = "../../vendor/gridcraft/crates/model" }
 gridcraft-numfmt = { path = "../../vendor/gridcraft/crates/numfmt" }

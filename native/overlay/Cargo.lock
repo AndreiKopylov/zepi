@@ -23515,6 +23515,7 @@ dependencies = [
  "wordcraft-docbin",
  "wordcraft-docx",
  "wordcraft-fonts",
+ "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-render",
  "workspace",

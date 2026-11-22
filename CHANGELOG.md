@@ -4,6 +4,16 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `zepi office render` renders `.xlsx`/`.xlsm` in the viewer's own layout: `sheet-N.png`, sampled
+  `-top/-middle/-bottom` windows for a sheet too big for one readable image, `--cells B10:E40` for a
+  box of cells (`A100:`, `:E40` open-ended). `--pages` selects sheets, `--dpi` acts as zoom, and the
+  PNGs go where `--out` says (default: the current directory). The office skills verify spreadsheets
+  visually now, with no LibreOffice fallback.
+
 ## [0.0.7] - 2026-11-22
 
 ### Added

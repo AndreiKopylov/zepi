@@ -89,12 +89,15 @@ Traps:
    you touched.
 2. If the numbers matter, read them again with `data_only=True` **in a fresh workbook opened by Excel or
    LibreOffice**, or recompute the changed formulas in Python and compare.
-3. Excel has no built-in rasteriser in Zepi; render with LibreOffice only if it happens to be installed.
-   Locate it instead of assuming an install path:
-   ```powershell
-   $soffice = (Get-Command soffice -ErrorAction SilentlyContinue).Source
-   if (-not $soffice) { $soffice = @("$env:ProgramFiles\LibreOffice\program\soffice.exe", "${env:ProgramFiles(x86)}\LibreOffice\program\soffice.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1 }
-   ```
-   An empty $soffice means no LibreOffice on this machine: skip the visual check and say so.
-   Otherwise say that the visual check was skipped.
+3. Render the sheets and look at them: `& "$env:ZEPI_ROOT\zepi.exe" office render <file> --dpi 150`
+   produces `sheet-N.png` per sheet, or `sheet-N-top/-middle/-bottom.png` sampled windows for a sheet
+   too big for one readable image; `--out DIR` picks the folder when a specific one is wanted and the
+   JSON prints it.
+   That is the renderer to use for xlsx as well: do not look for or
+   call LibreOffice/`soffice` (it renders differently from the viewer and is not needed).
+   Point it at the region you changed with `--cells`, for example
+   `office render <file> --cells C10:F40`; either side may be left open (`A100:`, `:E40`), and
+   `--pages <n>` picks one sheet. Formulas written by openpyxl
+   carry no cached value, so cells you just wrote may render empty even though Excel will compute
+   them on open.
 4. Report what changed, in which sheet and cells, and anything you could not verify.

@@ -20,7 +20,7 @@ chat with your model plus viewing and editing `.pptx`, `.docx` and `.xlsx` witho
 | **Presentations** | `.pptx`: slide strip with zoom and search, text editing, send a slide or a region to the agent                                                   |
 | **Documents**     | `.docx`: paginated view, search, editing, send a fragment to the agent                                                                           |
 | **Spreadsheets**  | `.xlsx`: sheets, formulas, cell editing saved straight to disk                                                                                   |
-| **Rendering**     | `zepi office render` turns pptx/docx into PNGs with the same engine the viewer draws with — no LibreOffice, no Office                            |
+| **Rendering**     | `zepi office render` turns pptx/docx/xlsx into PNGs with the same engine the viewer draws with — no LibreOffice, no Office                            |
 
 The agent handles documents on its own: bundled skills `zepi-office-docs`, `zepi-docx`, `zepi-xlsx`,
 `zepi-deck-build`, `zepi-deck-design`, `zepi-office-qa` plus a bundled Python 3.13 with python-docx,
@@ -114,7 +114,6 @@ Values are re-read when the file changes; no restart is needed.
 ## Beta limitations
 
 - The installer is unsigned, so SmartScreen warns about an unknown publisher.
-- `.xlsx` has no rasteriser: no visual check for spreadsheets, values are verified programmatically.
 - No models are bundled; without a key the agent stays silent.
 
 ## Credits
