@@ -17,17 +17,28 @@ $cutoff = (Get-Date).AddDays(-$Days)
 $profiles = Get-ChildItem $Target -Directory | Where-Object { $_.Name -ne 'tmp' -and $_.Name -ne 'cxxbridge' }
 
 $files = foreach ($profile in $profiles) {
-    foreach ($dir in 'deps', 'build') {
-        $path = Join-Path $profile.FullName $dir
-        if (Test-Path $path) { Get-ChildItem $path -Recurse -File -ErrorAction SilentlyContinue | Where-Object LastWriteTime -lt $cutoff }
+    $path = Join-Path $profile.FullName 'deps'
+    if (Test-Path $path) { Get-ChildItem $path -Recurse -File -ErrorAction SilentlyContinue | Where-Object LastWriteTime -lt $cutoff }
+}
+# Build dirs go whole with their .fingerprint twin: cargo skips a build script whose fingerprint is
+# fresh, so files deleted out of a live build dir break the next compile on missing OUT_DIR output.
+$buildDirs = foreach ($profile in $profiles) {
+    $path = Join-Path $profile.FullName 'build'
+    if (-not (Test-Path $path)) { continue }
+    foreach ($d in Get-ChildItem $path -Directory -ErrorAction SilentlyContinue) {
+        $newest = Get-ChildItem $d.FullName -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($newest -and $newest.LastWriteTime -ge $cutoff) { continue }
+        $d
+        $fp = Join-Path $profile.FullName (Join-Path '.fingerprint' $d.Name)
+        if (Test-Path $fp) { Get-Item $fp }
     }
 }
-$dirs = foreach ($profile in $profiles) {
+$dirs = @(foreach ($profile in $profiles) {
     $path = Join-Path $profile.FullName 'incremental'
     if (Test-Path $path) { Get-ChildItem $path -Directory -ErrorAction SilentlyContinue | Where-Object LastWriteTime -lt $cutoff }
     $timings = Join-Path $Target 'cargo-timings'
     if (Test-Path $timings) { Get-ChildItem $timings -File -ErrorAction SilentlyContinue | Where-Object LastWriteTime -lt $cutoff }
-}
+}) + @($buildDirs)
 
 $fileBytes = ($files | Measure-Object Length -Sum).Sum
 $dirBytes = 0
