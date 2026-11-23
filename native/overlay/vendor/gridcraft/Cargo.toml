@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/formula", "crates/functions", "crates/model", "crates/numfmt", "crates/xlsx"]
+members = ["crates/calc", "crates/core", "crates/formula", "crates/functions", "crates/model", "crates/numfmt", "crates/xlsx"]
 
 [workspace.package]
 version = "0.15.0"
@@ -26,6 +26,7 @@ aes = { version = "0.9", default-features = false }
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+log = "0.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

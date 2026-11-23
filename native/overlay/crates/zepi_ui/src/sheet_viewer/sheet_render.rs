@@ -1,7 +1,9 @@
 
 use gpui::TextAlign;
 use gridcraft_model::style::HAlign;
+use ui::prelude::Disableable;
 
+use super::formula_highlights::{FormulaHighlight, formula_highlights};
 use super::*;
 
 impl gpui::Render for SheetView {
@@ -54,37 +56,31 @@ impl gpui::Render for SheetView {
         };
         let zoom = self.zoom;
         let (scroll_x, scroll_y) = self.scroll.pos();
-        let sel_row = self.sel_row;
-        let sel_col = self.sel_col;
+        let (active_row, active_col) = self.active_cell();
         let date_system = wb.date_system;
         let styles = &wb.styles;
 
         let grid_line: Hsla = gpui::rgb(0xd4d4d4).into();
-        let header_bg: Hsla = gpui::rgb(0xf0f0f0).into();
-        let header_sel: Hsla = gpui::rgb(0xcfcfcf).into();
+        let header_bg: Hsla = gpui::rgb(0xf3f3f3).into();
+        let header_sel: Hsla = gpui::rgb(0xd9e9df).into();
+        let select_border: Hsla = gpui::rgb(0x217346).into();
         let text_color: Hsla = gpui::rgb(0x202020).into();
         let cell_bg: Hsla = gpui::rgb(0xffffff).into();
         let bar_muted: Hsla = gpui::rgb(0x606060).into();
         let tab_muted: Hsla = gpui::rgb(0x606060).into();
         let tab_hover: Hsla = gpui::rgb(0xe4e4e4).into();
+        let editing_formula = self.editing && self.edit_buffer.starts_with('=');
+        let formula_refs = if editing_formula {
+            formula_highlights(&self.edit_buffer, &sheet.name)
+        } else {
+            Vec::new()
+        };
 
         let edit_rect = if self.editing {
-            let (last_row, last_col) = self.used_bounds(cx);
-            if sel_row <= last_row && sel_col <= last_col {
-                let left = LEFT_W + (sheet.col_left(sel_col) as f32 - scroll_x) * zoom;
-                let top = TOP_H + (sheet.row_top(sel_row) as f32 - scroll_y) * zoom;
-                let width = sheet.col_width(sel_col) * zoom;
-                let height = sheet.row_height(sel_row) * zoom;
-                let gw = f32::from(self.grid_size.x);
-                let gh = f32::from(self.grid_size.y);
-                if left < gw && top < gh && left + width > 0.0 && top + height > 0.0 {
-                    Some((left, top, width, height))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            self.edit_cell_rect(cx).filter(|&(left, top, width, height)| {
+                left < f32::from(self.grid_size.x) && top < f32::from(self.grid_size.y)
+                    && left + width > LEFT_W && top + height > TOP_H
+            })
         } else {
             None
         };
@@ -205,69 +201,62 @@ impl gpui::Render for SheetView {
         });
 
         // formula bar
-        let bar_text = self.bar_text(cx);
-        let bar_content = if self.editing {
-            {
-                div()
-                    .flex_1()
-                    .id("sheet-bar-editing")
-                    .child(
-                        Label::new(if self.edit_buffer.is_empty() {
-                            SharedString::from(" ")
-                        } else {
-                            SharedString::from(self.edit_buffer.clone())
-                        })
-                        .size(LabelSize::Default)
-                        .color(UiColor::Custom(text_color)),
-                    )
-            }
-        } else {
-            div()
-                .flex_1()
-                .id("sheet-bar-content")
-                .cursor_pointer()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _event, window, cx| this.start_edit(window, cx)),
-                )
-                .child(
-                    Label::new(if bar_text.is_empty() {
-                        SharedString::from(" ")
-                    } else {
-                        SharedString::from(bar_text.clone())
-                    })
-                    .size(LabelSize::Default)
-                    .color(if bar_text.is_empty() { UiColor::Muted } else { UiColor::Custom(text_color) }),
-                )
-        };
+        let bar_text = if self.editing { self.edit_buffer.clone() } else { self.bar_text(cx) };
+        let bar_content = div()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .id("sheet-bar-content")
+            .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _event, window, cx| this.start_edit(None, window, cx)),
+            )
+            .child(Label::new(if bar_text.is_empty() { " ".into() } else { SharedString::from(bar_text) })
+                .size(LabelSize::Default).color(UiColor::Custom(text_color)));
+        let formula_action_color = UiColor::Custom(if self.editing { bar_muted } else { gpui::rgb(0xa0a0a0).into() });
         let formula_bar = div()
             .flex()
             .flex_row()
             .items_center()
-            .gap_2()
+            .gap_1()
             .px_2()
             .h(px(32.))
-            .bg(cell_bg)
+            .bg(header_bg)
             .border_b_1()
             .border_color(grid_line)
             .child(
                 div()
                     .w(px(56.))
-                    .h(px(20.))
+                    .h(px(24.))
+                    .bg(cell_bg)
                     .border_1()
                     .border_color(grid_line)
-                    .rounded_sm()
                     .flex()
                     .items_center()
                     .justify_center()
                     .child(
-                        Label::new(cell_ref_text(sel_row, sel_col))
+                        Label::new(cell_ref_text(active_row, active_col))
                             .size(LabelSize::Small)
                             .color(UiColor::Custom(text_color)),
                     ),
             )
-            .child(Label::new("fx").size(LabelSize::Small).color(UiColor::Custom(bar_muted)))
-            .child(bar_content);
+            .child(IconButton::new("sheet-cancel-edit", IconName::Close)
+                .icon_size(ui::IconSize::XSmall)
+                .icon_color(formula_action_color)
+                .disabled(!self.editing)
+                .tooltip(Tooltip::for_action_title("Cancel edit", &CancelEdit))
+                .on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
+            .child(IconButton::new("sheet-commit-edit", IconName::Check)
+                .icon_size(ui::IconSize::XSmall)
+                .icon_color(formula_action_color)
+                .disabled(!self.editing)
+                .tooltip(Tooltip::for_action_title("Confirm edit", &CommitEdit))
+                .on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
+            .child(Label::new("ƒx").size(LabelSize::Small).color(UiColor::Custom(bar_muted)))
+            .child(div().flex_1().min_w_0().h(px(24.0)).flex().items_center().px_1()
+                .bg(cell_bg).border_1().border_color(grid_line).child(bar_content));
 
         // visible range
         let view_w = if f32::from(self.grid_size.x) > 1.0 {
@@ -289,9 +278,6 @@ impl gpui::Render for SheetView {
         let last_visible_row = sheet
             .row_at((scroll_y + (view_h - TOP_H) / zoom) as f64)
             .min(last_row);
-
-        // sheet surface keeps the Excel light palette regardless of app theme
-        let select_border: Hsla = gpui::rgb(0x3b82f6).into();
 
         let mut grid = div()
             .flex_1()
@@ -329,7 +315,7 @@ impl gpui::Render for SheetView {
                     this.clamp_sel(cx);
                     this.drag_select = true;
                     if event.click_count == 2 {
-                        this.start_edit(window, cx);
+                        this.start_edit(None, window, cx);
                     } else {
                         window.focus(&this.focus_handle, cx);
                     }
@@ -407,14 +393,14 @@ impl gpui::Render for SheetView {
                     .top_0()
                     .w(px(width))
                     .h(px(TOP_H))
-                    .bg(if col == sel_col { header_sel } else { header_bg })
+                    .bg(if col == active_col { header_sel } else { header_bg })
                     .border_r_1()
                     .border_b_1()
                     .border_color(grid_line)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(Label::new(col_name(col)).size(LabelSize::Small).color(UiColor::Muted)),
+                    .child(Label::new(col_name(col)).size(LabelSize::Small).color(UiColor::Custom(if col == active_col { select_border } else { bar_muted }))),
             );
             grid = grid.child(
                 div()
@@ -459,14 +445,14 @@ impl gpui::Render for SheetView {
                     .top(px(top))
                     .w(px(LEFT_W))
                     .h(px(height))
-                    .bg(if row == sel_row { header_sel } else { header_bg })
+                    .bg(if row == active_row { header_sel } else { header_bg })
                     .border_r_1()
                     .border_b_1()
                     .border_color(grid_line)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(Label::new((row + 1).to_string()).size(LabelSize::Small).color(UiColor::Muted)),
+                    .child(Label::new((row + 1).to_string()).size(LabelSize::Small).color(UiColor::Custom(if row == active_row { select_border } else { bar_muted }))),
             );
             grid = grid.child(
                 div()
@@ -533,7 +519,6 @@ impl gpui::Render for SheetView {
                     width = (sheet.col_left(m.end.col + 1) - sheet.col_left(m.start.col)) as f32 * zoom;
                     height = (sheet.row_top(m.end.row + 1) - sheet.row_top(m.start.row)) as f32 * zoom;
                 }
-                let cell = sheet.cell(at);
                 let style_id = sheet.style_id(at);
                 let style = styles.get(style_id);
                 let has_border = !style.borders.top.is_none()
@@ -584,13 +569,13 @@ impl gpui::Render for SheetView {
                     cell_div = cell_div.child(edge);
                 }
                 let is_edited = self.editing && row == self.edit_row && col == self.edit_col;
-                if let Some(cell) = cell {
+                if let Some(value) = sheet.value_ref(at).or_else(|| is_edited.then_some(&Value::Empty)) {
                     let fmt = NumberFormat::parse_cached(&style.num_fmt.0);
-                    let formatted = format_value(&cell.value, &fmt, date_system);
+                    let formatted = format_value(value, &fmt, date_system);
                     if !formatted.text.is_empty() || is_edited {
                         let font_size = (style.font.size * office_knob_f("sheet.fontScale", 4.0 / 3.0) as f32 * zoom).clamp(1.0, 40.0);
                         let color = model_color_hsla(&style.font.color, text_color, &wb.theme.colors);
-                        let align = cell_text_align(style.align.h, formatted.numeric);
+                        let align = cell_editor_align(style.align.h, formatted.numeric, is_edited && editing_formula);
                         let right_padding = if style.align.h == HAlign::General {
                             f32::from(window.rem_size()) * 0.25
                         } else {
@@ -644,10 +629,7 @@ impl gpui::Render for SheetView {
                                 runs.push((run.text.clone(), (run.size.unwrap_or(style.font.size) * knob * zoom).clamp(1.0, 40.0), run.color.map(|cc| gpui::rgb(cc).into()).unwrap_or(base_color), run.bold || style.font.bold, run.italic || style.font.italic, run.underline, run.strike));
                             }
                             let inner_w = (width + 2.0).max(10.0);
-                            // The edit frame insets the canvas but the grid's right text edge stays put.
-                            let right_edge = width - right_padding
-                                - if has_border { 0.0 } else { 1.0 }
-                                - if editing_this { 2.0 } else { 0.0 };
+                            let right_edge = width - right_padding - if has_border { 0.0 } else { 1.0 };
                             let mut lines: Vec<Vec<(String, f32, Hsla, bool, bool, bool, bool, f32, f32, usize)>> = vec![Vec::new()];
                             let mut cur_w = 0.0f32;
                             let mut off = 0usize;
@@ -711,6 +693,7 @@ impl gpui::Render for SheetView {
                             let e_sel = if editing_this { self.edit_sel_anchor.map(|a| (a.min(self.edit_caret), a.max(self.edit_caret))) } else { None };
                             let eo = self.edit_origin.clone();
                             let et = editing_this;
+                            let refs = if editing_this { formula_refs.clone() } else { Vec::new() };
                             let painter = gpui::canvas(
                                 |_, _, _| {},
                                 move |bounds, _, window, cx| {
@@ -721,7 +704,9 @@ impl gpui::Render for SheetView {
                                             let ce = cs + word.chars().count();
                                             let font = gpui::Font { family: family.clone(), weight: if *b { gpui::FontWeight::BOLD } else { gpui::FontWeight::default() }, style: if *i { gpui::FontStyle::Italic } else { gpui::FontStyle::default() }, ..Default::default() };
                                             let run = gpui::TextRun { len: word.len(), font, color: *col, background_color: None, underline: if *u { Some(Default::default()) } else { None }, strikethrough: if *st { Some(Default::default()) } else { None } };
-                                            let shaped = window.text_system().shape_line(SharedString::from(word.clone()), px(*sz), &[run], None);
+                                            let colored = formula_word_runs(word, *cs, &run, &refs);
+                                            let runs = if colored.is_empty() { std::slice::from_ref(&run) } else { &colored };
+                                            let shaped = window.text_system().shape_line(SharedString::from(word.clone()), px(*sz), runs, None);
                                             for (hs, he) in hits.iter().chain(cur.iter()) {
                                                 let aa = (*hs).max(*cs);
                                                 let bb = (*he).min(ce);
@@ -773,43 +758,66 @@ impl gpui::Render for SheetView {
             }
         }
 
-        // selection frame as an overlay: a thicker border on the cell div shifts its text
-        {
-            let left = LEFT_W + (sheet.col_left(sel_col) as f32 - scroll_x) * zoom;
-            let top = TOP_H + (sheet.row_top(sel_row) as f32 - scroll_y) * zoom;
+        if !formula_refs.is_empty() {
+            let mut layer = div().absolute().left(px(LEFT_W)).top(px(TOP_H)).right_0().bottom_0().overflow_hidden();
+            let visible = RangeRef::new(CellRef::new(first_row, first_col), CellRef::new(last_visible_row, last_visible_col));
+            let mut drawn = std::collections::HashSet::new();
+            for reference in &formula_refs {
+                let range = reference.cells;
+                if !range.intersects(&visible) || !drawn.insert(range) {
+                    continue;
+                }
+                let x = sheet.col_left(range.start.col) as f32;
+                let y = sheet.row_top(range.start.row) as f32;
+                let width = (sheet.col_left(range.end.col + 1) as f32 - x) * zoom;
+                let height = (sheet.row_top(range.end.row + 1) as f32 - y) * zoom;
+                let color = reference_color(reference.index);
+                layer = layer.child(div().absolute()
+                    .left(px((x - scroll_x) * zoom)).top(px((y - scroll_y) * zoom))
+                    .w(px(width)).h(px(height)).border_2().border_color(color)
+                    .bg(Hsla { a: 0.08, ..color }));
+            }
+            grid = grid.child(layer);
+        }
+
+        if let Some(cut) = self.pending_cut.as_ref().filter(|cut| cut.sheet == self_sheet && cut.is_current(item)) {
+            let left = LEFT_W + (sheet.col_left(cut.range.start.col) as f32 - scroll_x) * zoom;
+            let top = TOP_H + (sheet.row_top(cut.range.start.row) as f32 - scroll_y) * zoom;
+            let width = (sheet.col_left(cut.range.end.col + 1) - sheet.col_left(cut.range.start.col)) as f32 * zoom;
+            let height = (sheet.row_top(cut.range.end.row + 1) - sheet.row_top(cut.range.start.row)) as f32 * zoom;
+            grid = grid.child(div().absolute().left(px(left)).top(px(top)).w(px(width)).h(px(height)).border_1().border_color(select_border));
+        }
+
+        let (r0, r1, c0, c1) = self.sel_range();
+        if r0 != r1 || c0 != c1 {
+            let left = LEFT_W + (sheet.col_left(c0) as f32 - scroll_x) * zoom;
+            let top = TOP_H + (sheet.row_top(r0) as f32 - scroll_y) * zoom;
+            let right = LEFT_W + (sheet.col_left(c1) as f32 + sheet.col_width(c1) - scroll_x) * zoom;
+            let bottom = TOP_H + (sheet.row_top(r1) as f32 + sheet.row_height(r1) - scroll_y) * zoom;
             grid = grid.child(
                 div()
                     .absolute()
                     .left(px(left))
                     .top(px(top))
-                    .w(px((sheet.col_width(sel_col) * zoom).max(1.0)))
-                    .h(px((sheet.row_height(sel_row) * zoom).max(1.0)))
-                    .border_2()
+                    .w(px((right - left).max(1.0)))
+                    .h(px((bottom - top).max(1.0)))
+                    .bg(Hsla { a: 0.12, ..select_border })
+                    .border_1()
                     .border_color(select_border),
             );
         }
 
-        if let Some((ar, ac)) = self.anchor {
-            let (r0, r1) = (ar.min(sel_row), ar.max(sel_row));
-            let (c0, c1) = (ac.min(sel_col), ac.max(sel_col));
-            if r0 != r1 || c0 != c1 {
-                let left = LEFT_W + (sheet.col_left(c0) as f32 - scroll_x) * zoom;
-                let top = TOP_H + (sheet.row_top(r0) as f32 - scroll_y) * zoom;
-                let right = LEFT_W + (sheet.col_left(c1) as f32 + sheet.col_width(c1) - scroll_x) * zoom;
-                let bottom = TOP_H + (sheet.row_top(r1) as f32 + sheet.row_height(r1) - scroll_y) * zoom;
-                grid = grid.child(
-                    div()
-                        .absolute()
-                        .left(px(left))
-                        .top(px(top))
-                        .w(px((right - left).max(1.0)))
-                        .h(px((bottom - top).max(1.0)))
-                        .bg(gpui::hsla(0.6, 0.8, 0.5, 0.15))
-                        .border_1()
-                        .border_color(select_border),
-                );
-            }
-        }
+        // Draw the active cell on top without shifting its text.
+        grid = grid.child(
+            div()
+                .absolute()
+                .left(px(LEFT_W + (sheet.col_left(active_col) as f32 - scroll_x) * zoom))
+                .top(px(TOP_H + (sheet.row_top(active_row) as f32 - scroll_y) * zoom))
+                .w(px((sheet.col_width(active_col) * zoom).max(1.0)))
+                .h(px((sheet.row_height(active_row) * zoom).max(1.0)))
+                .border_2()
+                .border_color(select_border),
+        );
 
         if self.editing {
             if let Some((left, top, width, height)) = edit_rect {
@@ -817,30 +825,34 @@ impl gpui::Render for SheetView {
                 let font_size = (estyle.font.size * office_knob_f("sheet.fontScale", 4.0 / 3.0) as f32 * zoom).clamp(1.0, 40.0);
                 let st_bold = estyle.font.bold;
                 let st_italic = estyle.font.italic;
-                let st_size = estyle.font.size;
-                self.edit_rect_cache = Some((left, top, width, height));
+                let edit_bg = if estyle.fill.pattern == PatternType::Solid {
+                    model_color_hsla(&estyle.fill.fg, cell_bg, &wb.theme.colors)
+                } else {
+                    cell_bg
+                };
                 self.edit_font_px = font_size;
                 self.edit_font_cur = edit_font(&estyle.font.name, st_bold, st_italic);
                 let (th, tdiv) = edit_text.take().unwrap_or((height, div().w_full()));
-                let h = height.max(th);
+                let h = height.max(th + 2.0);
+                self.edit_rect_cache = Some((left, top, width, h));
                 let inner = div().w_full().child(tdiv);
-                let aligned = if th < height { match estyle.align.v { gridcraft_model::style::VAlign::Center => div().size_full().flex().flex_col().justify_center().child(inner), gridcraft_model::style::VAlign::Bottom => div().size_full().flex().flex_col().justify_end().child(inner), _ => div().size_full().child(inner) } } else { div().size_full().child(inner) };
-                let (l, t, w) = (left, top, width);
+                let aligned = if th <= height { match estyle.align.v { gridcraft_model::style::VAlign::Center => div().size_full().flex().flex_col().justify_center().child(inner), gridcraft_model::style::VAlign::Bottom => div().size_full().flex().flex_col().justify_end().child(inner), _ => div().size_full().child(inner) } } else { div().size_full().child(inner) };
                 let eo = self.edit_origin.clone();
                 let eo2 = eo.clone();
                 let handle = cx.entity().downgrade();
                 let h2 = handle.clone();
                 let h3 = handle.clone();
                 edit_el = Some(
-                    div().absolute().left(px(left)).top(px(top)).w(px(width)).h(px(h)).overflow_hidden().bg(cell_bg).border_2().border_color(select_border).cursor_text()
+                    div().absolute().left(px(left)).top(px(top)).w(px(width)).h(px(h)).overflow_hidden().bg(edit_bg).cursor_text()
                         .child(aligned)
+                        .child(div().absolute().top_0().left_0().size_full().border_2().border_color(select_border))
                         .on_mouse_down(gpui::MouseButton::Left, move |ev: &gpui::MouseDownEvent, window, cx| {
                             let (ox, oy) = *eo.lock().unwrap();
                             let x = f32::from(ev.position.x) - ox;
                             let y = f32::from(ev.position.y) - oy;
                             if let Some(v) = handle.upgrade() {
                                 v.update(cx, |this, cx| {
-                                    let c = this.click_caret(x, y, w, window, cx);
+                                    let c = this.click_caret(x, y);
                                     this.edit_caret = c;
                                     this.edit_sel_anchor = Some(c);
                                     this.edit_drag = true;
@@ -852,14 +864,14 @@ impl gpui::Render for SheetView {
                             }
                             cx.stop_propagation();
                         })
-                        .on_mouse_move(move |ev: &MouseMoveEvent, window, cx| {
+                        .on_mouse_move(move |ev: &MouseMoveEvent, _window, cx| {
                             let (ox, oy) = *eo2.lock().unwrap();
                             let x = f32::from(ev.position.x) - ox;
                             let y = f32::from(ev.position.y) - oy;
                             if let Some(v) = h2.upgrade() {
                                 v.update(cx, |this, cx| {
                                     if this.edit_drag && this.editing {
-                                        this.edit_caret = this.click_caret(x, y, w, window, cx);
+                                        this.edit_caret = this.click_caret(x, y);
                                         this.edit_mouse = Some((x, y));
                                         cx.notify();
                                     }
@@ -944,7 +956,9 @@ impl gpui::Render for SheetView {
             .bg(colors.panel_background)
             .track_focus(&self.focus_handle)
             .key_context(if self.editing { "SheetEditing" } else { "SheetView" })
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| { if this.editing && this.edit_key(ev, window, cx) { cx.stop_propagation(); } }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                if this.sheet_key(ev, window, cx) { cx.stop_propagation(); }
+            }))
             .on_action(cx.listener(|this, _: &SheetSearchNext, _w, cx| this.search_next(cx)))
             .on_action(cx.listener(|this, _: &SheetSearchPrev, _w, cx| this.search_prev(cx)))
             
@@ -983,23 +997,25 @@ impl gpui::Render for SheetView {
                     }
                 }
             }))
+            .on_action(cx.listener(|this, _: &SheetFillDown, window, cx| this.fill_selection(true, window, cx)))
+            .on_action(cx.listener(|this, _: &SheetFillRight, window, cx| this.fill_selection(false, window, cx)))
             .on_action(cx.listener(|this, _: &SheetSearch, window, cx| this.toggle_search(window, cx)))
             .on_action(cx.listener(|this, _: &SheetSend, window, cx| this.send_selection(window, cx)))
             .on_action(cx.listener(|this, _: &SheetCopy, window, cx| {
                 if !this.editing {
-                    this.copy_selection(window, cx);
+                    this.copy_selection(window, cx, false);
                 }
             }))
             .on_action(cx.listener(|this, _: &SheetCut, window, cx| {
                 if !this.editing {
-                    this.cut_selection(window, cx);
+                    this.copy_selection(window, cx, true);
                 }
             }))
             .on_action(cx.listener(|this, _: &SheetPaste, window, cx| {
                 if this.editing {
                     return;
                 }
-                let skipped = this.paste_clipboard(cx);
+                let skipped = this.paste_clipboard(window, cx);
                 if skipped > 0 {
                     let ws = window.root::<Workspace>().flatten();
                     this.show_toast(
@@ -1034,9 +1050,10 @@ impl gpui::Render for SheetView {
                     if this.editing {
                         this.commit_edit(cx);
                     } else {
-                        this.start_edit(window, cx);
+                        this.start_edit(None, window, cx);
                     }
                 }))
+            .on_action(cx.listener(|this, _: &CommitEdit, _window, cx| this.commit_edit(cx)))
             .on_action(cx.listener(|this, _: &CancelEdit, _window, cx| this.cancel_edit(cx)))
             .on_action(cx.listener(|this, _: &MoveUp, window, cx| this.move_sel(-1, 0, window, cx)))
             .on_action(cx.listener(|this, _: &MoveDown, window, cx| this.move_sel(1, 0, window, cx)))
@@ -1067,6 +1084,46 @@ fn cell_text_align(align: HAlign, numeric: bool) -> TextAlign {
         HAlign::General if numeric => TextAlign::Right,
         _ => TextAlign::Left,
     }
+}
+
+fn cell_editor_align(align: HAlign, numeric: bool, editing_formula: bool) -> TextAlign {
+    if editing_formula { TextAlign::Left } else { cell_text_align(align, numeric) }
+}
+
+fn reference_color(index: usize) -> Hsla {
+    let colors = [0x245ac5, 0xc23841, 0x8351a6, 0x177a72, 0x9a560f, 0xaf396d];
+    gpui::rgb(colors[index % colors.len()]).into()
+}
+
+fn formula_word_runs(word: &str, start: usize, base: &gpui::TextRun, refs: &[FormulaHighlight]) -> Vec<gpui::TextRun> {
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let refs = &refs[refs.partition_point(|reference| reference.chars.end <= start)..];
+    let end = start + word.chars().count();
+    if refs.first().is_none_or(|reference| reference.chars.start >= end) {
+        return Vec::new();
+    }
+    let bytes: Vec<_> = word.char_indices().map(|(byte, _)| byte).chain([word.len()]).collect();
+    let mut runs = Vec::new();
+    let mut next = 0;
+    for reference in refs.iter().take_while(|reference| reference.chars.start < end) {
+        let from = reference.chars.start.max(start);
+        let to = reference.chars.end.min(end);
+        if from >= to {
+            continue;
+        }
+        let (from, to) = (bytes[from - start], bytes[to - start]);
+        if next < from {
+            runs.push(gpui::TextRun { len: from - next, ..base.clone() });
+        }
+        runs.push(gpui::TextRun { len: to - from, color: reference_color(reference.index), ..base.clone() });
+        next = to;
+    }
+    if !runs.is_empty() && next < word.len() {
+        runs.push(gpui::TextRun { len: word.len() - next, ..base.clone() });
+    }
+    runs
 }
 
 fn line_start_px(align: TextAlign, inner_width: f32, right_edge: f32, line_width: f32) -> f32 {
@@ -1140,14 +1197,23 @@ mod tests {
         let date_system = gridcraft_core::DateSystem::D1900;
         let number = format_value(&Value::Number(1250.0), &format, date_system);
         let text = format_value(&Value::Text("1250".into()), &format, date_system);
-        let align = cell_text_align(HAlign::General, number.numeric);
+        let align = cell_editor_align(HAlign::General, number.numeric, false);
         assert_eq!(align, TextAlign::Right);
+        assert_eq!(cell_editor_align(HAlign::General, number.numeric, true), TextAlign::Left);
         assert_eq!(cell_text_align(HAlign::General, text.numeric), TextAlign::Left);
         assert_eq!(cell_text_align(HAlign::Left, number.numeric), TextAlign::Left);
 
-        let normal_x = line_start_px(align, 102.0, 95.0, 30.0);
-        let edit_x = 2.0 + line_start_px(align, 102.0, 93.0, 30.0);
-        assert_eq!(normal_x, 65.0);
-        assert_eq!(edit_x, normal_x);
+        assert_eq!(line_start_px(align, 102.0, 95.0, 30.0), 65.0);
+    }
+
+    #[test]
+    fn formula_colors_use_utf8_byte_lengths_for_shaping() {
+        let word = "=B2-'Лист'!C2";
+        let base = gpui::TextRun { len: word.len(), color: gpui::black(), ..Default::default() };
+        let refs = formula_highlights(word, "Лист");
+        let runs = formula_word_runs(word, 0, &base, &refs);
+        assert_eq!(runs.iter().map(|r| r.len).collect::<Vec<_>>(), [1, 2, 1, "'Лист'!C2".len()]);
+        assert_eq!(runs[1].color, reference_color(0));
+        assert_eq!(runs[3].color, reference_color(1));
     }
 }

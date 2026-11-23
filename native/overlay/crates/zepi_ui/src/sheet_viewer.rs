@@ -16,6 +16,7 @@ use gpui::{
     KeyDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollEvent, SharedString, Styled,
     Task, Window, actions, div, px,
 };
+use gridcraft_calc::Calc;
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::sheet::Sheet;
 use gridcraft_model::style::{NumFmt, PatternType, StyleId, StyleTable};
@@ -38,9 +39,14 @@ use workspace::{
     register_serializable_item,
 };
 
+use crate::sheet_formula::{fill_missing_formulas, recalculate_cells, recalculate_changes};
 use crate::slides_viewer::{office_knob, office_knob_f, office_thumb_color};
 
+mod formula_highlights;
 mod sheet_render;
+mod sheet_transfer;
+
+use sheet_transfer::{SheetChanges, fill_cells, move_cells, shifted_formula};
 
 actions!(
     sheet_viewer,
@@ -61,6 +67,8 @@ actions!(
         SheetCopy,
         SheetCut,
         SheetPaste,
+        SheetFillDown,
+        SheetFillRight,
         SheetUndo,
         SheetRedo,
         SheetSend,
@@ -75,7 +83,7 @@ const TOP_H: f32 = 22.0;
 const LEFT_W: f32 = 46.0;
 const ZOOM_MIN: f32 = 0.4;
 const ZOOM_MAX: f32 = 4.0;
-const SHEET_CLIPBOARD_METADATA: &str = "zepi.sheet.cells/1";
+const SHEET_CLIPBOARD_METADATA: &str = "zepi.sheet.cells/2";
 const MAX_SHEET_CLIPBOARD_METADATA_BYTES: usize = 16 * 1024 * 1024;
 
 type WorkbookStamp = (u64, u64);
@@ -147,6 +155,7 @@ struct LoadedWorkbook {
     wb: Workbook,
     stamp: WorkbookStamp,
     report: ReadReport,
+    calc: Calc,
 }
 
 fn load_workbook(path: &Path) -> anyhow::Result<LoadedWorkbook> {
@@ -155,8 +164,11 @@ fn load_workbook(path: &Path) -> anyhow::Result<LoadedWorkbook> {
     let stamp = stamp.filter(|stamp| crate::disk_stamp(path) == Some(*stamp))
         .ok_or_else(|| anyhow::anyhow!("The workbook changed while it was being read."))?;
     let (mut wb, report) = read_xlsx(&bytes)?;
+    fill_missing_formulas(&mut wb);
+    let mut calc = Calc::new();
+    calc.rebuild(&wb);
     SheetView::autofit_display_rows(&mut wb, office_knob_f("sheet.fontScale", 1.25) as f32);
-    Ok(LoadedWorkbook { wb, stamp, report })
+    Ok(LoadedWorkbook { wb, stamp, report, calc })
 }
 
 #[cfg(windows)]
@@ -284,8 +296,7 @@ fn model_color_hsla(color: &gridcraft_model::style::Color, fallback: Hsla, theme
     }
 }
 
-/// Formula-bar text to a cell: numbers and booleans by value, "=..." as a formula
-/// (cached value stays empty until the file is recalculated elsewhere), rest as text.
+/// Parses formula-bar text as a number, boolean, formula, or literal text.
 fn parse_cell_text(text: &str, style: StyleId) -> Cell {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -333,7 +344,13 @@ fn parse_cell_text(text: &str, style: StyleId) -> Cell {
 type ClipboardCell = (Value, Option<String>, Option<String>);
 type CellChange = (CellRef, Option<Cell>, Option<Cell>);
 
-fn sheet_clipboard_item(text: String, sheet: &Sheet, styles: &StyleTable, range: RangeRef) -> anyhow::Result<gpui::ClipboardItem> {
+fn sheet_clipboard_item(
+    text: String,
+    sheet: &Sheet,
+    styles: &StyleTable,
+    range: RangeRef,
+    shift_formulas: bool,
+) -> anyhow::Result<gpui::ClipboardItem> {
     let cells: Vec<_> = sheet.cells.iter_range(range).filter_map(|(at, cell)| {
         let formula = cell.formula.as_ref().map(|formula| formula.text.as_str());
         let value = if formula.is_some() { Value::Empty } else { cell.value.scalar() };
@@ -350,7 +367,8 @@ fn sheet_clipboard_item(text: String, sheet: &Sheet, styles: &StyleTable, range:
         let offset = CellRef::new(at.row - range.start.row, at.col - range.start.col);
         Some((offset, (value, formula, number_format)))
     }).collect();
-    let metadata = serde_json::to_string(&(SHEET_CLIPBOARD_METADATA, range.height(), range.width(), cells))?;
+    let origin = shift_formulas.then_some(range.start);
+    let metadata = serde_json::to_string(&(SHEET_CLIPBOARD_METADATA, range.height(), range.width(), cells, origin))?;
     anyhow::ensure!(
         metadata.len() <= MAX_SHEET_CLIPBOARD_METADATA_BYTES,
         "The selection is too large to copy with cell types. Select a smaller range."
@@ -363,18 +381,39 @@ fn valid_clipboard_numfmt(code: &str) -> bool {
         && code.chars().count() <= gridcraft_numfmt::MAX_FORMAT_CODE_CHARS
 }
 
-fn clipboard_cells(clip: &gpui::ClipboardItem, text_len: usize) -> Option<(usize, usize, BTreeMap<CellRef, ClipboardCell>)> {
+fn clipboard_cells(
+    clip: &gpui::ClipboardItem,
+    text_len: usize,
+) -> Option<(usize, usize, BTreeMap<CellRef, ClipboardCell>, Option<CellRef>)> {
     let metadata = clip.metadata().filter(|s| s.len() <= MAX_SHEET_CLIPBOARD_METADATA_BYTES)?;
-    let (kind, rows, cols, cells): (&str, u32, u32, Vec<(CellRef, ClipboardCell)>) =
-        serde_json::from_str(metadata).ok()?;
+    let (rows, cols, cells, origin) = match serde_json::from_str::<
+        (&str, u32, u32, Vec<(CellRef, ClipboardCell)>, Option<CellRef>),
+    >(metadata) {
+        Ok((SHEET_CLIPBOARD_METADATA, rows, cols, cells, origin)) => (rows, cols, cells, origin),
+        _ => match serde_json::from_str(metadata).ok()? {
+            ("zepi.sheet.cells/1", rows, cols, cells) => (rows, cols, cells, None),
+            _ => return None,
+        },
+    };
     // The plain TSV has at least one separator between every pair of cells.
-    if kind != SHEET_CLIPBOARD_METADATA || !(1..=MAX_ROWS).contains(&rows) || !(1..=MAX_COLS).contains(&cols)
+    if !(1..=MAX_ROWS).contains(&rows) || !(1..=MAX_COLS).contains(&cols)
+        || origin.is_some_and(|at| at.row > MAX_ROWS - rows || at.col > MAX_COLS - cols)
         || u64::from(rows) * u64::from(cols) - 1 > text_len as u64
         || cells.iter().any(|(at, (value, ..))| at.row >= rows || at.col >= cols || matches!(value, Value::Array(_)))
     {
         return None;
     }
-    Some((rows as usize, cols as usize, cells.into_iter().collect()))
+    Some((rows as usize, cols as usize, cells.into_iter().collect(), origin))
+}
+
+fn paste_formula(body: &str, origin: Option<CellRef>, offset: CellRef, target: CellRef) -> Arc<Formula> {
+    let formula = Arc::new(Formula::new(body));
+    if let Some(origin) = origin {
+        let source = CellRef::new(origin.row + offset.row, origin.col + offset.col);
+        shifted_formula(formula, source, target)
+    } else {
+        formula
+    }
 }
 
 fn paste_cells(
@@ -391,11 +430,11 @@ fn paste_cells(
     } else {
         Vec::new()
     };
-    let input_rows = typed.as_ref().map_or(plain.len(), |(rows, _, _)| *rows);
+    let input_rows = typed.as_ref().map_or(plain.len(), |(rows, ..)| *rows);
     if input_rows == 0 {
         return (Vec::new(), selection, 0);
     }
-    let input_cols = |row: usize| typed.as_ref().map_or_else(|| plain[row].len(), |(_, cols, _)| *cols);
+    let input_cols = |row: usize| typed.as_ref().map_or_else(|| plain[row].len(), |(_, cols, ..)| *cols);
     let fill = input_rows == 1 && input_cols(0) == 1 && !selection.is_single();
     let start = if fill { selection.start } else { active };
     let rows = if fill { selection.height() as usize } else { input_rows };
@@ -416,7 +455,7 @@ fn paste_cells(
             end.col = end.col.max(at.col);
             let old = sheet.cell(at).cloned();
             let mut style = sheet.style_id(at);
-            let new = if let Some((_, _, cells)) = &typed {
+            let new = if let Some((_, _, cells, origin)) = &typed {
                 let offset = CellRef::new(source_row as u32, source_col as u32);
                 if let Some((value, formula, code)) = cells.get(&offset) {
                     if (value.is_number() || formula.is_some())
@@ -426,7 +465,7 @@ fn paste_cells(
                     }
                     Cell {
                         value: value.clone(),
-                        formula: formula.as_ref().map(|body| Arc::new(Formula::new(body))),
+                        formula: formula.as_deref().map(|body| paste_formula(body, *origin, offset, at)),
                         style,
                     }
                 } else {
@@ -447,6 +486,7 @@ fn paste_cells(
 
 enum SheetOp {
     Cells(Vec<CellChange>),
+    Move(SheetChanges),
     Col(u32, Option<f32>, Option<f32>),
     Row(u32, Option<f32>, Option<f32>),
 }
@@ -457,14 +497,23 @@ struct SheetHistoryEntry {
 }
 
 impl SheetHistoryEntry {
-    fn apply(&self, wb: &mut Workbook, forward: bool) -> bool {
+    fn apply(&self, wb: &mut Workbook, calc: &mut Calc, forward: bool) -> bool {
         let Some(sheet) = wb.sheet_mut(self.sheet) else { return false };
         match &self.op {
             SheetOp::Cells(changes) => {
-                for (at, old, new) in changes {
-                    let target = if forward { new } else { old };
-                    sheet.set_cell(*at, target.clone().unwrap_or_default());
+                apply_cell_changes(sheet, changes, forward);
+                recalculate_cells(calc, wb, self.sheet, changes.iter().map(|c| c.0));
+            }
+            SheetOp::Move(changes) => {
+                if changes.iter().any(|(index, _)| wb.sheet(*index).is_none()) {
+                    return false;
                 }
+                let mut keys = Vec::new();
+                for (index, cells) in changes {
+                    apply_cell_changes(wb.sheet_mut(*index).unwrap(), cells, forward);
+                    keys.extend(cells.iter().map(|c| (*index, c.0)));
+                }
+                recalculate_changes(calc, wb, &keys);
             }
             SheetOp::Col(idx, old, new) => {
                 let info = sheet.cols.entry(*idx).or_default();
@@ -478,6 +527,13 @@ impl SheetHistoryEntry {
             }
         }
         true
+    }
+}
+
+fn apply_cell_changes(sheet: &mut Sheet, changes: &[CellChange], forward: bool) {
+    for (at, old, new) in changes {
+        let target = if forward { new } else { old };
+        sheet.set_cell(*at, target.clone().unwrap_or_default());
     }
 }
 
@@ -575,6 +631,7 @@ pub struct SheetItem {
     entry_id: Option<ProjectEntryId>,
     abs_path: PathBuf,
     wb: Option<Workbook>,
+    calc: Calc,
     import_error: Option<String>,
     import_report: ReadReport,
     loaded_stamp: Option<WorkbookStamp>,
@@ -613,6 +670,7 @@ impl project::ProjectItem for SheetItem {
                     entry_id,
                     abs_path,
                     wb: None,
+                    calc: Calc::new(),
                     import_error: None,
                     import_report: ReadReport::default(),
                     loaded_stamp: None,
@@ -643,9 +701,31 @@ impl project::ProjectItem for SheetItem {
 impl SheetItem {
     fn install(&mut self, loaded: LoadedWorkbook) {
         self.wb = Some(loaded.wb);
+        self.calc = loaded.calc;
         self.loaded_stamp = Some(loaded.stamp);
         self.import_report = loaded.report;
         self.import_error = None;
+    }
+
+    fn content_changed(&mut self, sheet: usize, cells: impl IntoIterator<Item = CellRef>) {
+        if let Some(wb) = self.wb.as_mut() {
+            recalculate_cells(&mut self.calc, wb, sheet, cells);
+        }
+        self.revision.changed();
+    }
+}
+
+struct PendingCut {
+    clip: gpui::ClipboardItem,
+    sheet: usize,
+    range: RangeRef,
+    revision: u64,
+    stamp: Option<WorkbookStamp>,
+}
+
+impl PendingCut {
+    fn is_current(&self, item: &SheetItem) -> bool {
+        self.revision == item.revision.current && self.stamp == item.loaded_stamp
     }
 }
 
@@ -658,6 +738,7 @@ pub struct SheetView {
     sel_row: u32,
     sel_col: u32,
     anchor: Option<(u32, u32)>,
+    pending_cut: Option<PendingCut>,
     drag_select: bool,
     edit_row: u32,
     edit_col: u32,
@@ -713,6 +794,7 @@ impl SheetView {
             sel_row: 0,
             sel_col: 0,
             anchor: None,
+            pending_cut: None,
             drag_select: false,
             edit_row: 0,
             edit_col: 0,
@@ -891,16 +973,13 @@ impl SheetView {
         cx.notify();
     }
 
+    fn active_cell(&self) -> (u32, u32) {
+        self.anchor.unwrap_or((self.sel_row, self.sel_col))
+    }
+
     fn sel_range(&self) -> (u32, u32, u32, u32) {
-        match self.anchor {
-            Some((ar, ac)) => (
-                ar.min(self.sel_row),
-                ar.max(self.sel_row),
-                ac.min(self.sel_col),
-                ac.max(self.sel_col),
-            ),
-            None => (self.sel_row, self.sel_row, self.sel_col, self.sel_col),
-        }
+        let (row, col) = self.active_cell();
+        (row.min(self.sel_row), row.max(self.sel_row), col.min(self.sel_col), col.max(self.sel_col))
     }
 
     fn tsv_of_range(&self, r0: u32, r1: u32, c0: u32, c1: u32, cx: &App) -> String {
@@ -978,20 +1057,9 @@ impl SheetView {
         self.redo_stack.clear();
     }
 
-    fn sheet_update<F: FnOnce(&mut gridcraft_model::sheet::Sheet)>(&mut self, cx: &mut Context<Self>, f: F) {
-        self.item.update(cx, |item, cx| {
-            let Some(wb) = item.wb.as_mut() else { return };
-            let Some(arc_sheet) = wb.sheets.get_mut(self.sheet) else { return };
-            let sheet = Arc::make_mut(arc_sheet);
-            f(sheet);
-            item.revision.changed();
-            cx.notify();
-        });
-    }
-
-    fn apply_op(&mut self, entry: &SheetHistoryEntry, cx: &mut Context<Self>, forward: bool) {
+    fn apply_op(&mut self, entry: &SheetHistoryEntry, cx: &mut Context<Self>, forward: bool) -> bool {
         let applied = self.item.update(cx, |item, cx| {
-            let applied = item.wb.as_mut().is_some_and(|wb| entry.apply(wb, forward));
+            let applied = item.wb.as_mut().is_some_and(|wb| entry.apply(wb, &mut item.calc, forward));
             if applied {
                 item.revision.changed();
                 cx.notify();
@@ -1000,6 +1068,14 @@ impl SheetView {
         });
         if applied {
             self.select_sheet(entry.sheet, cx);
+        }
+        applied
+    }
+
+    fn apply_new_op(&mut self, op: SheetOp, cx: &mut Context<Self>) {
+        let entry = SheetHistoryEntry { sheet: self.sheet, op };
+        if self.apply_op(&entry, cx, true) {
+            self.push_op(entry.op);
         }
     }
 
@@ -1015,35 +1091,48 @@ impl SheetView {
         self.undo_stack.push(op);
     }
 
-    fn copy_selection(&self, window: &Window, cx: &mut Context<Self>) -> bool {
-        let Some(wb) = self.item.read(cx).wb.as_ref() else { return false };
-        let Some(sheet) = wb.sheets.get(self.sheet) else { return false };
+    fn copy_selection(&mut self, window: &Window, cx: &mut Context<Self>, cut: bool) {
+        let item = self.item.read(cx);
+        let Some(wb) = item.wb.as_ref() else { return };
+        let Some(sheet) = wb.sheets.get(self.sheet) else { return };
         let (r0, r1, c0, c1) = self.sel_range();
         let range = RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
         let tsv = self.tsv_of_range(r0, r1, c0, c1, cx);
-        match sheet_clipboard_item(tsv, sheet, &wb.styles, range) {
+        match sheet_clipboard_item(tsv, sheet, &wb.styles, range, !cut) {
             Ok(clip) => {
+                self.pending_cut = cut.then(|| PendingCut {
+                    clip: clip.clone(),
+                    sheet: self.sheet,
+                    range,
+                    revision: item.revision.current,
+                    stamp: item.loaded_stamp,
+                });
                 cx.write_to_clipboard(clip);
-                true
+                cx.notify();
             }
-            Err(error) => {
-                self.show_toast(window.root::<Workspace>().flatten(), cx, error.to_string());
-                false
-            }
+            Err(error) => self.show_toast(window.root::<Workspace>().flatten(), cx, error.to_string()),
         }
     }
 
-    fn paste_clipboard(&mut self, cx: &mut Context<Self>) -> u64 {
+    fn paste_clipboard(&mut self, window: &Window, cx: &mut Context<Self>) -> u64 {
         let Some(clip) = cx.read_from_clipboard() else { return 0 };
         let (r0, r1, c0, c1) = self.sel_range();
         let selection = RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
+        if let Some(cut) = self.pending_cut.as_ref() {
+            if cut.clip == clip {
+                self.paste_cut(selection.start, window, cx);
+                return 0;
+            }
+            self.pending_cut = None;
+            cx.notify();
+        }
         let active = CellRef::new(self.sel_row, self.sel_col);
         let pasted = self.item.update(cx, |item, cx| {
             let wb = item.wb.as_mut()?;
             let sheet = wb.sheets.get_mut(self.sheet).map(Arc::make_mut)?;
             let pasted = paste_cells(sheet, &mut wb.styles, &clip, selection, active);
             if !pasted.0.is_empty() {
-                item.revision.changed();
+                item.content_changed(self.sheet, pasted.0.iter().map(|c| c.0));
                 cx.notify();
             }
             Some(pasted)
@@ -1051,19 +1140,62 @@ impl SheetView {
         let Some((changes, range, skipped)) = pasted else { return 0 };
         if !changes.is_empty() {
             self.push_op(SheetOp::Cells(changes));
-            self.anchor = Some((range.start.row, range.start.col));
-            self.sel_row = range.end.row;
-            self.sel_col = range.end.col;
-            self.clamp_sel(cx);
-            cx.notify();
+            self.select_pasted_range(range, cx);
         }
         skipped
     }
 
+    fn select_pasted_range(&mut self, range: RangeRef, cx: &mut Context<Self>) {
+        self.anchor = Some((range.start.row, range.start.col));
+        self.sel_row = range.end.row;
+        self.sel_col = range.end.col;
+        self.clamp_sel(cx);
+        cx.notify();
+    }
+
+    fn paste_cut(&mut self, target: CellRef, window: &Window, cx: &mut Context<Self>) {
+        let Some(cut) = self.pending_cut.as_ref() else { return };
+        let item = self.item.read(cx);
+        let result = (|| {
+            anyhow::ensure!(cut.sheet == self.sheet, "Cut and paste is only supported within the same sheet.");
+            anyhow::ensure!(cut.is_current(item), "The workbook changed after cutting. Cut the selection again.");
+            let wb = item.wb.as_ref().ok_or_else(|| anyhow::anyhow!("The cut workbook is no longer available."))?;
+            move_cells(wb, self.sheet, cut.range, target)
+        })();
+        match result {
+            Ok((range, changes)) => {
+                if !changes.is_empty() {
+                    self.apply_new_op(SheetOp::Move(changes), cx);
+                }
+                self.pending_cut = None;
+                cx.write_to_clipboard(gpui::ClipboardItem { entries: Vec::new() });
+                self.select_pasted_range(range, cx);
+            }
+            Err(error) => self.show_toast(window.root::<Workspace>().flatten(), cx, error.to_string()),
+        }
+    }
+
+    fn fill_selection(&mut self, down: bool, window: &Window, cx: &mut Context<Self>) {
+        if self.editing {
+            return;
+        }
+        let Some(sheet) = self.item.read(cx).wb.as_ref().and_then(|wb| wb.sheet(self.sheet)) else { return };
+        let (r0, r1, c0, c1) = self.sel_range();
+        let range = RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
+        match fill_cells(sheet, range, down) {
+            Ok(changes) if !changes.is_empty() => self.apply_new_op(SheetOp::Cells(changes), cx),
+            Ok(_) => {}
+            Err(error) => self.show_toast(window.root::<Workspace>().flatten(), cx, error.to_string()),
+        }
+    }
+
     fn clear_selection(&mut self, cx: &mut Context<Self>) {
         let (r0, r1, c0, c1) = self.sel_range();
-        let mut changes = Vec::new();
-        self.sheet_update(cx, |sheet| {
+        let changes = self.item.update(cx, |item, cx| {
+            let Some(sheet) = item.wb.as_mut().and_then(|wb| wb.sheet_mut(self.sheet)) else {
+                return Vec::new();
+            };
+            let mut changes = Vec::new();
             for row in r0..=r1 {
                 for col in c0..=c1 {
                     let at = CellRef::new(row, col);
@@ -1072,15 +1204,12 @@ impl SheetView {
                     changes.push((at, old, None));
                 }
             }
+            item.content_changed(self.sheet, changes.iter().map(|c| c.0));
+            cx.notify();
+            changes
         });
         if !changes.is_empty() {
             self.push_op(SheetOp::Cells(changes));
-        }
-    }
-
-    fn cut_selection(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.copy_selection(window, cx) {
-            self.clear_selection(cx);
         }
     }
 
@@ -1139,7 +1268,7 @@ impl SheetView {
     }
 
     /// Map a click inside the edit overlay to a caret offset using the same wrapped layout as the render.
-    fn click_caret(&self, x: f32, y: f32, _width: f32, _window: &Window, _cx: &App) -> usize {
+    fn click_caret(&self, x: f32, y: f32) -> usize {
         let n = self.edit_buffer.chars().count();
         for (ly, lh, words) in &self.edit_layout {
             if y >= *ly && y < *ly + *lh {
@@ -1251,7 +1380,8 @@ impl SheetView {
     }
 
     fn bar_text(&self, cx: &App) -> String {
-        self.cell_bar_text(self.sel_row, self.sel_col, cx)
+        let (row, col) = self.active_cell();
+        self.cell_bar_text(row, col, cx)
     }
 
     fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1336,13 +1466,12 @@ impl SheetView {
         }
     }
 
-    fn start_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_edit(&mut self, replacement: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
         if self.item.read(cx).wb.is_none() || self.editing {
             return;
         }
         let text = self.bar_text(cx);
-        self.edit_row = self.sel_row;
-        self.edit_col = self.sel_col;
+        (self.edit_row, self.edit_col) = self.active_cell();
         self.edit_buffer = text.clone();
         self.edit_caret = self.edit_buffer.chars().count();
         self.edit_sel_anchor = None;
@@ -1368,7 +1497,14 @@ impl SheetView {
             found.unwrap_or_else(|| vec![RichRun { text: text.clone(), ..Default::default() }])
         };
         self.edit_prev = text.clone();
-        self.edit_undo = Some((text.clone(), self.edit_caret, self.edit_sel_anchor, self.edit_runs.clone()));
+        self.edit_undo = Some((text, self.edit_caret, self.edit_sel_anchor, self.edit_runs.clone()));
+        if let Some(replacement) = replacement {
+            self.edit_buffer = replacement.to_owned();
+            self.edit_prev = self.edit_buffer.clone();
+            self.edit_caret = replacement.chars().count();
+            self.edit_runs = vec![RichRun { text: self.edit_buffer.clone(), ..Default::default() }];
+        }
+        self.edit_layout.clear();
         self.editing = true;
         let fh = self.focus_handle.clone();
         window.on_next_frame(move |window, cx| { window.focus(&fh, cx); });
@@ -1402,11 +1538,12 @@ impl SheetView {
                         let new = parse_cell_text(&text, style);
                         sheet.set_cell(at, new.clone());
                         let wb = item.wb.as_mut().unwrap();
-                        wb.rich.retain(|r| r.text != current && r.text != text);
                         let has_ov = self.edit_runs.iter().any(|r| r.bold || r.italic || r.underline || r.strike || r.color.is_some() || r.size.is_some() || r.font.is_some());
-                        if has_ov && !text.is_empty() { wb.rich.push(RichString { text: text.clone(), runs: self.edit_runs.clone() }); }
+                        if has_ov && !text.is_empty() && !wb.rich.iter().any(|r| r.text == text) {
+                            wb.rich.push(RichString { text: text.clone(), runs: self.edit_runs.clone() });
+                        }
                         self.push_op(SheetOp::Cells(vec![(at, old, Some(new))]));
-                        item.revision.changed();
+                        item.content_changed(self.sheet, [at]);
                         true
                     }
                 }
@@ -1422,6 +1559,12 @@ impl SheetView {
 
     fn cancel_edit(&mut self, cx: &mut Context<Self>) {
         if !self.editing {
+            if let Some(cut) = self.pending_cut.take() {
+                if cx.read_from_clipboard().as_ref() == Some(&cut.clip) {
+                    cx.write_to_clipboard(gpui::ClipboardItem { entries: Vec::new() });
+                }
+                cx.notify();
+            }
             return;
         }
         self.cell_editor = None;
@@ -1437,16 +1580,9 @@ impl SheetView {
     }
 
     fn edit_newline(&mut self, cx: &mut Context<Self>) {
-        if !self.editing {
-            return;
+        if self.editing {
+            self.edit_insert("\n", cx);
         }
-        let mut chars: Vec<char> = self.edit_buffer.chars().collect();
-        let caret = self.edit_caret.min(chars.len());
-        chars.insert(caret, '\n');
-        self.edit_caret = caret + 1;
-        self.edit_sel_anchor = Some(self.edit_caret);
-        self.edit_buffer = chars.into_iter().collect();
-        cx.notify();
     }
 
     fn edit_sel_range(&self) -> Option<(usize, usize)> {
@@ -1498,8 +1634,9 @@ impl SheetView {
         let anchor = if shift { self.edit_sel_anchor.or(Some(self.edit_caret)) } else { None };
         let lay = &self.edit_layout;
         let cur = lay.iter().rposition(|(_, _, w)| w.first().map(|f| f.0 <= caret).unwrap_or(false)).unwrap_or(0);
-        let first = lay[cur].2.first().map(|f| f.0).unwrap_or(0);
-        let last = lay[cur].2.last().map(|f| f.1).unwrap_or(first);
+        let line = lay.get(cur).map(|(_, _, words)| words.as_slice()).unwrap_or_default();
+        let first = line.first().map(|f| f.0).unwrap_or(0);
+        let last = line.last().map(|f| f.1).unwrap_or(n);
         let col = caret.saturating_sub(first);
         match dir {
             "left" => caret = caret.saturating_sub(1),
@@ -1515,10 +1652,28 @@ impl SheetView {
         cx.notify();
     }
 
+    fn sheet_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.focus_handle.is_focused(window) {
+            return false;
+        }
+        if self.editing {
+            return self.edit_key(ev, window, cx);
+        }
+        if let Some(text) = typed_cell_text(ev) {
+            self.start_edit(Some(text), window, cx);
+            return self.editing;
+        }
+        false
+    }
+
     fn edit_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let k = &ev.keystroke;
         let m = k.modifiers;
         let key = k.key.as_str();
+        if let Some(text) = typed_cell_text(ev) {
+            self.edit_insert(text, cx);
+            return true;
+        }
         if m.control || m.platform {
             match key {
                 "a" => { self.edit_sel_anchor = Some(0); self.edit_caret = self.edit_buffer.chars().count(); cx.notify(); return true; }
@@ -1550,17 +1705,9 @@ impl SheetView {
             "enter" | "tab" => { self.commit_edit(cx); true }
             "escape" => { self.cancel_edit(cx); true }
             "backspace" => { self.edit_delete(true, cx); true }
-            "space" => { self.edit_insert(" ", cx); true }
             "delete" => { self.edit_delete(false, cx); true }
             "left" | "right" | "up" | "down" | "home" | "end" => { self.edit_move(key, m.shift, window, cx); true }
-            _ => {
-                if key.chars().count() == 1 {
-                    let ch = key.chars().next().unwrap();
-                    let ch = if m.shift { ch.to_uppercase().next().unwrap_or(ch) } else { ch };
-                    self.edit_insert(&ch.to_string(), cx);
-                    true
-                } else { false }
-            }
+            _ => false,
         }
     }
 
@@ -1768,6 +1915,17 @@ impl SheetView {
         let content_y = ((y - TOP_H) / self.zoom + sy) as f64;
         Some((sheet.row_at(content_y), sheet.col_at(content_x)))
     }
+}
+
+fn typed_cell_text(event: &KeyDownEvent) -> Option<&str> {
+    let modifiers = event.keystroke.modifiers;
+    let alt_gr = modifiers.control && modifiers.alt && event.prefer_character_input;
+    if modifiers.platform || ((modifiers.control || modifiers.alt) && !alt_gr) {
+        return None;
+    }
+    event.keystroke.key_char.as_deref().filter(|text| {
+        !text.is_empty() && !text.chars().any(char::is_control)
+    })
 }
 
 impl gpui::EventEmitter<()> for SheetView {}
@@ -2011,6 +2169,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn typing_uses_the_layout_character_without_capturing_shortcuts() {
+        let mut event = KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                key: "z".into(),
+                key_char: Some("Я".into()),
+                ..Default::default()
+            },
+            is_held: false,
+            prefer_character_input: false,
+        };
+        assert_eq!(typed_cell_text(&event), Some("Я"));
+        event.keystroke.modifiers.control = true;
+        assert_eq!(typed_cell_text(&event), None);
+        event.keystroke.modifiers.alt = true;
+        event.prefer_character_input = true;
+        event.keystroke.key_char = Some("@".into());
+        assert_eq!(typed_cell_text(&event), Some("@"));
+        event.keystroke.modifiers = Default::default();
+        event.keystroke.key_char = Some("\r".into());
+        assert_eq!(typed_cell_text(&event), None);
+    }
+
+    #[test]
     fn col_names_and_refs() {
         assert_eq!(col_name(0), "A");
         assert_eq!(col_name(25), "Z");
@@ -2052,7 +2233,7 @@ mod tests {
         let end = CellRef::new(3, 2);
         source.set_cell(start, parse_cell_text("480123", source_style));
         source.set_cell(end, parse_cell_text("8", StyleId::DEFAULT));
-        let clip = sheet_clipboard_item("480123\n8".into(), &source, &styles, RangeRef::new(start, end)).unwrap();
+        let clip = sheet_clipboard_item("480123\n8".into(), &source, &styles, RangeRef::new(start, end), true).unwrap();
         assert_eq!(clip.text().as_deref(), Some("480123\n8"));
 
         let mut target = Sheet::new("Target");
@@ -2078,7 +2259,7 @@ mod tests {
         for (col, value) in values.iter().enumerate() {
             source.set_value(CellRef::new(start.row, start.col + col as u32), Value::from(*value));
         }
-        let clip = sheet_clipboard_item(values.join("\t"), &source, &styles, RangeRef::new(start, end)).unwrap();
+        let clip = sheet_clipboard_item(values.join("\t"), &source, &styles, RangeRef::new(start, end), true).unwrap();
         let mut target = Sheet::new("Target");
         let at = CellRef::new(0, 0);
         let (changes, range, skipped) = paste_cells(&mut target, &mut styles, &clip, RangeRef::cell(at), at);
@@ -2090,6 +2271,50 @@ mod tests {
             assert_eq!(cell.value, Value::from(*value));
             assert!(cell.formula.is_none());
         }
+    }
+
+    #[test]
+    fn pasted_formula_shifts_separately_for_each_cell_in_the_selection() {
+        let mut sheet = Sheet::new("Sheet1");
+        let mut styles = StyleTable::default();
+        let source = CellRef::new(1, 3);
+        sheet.set_cell(source, parse_cell_text("=B2-C2", StyleId::DEFAULT));
+        let clip = sheet_clipboard_item("=B2-C2".into(), &sheet, &styles, RangeRef::cell(source), true).unwrap();
+        let start = CellRef::new(2, 3);
+        let end = CellRef::new(4, 3);
+        let (changes, _, skipped) = paste_cells(&mut sheet, &mut styles, &clip, RangeRef::new(start, end), end);
+        assert_eq!(skipped, 0);
+        assert_eq!(changes.len(), 3);
+        for (row, expected) in [(2, "=B3-C3"), (3, "=B4-C4"), (4, "=B5-C5")] {
+            assert_eq!(sheet.cell(CellRef::new(row, 3)).unwrap().bar_text(), expected);
+        }
+    }
+
+    #[test]
+    fn copying_a_range_preserves_absolute_references_and_cut_keeps_formula_text() {
+        let mut sheet = Sheet::new("Sheet1");
+        let mut styles = StyleTable::default();
+        let start = CellRef::new(2, 2);
+        let end = CellRef::new(2, 3);
+        let first = "=A1+$B1+C$2+$D$3";
+        let second = "=SUM(A1:A2)";
+        sheet.set_cell(start, parse_cell_text(first, StyleId::DEFAULT));
+        sheet.set_cell(end, parse_cell_text(second, StyleId::DEFAULT));
+        let selection = RangeRef::new(start, end);
+        let copied = sheet_clipboard_item(format!("{first}\t{second}"), &sheet, &styles, selection, true).unwrap();
+        let cut = sheet_clipboard_item(format!("{first}\t{second}"), &sheet, &styles, selection, false).unwrap();
+        let dest = CellRef::new(4, 3);
+        let next = CellRef::new(4, 4);
+        paste_cells(&mut sheet, &mut styles, &copied, RangeRef::cell(dest), dest);
+        assert_eq!(sheet.cell(dest).unwrap().bar_text(), "=B3+$B3+D$2+$D$3");
+        assert_eq!(sheet.cell(next).unwrap().bar_text(), "=SUM(B3:B4)");
+        paste_cells(&mut sheet, &mut styles, &cut, RangeRef::cell(dest), dest);
+        assert_eq!(sheet.cell(dest).unwrap().bar_text(), first);
+        assert_eq!(sheet.cell(next).unwrap().bar_text(), second);
+
+        let edge = CellRef::new(0, 0);
+        paste_cells(&mut sheet, &mut styles, &copied, RangeRef::cell(edge), edge);
+        assert_eq!(sheet.cell(CellRef::new(0, 1)).unwrap().bar_text(), "=SUM(#REF!)");
     }
 
     #[test]
@@ -2127,12 +2352,140 @@ mod tests {
             sheet: 0,
             op: SheetOp::Cells(vec![(at, Some(old.clone()), Some(new.clone()))]),
         };
-        assert!(edit.apply(&mut wb, false));
+        let mut calc = Calc::new();
+        assert!(edit.apply(&mut wb, &mut calc, false));
         assert_eq!(wb.sheet(0).unwrap().cell(at), Some(&old));
         assert_eq!(wb.sheet(1).unwrap().cell(at), Some(&other));
-        assert!(edit.apply(&mut wb, true));
+        assert!(edit.apply(&mut wb, &mut calc, true));
         assert_eq!(wb.sheet(0).unwrap().cell(at), Some(&new));
         assert_eq!(wb.sheet(1).unwrap().cell(at), Some(&other));
+    }
+
+    #[test]
+    fn formula_results_follow_edits_paste_and_history_and_are_saved() {
+        let mut wb = Workbook::new();
+        wb.sheets.push(Arc::new(Sheet::new("Totals")));
+        let input = CellRef::new(0, 0);
+        let calculated = CellRef::new(0, 1);
+        let sheet = wb.sheet_mut(0).unwrap();
+        sheet.set_value(input, Value::Number(2.0));
+        sheet.set_cell(calculated, Cell::formula(Formula::new("A1*2")));
+        wb.sheet_mut(1).unwrap().set_cell(input, Cell::formula(Formula::new("SUM(Sheet1!B1:B2)")));
+        fill_missing_formulas(&mut wb);
+        let mut calc = Calc::new();
+        calc.rebuild(&wb);
+        assert_eq!(wb.sheet(1).unwrap().value(input), Value::Number(4.0));
+
+        wb.sheet_mut(0).unwrap().set_value(input, Value::Number(5.0));
+        recalculate_cells(&mut calc, &mut wb, 0, [input]);
+        assert_eq!(wb.sheet(1).unwrap().value(input), Value::Number(10.0));
+
+        let clip = gpui::ClipboardItem::new_string("7\t=A1*3".into());
+        let (changes, _, skipped) = paste_cells(
+            Arc::make_mut(&mut wb.sheets[0]), &mut wb.styles, &clip, RangeRef::cell(input), input,
+        );
+        assert_eq!(skipped, 0);
+        recalculate_cells(&mut calc, &mut wb, 0, changes.iter().map(|c| c.0));
+        assert_eq!(wb.sheet(1).unwrap().value(input), Value::Number(21.0));
+
+        let paste = SheetHistoryEntry { sheet: 0, op: SheetOp::Cells(changes) };
+        assert!(paste.apply(&mut wb, &mut calc, false));
+        assert_eq!(wb.sheet(1).unwrap().value(input), Value::Number(10.0));
+        assert!(paste.apply(&mut wb, &mut calc, true));
+        assert_eq!(wb.sheet(1).unwrap().value(input), Value::Number(21.0));
+
+        let bytes = write_xlsx_as(&wb, XlsxKind::Workbook).unwrap();
+        let (saved, _) = read_xlsx(&bytes).unwrap();
+        let saved_cell = saved.sheet(1).unwrap().cell(input).unwrap();
+        assert!(saved_cell.formula.is_some());
+        assert_eq!(saved_cell.value, Value::Number(21.0));
+
+        wb.sheet_mut(0).unwrap().set_cell(input, Cell::default());
+        recalculate_cells(&mut calc, &mut wb, 0, [input]);
+        assert_eq!(wb.sheet(1).unwrap().value(input), Value::Number(0.0));
+    }
+
+    #[test]
+    fn fill_down_and_right_use_the_edge_cells_and_undo_as_one_operation() {
+        let mut wb = Workbook::new();
+        let mut calc = Calc::new();
+        let b2 = CellRef::new(1, 1);
+        let c2 = CellRef::new(1, 2);
+        let b3 = CellRef::new(2, 1);
+        let c3 = CellRef::new(2, 2);
+        let sheet = wb.sheet_mut(0).unwrap();
+        sheet.set_cell(b2, parse_cell_text("=A2+$A$1", StyleId::DEFAULT));
+        sheet.set_value(c2, Value::Number(7.0));
+        let down = fill_cells(sheet, RangeRef::new(b2, c3), true).unwrap();
+        let fill = SheetHistoryEntry { sheet: 0, op: SheetOp::Cells(down) };
+        assert!(fill.apply(&mut wb, &mut calc, true));
+        assert_eq!(wb.sheet(0).unwrap().cell(b3).unwrap().bar_text(), "=A3+$A$1");
+        assert_eq!(wb.sheet(0).unwrap().value(c3), Value::Number(7.0));
+        assert!(fill.apply(&mut wb, &mut calc, false));
+        assert!(wb.sheet(0).unwrap().cell(b3).is_none());
+        assert!(wb.sheet(0).unwrap().cell(c3).is_none());
+
+        let right = fill_cells(wb.sheet(0).unwrap(), RangeRef::new(b2, c2), false).unwrap();
+        assert_eq!(right[0].2.as_ref().unwrap().bar_text(), "=B2+$A$1");
+    }
+
+    #[test]
+    fn cut_moves_once_and_keeps_formulas_and_totals() {
+        let mut wb = Workbook::new();
+        wb.sheets.push(Arc::new(Sheet::new("Other")));
+        let d2 = CellRef::new(1, 3);
+        let d3 = CellRef::new(2, 3);
+        let d6 = CellRef::new(5, 3);
+        let linked = CellRef::new(0, 0);
+        let sheet = wb.sheet_mut(0).unwrap();
+        sheet.set_value(CellRef::new(1, 1), Value::Number(50_000.0));
+        sheet.set_value(CellRef::new(1, 2), Value::Number(32_000.0));
+        sheet.set_cell(d2, parse_cell_text("=B2-C2", StyleId::DEFAULT));
+        for (row, profit) in [(2, 26_000.0), (3, 32_000.0), (4, 30_000.0)] {
+            sheet.set_value(CellRef::new(row, 3), Value::Number(profit));
+        }
+        sheet.set_cell(d6, parse_cell_text("=SUM(D2:D5)", StyleId::DEFAULT));
+        wb.sheet_mut(1).unwrap().set_cell(linked, parse_cell_text("=Sheet1!$D$2", StyleId::DEFAULT));
+        fill_missing_formulas(&mut wb);
+        let mut calc = Calc::new();
+        calc.rebuild(&wb);
+        assert_eq!(wb.sheet(0).unwrap().value(d6), Value::Number(106_000.0));
+
+        let (dest, changes) = move_cells(&wb, 0, RangeRef::cell(d2), d3).unwrap();
+        assert_eq!(dest, RangeRef::cell(d3));
+        assert_eq!(wb.sheet(0).unwrap().value(d2), Value::Number(18_000.0));
+        let cut = SheetHistoryEntry { sheet: 0, op: SheetOp::Move(changes) };
+        assert!(cut.apply(&mut wb, &mut calc, true));
+        let sheet = wb.sheet(0).unwrap();
+        assert!(sheet.cell(d2).is_none());
+        assert_eq!(sheet.cell(d3).unwrap().bar_text(), "=B2-C2");
+        assert_eq!(sheet.value(d6), Value::Number(80_000.0));
+        assert_eq!(wb.sheet(1).unwrap().cell(linked).unwrap().bar_text(), "=Sheet1!$D$3");
+        assert!(cut.apply(&mut wb, &mut calc, false));
+        assert_eq!(wb.sheet(0).unwrap().value(d6), Value::Number(106_000.0));
+        assert_eq!(wb.sheet(1).unwrap().cell(linked).unwrap().bar_text(), "=Sheet1!$D$2");
+        assert!(cut.apply(&mut wb, &mut calc, true));
+        assert_eq!(wb.sheet(0).unwrap().value(d6), Value::Number(80_000.0));
+    }
+
+    #[test]
+    fn cut_handles_overlap_and_rejects_clipping() {
+        let mut wb = Workbook::new();
+        let start = CellRef::new(0, 0);
+        let middle = CellRef::new(0, 1);
+        let end = CellRef::new(0, 2);
+        let sheet = wb.sheet_mut(0).unwrap();
+        sheet.set_value(start, Value::Number(1.0));
+        sheet.set_value(middle, Value::Number(2.0));
+        let source = RangeRef::new(start, middle);
+        assert!(move_cells(&wb, 0, source, CellRef::new(0, MAX_COLS - 1)).is_err());
+        let (_, changes) = move_cells(&wb, 0, source, middle).unwrap();
+        let cut = SheetHistoryEntry { sheet: 0, op: SheetOp::Move(changes) };
+        assert!(cut.apply(&mut wb, &mut Calc::new(), true));
+        let sheet = wb.sheet(0).unwrap();
+        assert!(sheet.cell(start).is_none());
+        assert_eq!(sheet.value(middle), Value::Number(1.0));
+        assert_eq!(sheet.value(end), Value::Number(2.0));
     }
 
     #[test]

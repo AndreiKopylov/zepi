@@ -91,8 +91,8 @@ def prepare():
                 allowed = {previous.get(relative), original_hashes.get(relative)}
                 if pristine.exists():
                     allowed.add(digest(pristine))
-                if relative == 'Cargo.lock':
-                    # cargo rewrites the lockfile on dependency changes; treat it as generated
+                if relative == 'Cargo.lock' and pristine.is_file() and digest(pristine) == previous.get(relative):
+                    # Preserve Cargo's generated lock only if the overlay lock was not edited.
                     shutil.copy2(current, overlay / relative)
                     continue
                 if digest(current) not in allowed:

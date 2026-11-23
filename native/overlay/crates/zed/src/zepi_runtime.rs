@@ -336,6 +336,8 @@ pub fn prepare_settings(directory: &Path) -> Result<()> {
                     "ctrl-c": "sheet_viewer::SheetCopy",
                     "ctrl-x": "sheet_viewer::SheetCut",
                     "ctrl-v": "sheet_viewer::SheetPaste",
+                    "ctrl-d": "sheet_viewer::SheetFillDown",
+                    "ctrl-r": "sheet_viewer::SheetFillRight",
                     "ctrl-z": "sheet_viewer::SheetUndo",
                     "ctrl-y": "sheet_viewer::SheetRedo",
                     "ctrl-enter": "sheet_viewer::SheetSend"

@@ -13,6 +13,8 @@ use wordcraft_geom::Rect;
 use wordcraft_layout::display::{Draw, Stroke};
 use wordcraft_render::{RenderOptions, Rendered, render_items};
 
+use crate::sheet_formula::fill_missing_formulas;
+
 /// Header chrome sizes and colours: the viewer's own values.
 const LEFT_W: f32 = 46.0;
 const TOP_H: f32 = 22.0;
@@ -37,7 +39,8 @@ const MAX_WINDOWS: usize = 3;
 /// `--pages` maps to sheets; `cells` (`A1:E40`, each side open: `A100:`, `:E40`) draws exactly
 /// that box of every selected sheet instead.
 pub fn sheet_pngs(bytes: &[u8], zoom: f64, sheets: Option<&[usize]>, cells: Option<&Cells>) -> Result<Vec<(String, Vec<u8>)>> {
-    let (wb, _) = gridcraft_xlsx::read_xlsx(bytes).map_err(|error| anyhow!("xlsx import: {error:?}"))?;
+    let (mut wb, _) = gridcraft_xlsx::read_xlsx(bytes).map_err(|error| anyhow!("xlsx import: {error:?}"))?;
+    fill_missing_formulas(&mut wb);
     let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
     let mut out = Vec::new();
     for index in selected(wb.sheets.len(), sheets) {
@@ -318,9 +321,9 @@ fn render_sheet(wb: &Workbook, sheet: &Sheet, (row0, col0, row1, col1): (u32, u3
                     items.push(seg(x0, y0, x1, y1, width, color));
                 }
             }
-            let Some(cell) = sheet.cell(at) else { continue };
+            let Some(value) = sheet.value_ref(at) else { continue };
             let fmt = NumberFormat::parse_cached(&style.num_fmt.0);
-            let formatted = format_value(&cell.value, &fmt, wb.date_system);
+            let formatted = format_value(value, &fmt, wb.date_system);
             if formatted.text.is_empty() {
                 continue;
             }
