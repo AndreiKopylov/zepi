@@ -1155,6 +1155,7 @@ impl TitleBar {
                 let auto_updater = auto_update::AutoUpdater::get(cx);
                 let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
                     Some(AutoUpdateStatus::Updated { .. }) => "Please restart Zed to Collaborate",
+                    Some(AutoUpdateStatus::ReadyToInstall { .. }) => "Install Zepi Update",
                     Some(AutoUpdateStatus::Installing { .. })
                     | Some(AutoUpdateStatus::Downloading { .. })
                     | Some(AutoUpdateStatus::Checking) => "Updating...",
@@ -1167,13 +1168,13 @@ impl TitleBar {
                     Button::new("connection-status", label)
                         .label_size(LabelSize::Small)
                         .on_click(|_, window, cx| {
-                            if let Some(auto_updater) = auto_update::AutoUpdater::get(cx)
-                                && auto_updater.read(cx).status().is_updated()
+                            match auto_update::AutoUpdater::get(cx)
+                                .map(|updater| updater.read(cx).status())
                             {
-                                workspace::reload(cx);
-                                return;
+                                Some(AutoUpdateStatus::Updated { .. }) => workspace::reload(cx),
+                                Some(AutoUpdateStatus::ReadyToInstall { .. }) => auto_update::install(cx),
+                                _ => auto_update::check(&Default::default(), window, cx),
                             }
-                            auto_update::check(&Default::default(), window, cx);
                         })
                         .into_any_element(),
                 )

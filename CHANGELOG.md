@@ -19,6 +19,8 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Fixed
 
+- Windows updates download in the background and open one installer only when requested. A
+  newer release replaces the previous offer; canceling setup restores the install button.
 - The spreadsheet viewer and PNG export calculate formulas that lack a saved result when opening
   an automatic workbook. Spreadsheet edits, paste, clear, and undo/redo recalculate dependent
   formulas, and workbook saves include the calculated results.
