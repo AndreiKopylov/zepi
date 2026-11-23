@@ -202,7 +202,8 @@ test("a filesystem failure acquiring the extension lock is not reported as conte
   const dir = await mkdtemp(join(tmpdir(), "zepi-extension-lock-error-"));
   const lock = join(dir, ".extensions.lock.lock");
   try {
-    await writeFile(lock, "not a lock directory");
+    await mkdir(lock);
+    await writeFile(join(lock, "occupied"), "");
     const old = new Date(Date.now() - 30_000);
     await utimes(lock, old, old);
     await assert.rejects(createExtensionCenter(dir).execute({operation:"cancel-pending",source:"unused"}),

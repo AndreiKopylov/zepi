@@ -1387,7 +1387,8 @@ impl SheetView {
         self.refocus_root = true;
         self.caret_task = None;
         self.edit_drag = false;
-        self.item.update(cx, |item, cx| {
+        let item = self.item.clone();
+        item.update(cx, |item, cx| {
             let changed = match item.wb.as_mut().and_then(|wb| wb.sheets.get_mut(self.sheet)) {
                 Some(arc_sheet) => {
                     let sheet = Arc::make_mut(arc_sheet);
