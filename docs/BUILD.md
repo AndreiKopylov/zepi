@@ -61,6 +61,10 @@ The script stages three sources (the repository, `zepi-build\release-fast\zepi.e
 committed: everything derives from the repository location. Staging is removed after the build
 (`-KeepStaging` keeps it).
 
+Package the `stable` channel. The Start menu and desktop shortcuts use `Zepi-Editor-Stable`,
+matching `release_channel::app_identifier()` in the installed executable. If an older taskbar
+pin still produces a second icon, unpin it and pin Zepi again from the Start menu.
+
 ## Tests
 
 ```powershell

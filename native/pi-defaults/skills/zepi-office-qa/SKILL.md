@@ -14,23 +14,36 @@ and broken alignment are invisible in `python-pptx` and obvious on screen.
 built-in viewer uses, so the images match what the user sees on screen. No LibreOffice, no Office, no
 network.
 
+**Do not render with LibreOffice or Office.** A `soffice` install on the machine is not a reason to use
+it: it renders a spreadsheet differently from the viewer, takes seconds per file and needs
+reflection tricks to produce a PNG. Check for it and use it only when `office render` itself failed and
+say so in the answer.
+
 ```powershell
 & "$env:ZEPI_ROOT\zepi.exe" office render "deck.pptx" --dpi 150
 ```
 
-- pptx → `slide-N.png`, docx → `page-N.png`, `--pages 1-3,5` for a subset, `--dpi 300` when details matter.
-- Without `--out` the images go to `%LOCALAPPDATA%\Zepi\render\<file name>\`, overwritten on the next
-  render; folders untouched for a week are deleted on the next run. Pass `--out` only when the images
-  belong to the answer, for example when the user asked to see them.
-- Never write renders into the project being edited: that is the user's working copy, not scratch space.
-- **xlsx has no built-in rasteriser.** If the machine happens to have LibreOffice or Office, use it;
-   Locate it instead of assuming an install path:
-   ```powershell
-   $soffice = (Get-Command soffice -ErrorAction SilentlyContinue).Source
-   if (-not $soffice) { $soffice = @("$env:ProgramFiles\LibreOffice\program\soffice.exe", "${env:ProgramFiles(x86)}\LibreOffice\program\soffice.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1 }
-   ```
-   An empty $soffice means no LibreOffice on this machine: skip the visual check and say so.
-  otherwise do the structural check below and say plainly that the visual check was skipped.
+- pptx → `slide-N.png`, docx → `page-N.png`, xlsx → `sheet-N.png`; a sheet too big for one readable
+  image comes as `sheet-N-top.png`, `sheet-N-middle.png`, `sheet-N-bottom.png` (sampled windows across
+  the whole sheet, the row numbers on each tell which part it is).
+- `--pages 1-3,5` selects a subset: slides, pages, or sheets for xlsx. `--dpi 300` when details matter;
+  for xlsx a lower `--dpi` fits more rows into one image.
+- **xlsx: `--cells` renders any box you name**, instead of the automatic windows. Use it when a sheet
+  is too big to read whole or when the user asks about a place in it, and to look at what you just
+  changed:
+  ```powershell
+  office render "s.xlsx" --cells B10:E40        # that box
+  office render "s.xlsx" --cells A100:          # from row 100 to the end of the used range
+  office render "s.xlsx" --cells :E40           # from the start to E40
+  office render "s.xlsx" --cells A:E            # columns A..E, every used row
+  office render "s.xlsx" --pages 2 --cells A1:D30   # sheet 2 only
+  ```
+  A single reference works too (`--cells B7`). An unknown column or sheet is an error, not a guess:
+  read `sheet-N.png` once or the values with Python before naming a box you have not seen.
+- `--out DIR` picks the folder for the images when a specific place is wanted; the JSON prints the
+  folder it used.
+- Formulas written by a script carry no cached value, so a cell may show empty until opened in Excel;
+  check values programmatically as well when the file was written by openpyxl.
 
 A deck renders in well under a second per slide. If the command fails, read the JSON error instead of
 guessing: it names the format, the page or the missing file.
@@ -60,6 +73,9 @@ Layout
 - Margins are equal on all sides and consistent across slides.
 - Tables do not grow past the footer (a grown row is a silent overflow).
 - Images keep their aspect ratio; no stretching, no unexpected crop of faces or labels.
+- For a sheet: no cell shows `######` (a number too wide for its column), wrapped text is not
+  clipped mid-word, column widths look deliberate, and nothing meant for one cell spilled into a
+  neighbor's territory.
 
 Typography
 
@@ -77,12 +93,12 @@ Content
 
 ## Report
 
-State what was checked and how: "rendered to PDF, 9 slides, looked at all pages; fixed overlap on slide
-4". If rendering is impossible (xlsx without LibreOffice): "visual check skipped — no rasteriser for this format;
-verified structure only". Never claim a deck looks right without having looked at it.
+State what was checked and how: "rendered to images, 9 slides, looked at all pages; fixed overlap on slide
+4"; "rendered sheet 1, checked columns C-E for truncated numbers". Never claim a deck looks right without
+having looked at it.
 
 ## Programmatic fallback
 
-When rendering is impossible, check the structure at least: reopen the file, assert the expected number of
+When the render fails, check the structure at least: reopen the file, assert the expected number of
 slides, that titles are non-empty, that shape bounds stay inside `prs.slide_width/height`, and that text
 length fits the estimated line budget (`zepi-deck-build` has the formula).

@@ -42,6 +42,11 @@ set INCLUDE=%MSVC%\include;%SDK%\Include\10.0.26100.0\ucrt;%SDK%\Include\10.0.26
 set LIB=%MSVC%\lib\x64;%SDK%\Lib\10.0.26100.0\ucrt\x64;%SDK%\Lib\10.0.26100.0\um\x64
 if "%ZEPI_EXTRA_PATH%"=="" set ZEPI_EXTRA_PATH=%REPO%\..\tools\cmake-3.30.5-windows-x86_64\bin;%REPO%\..\tools\nasm-2.16.03;%REPO%\..\tools\sccache\sccache-v0.10.0-x86_64-pc-windows-msvc
 set PATH=%MSVC%\bin\Hostx64\x64;%ZEPI_EXTRA_PATH%;%PATH%
+rem Stale-overlay guard: cargo compiles .local\upstream\zed, so a forgotten native.py prepare
+rem silently ships the old overlay. The stamp is written by prepare, so any overlay edit
+rem after it fails here instead of producing a binary without the change.
+python "%REPO%\scripts\native.py" guard
+if errorlevel 1 exit /b 1
 cd /d %REPO%\.local\upstream\zed
 cargo build --target-dir "%CARGO_TARGET_DIR%" -p zed --bin zepi --profile %PROFILE% --features gpui_platform/runtime_shaders --timings
 if errorlevel 1 exit /b 1

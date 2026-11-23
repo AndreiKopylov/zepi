@@ -29,12 +29,24 @@ def digest(path):
 def source_files():
     root = ROOT / 'native/overlay'
     files = []
-    for path in root.rglob('*'):
-        if path.is_symlink():
-            raise RuntimeError('Native source links are not supported: ' + str(path))
-        if path.is_file() and 'target' not in path.relative_to(root).parts:
+    for directory, dirs, names in os.walk(root):
+        dirs[:] = [name for name in dirs if name != 'target']
+        for name in names:
+            path = Path(directory) / name
+            if path.is_symlink():
+                raise RuntimeError('Native source links are not supported: ' + str(path))
             files.append(path.relative_to(root).as_posix())
     return sorted(files)
+
+
+def overlay_stamp():
+    """Cheap change stamp: contents are hashed on demand, metadata catches edits and new files."""
+    hasher = hashlib.sha256()
+    root = ROOT / 'native/overlay'
+    for relative in source_files():
+        stat = (root / relative).stat()
+        hasher.update(relative.encode() + b'\0' + str(stat.st_size).encode() + b'\0' + str(stat.st_mtime_ns).encode() + b'\n')
+    return hasher.hexdigest()
 
 
 def removed_paths():
@@ -79,8 +91,8 @@ def prepare():
                 allowed = {previous.get(relative), original_hashes.get(relative)}
                 if pristine.exists():
                     allowed.add(digest(pristine))
-                if relative == 'Cargo.lock':
-                    # cargo rewrites the lockfile on dependency changes; treat it as generated
+                if relative == 'Cargo.lock' and pristine.is_file() and digest(pristine) == previous.get(relative):
+                    # Preserve Cargo's generated lock only if the overlay lock was not edited.
                     shutil.copy2(current, overlay / relative)
                     continue
                 if digest(current) not in allowed:
@@ -97,7 +109,7 @@ def prepare():
                     shutil.copy2(desired, destination)
             elif destination.exists():
                 destination.unlink()
-    STATE.write_text(json.dumps({'files': {relative: digest(SOURCE / relative) if (SOURCE / relative).is_file() else None for relative in changed_paths}, 'removedSha256': digest(ROOT / 'native/removed-paths.json'), 'upstreamSha256': digest(MANIFEST), 'maintainedFiles': overlay_paths}, indent=2))
+    STATE.write_text(json.dumps({'files': {relative: digest(SOURCE / relative) if (SOURCE / relative).is_file() else None for relative in changed_paths}, 'removedSha256': digest(ROOT / 'native/removed-paths.json'), 'upstreamSha256': digest(MANIFEST), 'maintainedFiles': overlay_paths, 'overlayStamp': overlay_stamp()}, indent=2))
     print('Prepared Zepi on Zed', manifest['tag'], manifest['commit'])
 
 
@@ -182,15 +194,27 @@ def source_fingerprint():
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
 
+def guard():
+    if not STATE.exists():
+        raise RuntimeError('Run npm run native:prepare first')
+    prepared = json.loads(STATE.read_text())
+    if prepared.get('overlayStamp') != overlay_stamp():
+        raise RuntimeError('Overlay changed since the last prepare; run npm run native:prepare before compiling (cargo would build a stale tree otherwise)')
+    print('overlay up to date with ' + str(LOCAL / 'upstream/zed'))
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['prepare', 'fetch', 'check', 'test-acp', 'test-native'])
+    parser.add_argument('command', choices=['prepare', 'fetch', 'check', 'test-acp', 'test-native', 'guard'])
     command = parser.parse_args().command
     if command == 'fetch':
         fetch_dependencies()
         return
     if command == 'prepare':
         prepare()
+        return
+    if command == 'guard':
+        guard()
         return
     env = environment()
     env['CARGO_NET_OFFLINE'] = 'true'

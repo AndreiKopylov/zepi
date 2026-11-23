@@ -86,18 +86,12 @@ Rules that cost the most time when ignored:
 
 1. Reopen the saved file with the matching library and assert the shapes/cells/paragraphs you touched.
 2. Render and look at it: `& "$env:ZEPI_ROOT\zepi.exe" office render <file> --dpi 150`, then open the
-   PNGs. Zepi's own renderer needs no LibreOffice and no Office.
+   PNGs it wrote. Zepi's own renderer needs no LibreOffice and no Office.
 3. Report exactly what changed, in which file, and anything you could not verify.
 
 ## Limits
 
-- Spreadsheets (xlsx) have no built-in rasteriser: check the cells programmatically, or render with
-  LibreOffice/Office only if the machine has one.
-   Locate it instead of assuming an install path:
-   ```powershell
-   $soffice = (Get-Command soffice -ErrorAction SilentlyContinue).Source
-   if (-not $soffice) { $soffice = @("$env:ProgramFiles\LibreOffice\program\soffice.exe", "${env:ProgramFiles(x86)}\LibreOffice\program\soffice.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1 }
-   ```
-   An empty $soffice means no LibreOffice on this machine: skip the visual check and say so.
+- Spreadsheets render per sheet (`sheet-N.png`) with the same `office render` command, `--cells` to
+  pick a box of cells instead of the whole sheet.
 - Password-protected or macro-enabled (`.docm`, `.xlsm`) files: python-docx/openpyxl refuse or drop
   macros. Tell the user instead of silently saving a stripped copy.

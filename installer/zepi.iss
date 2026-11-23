@@ -6,6 +6,7 @@
   #define AppVersion "0.0.4" ; placeholder; build-installer.ps1 passes /DAppVersion from PRODUCT_VERSION
 #endif
 #define AppId "{{6F1D6E5A-8F14-4E2C-9B7A-2E4C9F0B31D7}"
+#define StableAppUserModelId "Zepi-Editor-Stable"
 #define StagingDir "..\dist\staging"
 
 [Setup]
@@ -77,8 +78,8 @@ Source: "{#StagingDir}\native\*"; DestDir: "{app}\native"; Flags: ignoreversion 
 Source: "{#StagingDir}\deps\python\*"; DestDir: "{app}\deps\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: office
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; AppUserModelID: "{#StableAppUserModelId}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon; AppUserModelID: "{#StableAppUserModelId}"
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall

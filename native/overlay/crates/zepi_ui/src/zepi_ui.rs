@@ -3,6 +3,8 @@ use gpui::{App, Context, KeyBinding, Window, actions};
 use project_panel::ProjectPanel;
 use workspace::{MultiWorkspace, Workspace};
 
+mod sheet_formula;
+pub mod sheet_raster;
 pub mod sheet_viewer;
 pub mod slides_viewer;
 pub mod html_doc;

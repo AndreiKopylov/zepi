@@ -8063,6 +8063,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gridcraft-calc"
+version = "0.15.0"
+dependencies = [
+ "gridcraft-core",
+ "gridcraft-formula",
+ "gridcraft-functions",
+ "gridcraft-model",
+ "gridcraft-numfmt",
+ "log",
+]
+
+[[package]]
 name = "gridcraft-core"
 version = "0.15.0"
 dependencies = [
@@ -8079,6 +8091,14 @@ dependencies = [
  "gridcraft-core",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "gridcraft-functions"
+version = "0.15.0"
+dependencies = [
+ "gridcraft-core",
+ "regex",
 ]
 
 [[package]]
@@ -23488,7 +23508,9 @@ dependencies = [
  "deckcraft-render",
  "editor",
  "gpui",
+ "gridcraft-calc",
  "gridcraft-core",
+ "gridcraft-formula",
  "gridcraft-model",
  "gridcraft-numfmt",
  "gridcraft-xlsx",
@@ -23515,6 +23537,7 @@ dependencies = [
  "wordcraft-docbin",
  "wordcraft-docx",
  "wordcraft-fonts",
+ "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-render",
  "workspace",

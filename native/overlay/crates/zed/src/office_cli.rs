@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 const MAX_PIXELS: f64 = 6_000_000.0;
 /// Renders older than this are removed on the next run, so the cache cannot grow forever.
 const RENDER_TTL_SECS: u64 = 7 * 24 * 60 * 60;
+const USAGE: &str =
+    "usage: zepi office render <file> [--out DIR] [--dpi N] [--pages 1-3,5] [--cells B10:E40] | zepi office help";
 
 /// Returns the arguments of an "zepi office ..." invocation, or None for the GUI.
 pub fn requested() -> Option<Vec<String>> {
@@ -25,12 +27,14 @@ pub fn run(args: &[String]) -> i32 {
     let (command, rest) = match args.split_first() {
         Some((command, rest)) => (command.as_str(), rest),
         None => {
-            print(
-                &json!({"ok": false, "error": "usage: zepi office render <file> --out DIR [--dpi N] [--pages 1-3,5]"}),
-            );
+            print(&json!({"ok": false, "error": USAGE}));
             return 2;
         }
     };
+    if matches!(command, "help" | "--help" | "-h") {
+        print(&json!({"ok": true, "usage": USAGE}));
+        return 0;
+    }
     let result = match command {
         "render" => render(rest),
         other => Err(anyhow::anyhow!("unknown command: {other}")),
@@ -52,10 +56,14 @@ fn print(value: &Value) {
 }
 
 fn render(args: &[String]) -> Result<Value> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        return Ok(json!({"usage": USAGE}));
+    }
     let mut file: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut dpi = 150.0_f64;
     let mut pages: Option<Vec<usize>> = None;
+    let mut cells: Option<zepi_ui::sheet_raster::Cells> = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -66,15 +74,20 @@ fn render(args: &[String]) -> Result<Value> {
                     .context("--dpi expects a number, for example 150")?
             }
             "--pages" => pages = Some(parse_pages(&next(args, &mut index)?)?),
+            "--cells" => {
+                let spec = next(args, &mut index)?;
+                cells = Some(zepi_ui::sheet_raster::Cells::parse(&spec).with_context(|| {
+                    format!("--cells expects a cell or a cell box, for example B10:E40, not {spec}")
+                })?)
+            }
             other if other.starts_with('-') => bail!("unknown option: {other}"),
             other => file = Some(PathBuf::from(other)),
         }
         index += 1;
     }
     let file = file.context("missing file to render")?;
-    let cache = render_root();
-    purge_old(&cache);
-    let out = out.unwrap_or_else(|| out_for(&cache, &file));
+    // like a script the caller writes: the working directory, unless --out names another one
+    let out = out.unwrap_or_else(|| PathBuf::from("."));
     if !(30.0..=600.0).contains(&dpi) {
         bail!("--dpi must be between 30 and 600");
     }
@@ -90,9 +103,7 @@ fn render(args: &[String]) -> Result<Value> {
     let produced = match extension.as_str() {
         "pptx" | "potx" => render_pptx(&bytes, &out, scale, dpi, pages.as_deref())?,
         "docx" | "docm" | "doc" => render_docx(&bytes, &out, scale, pages.as_deref())?,
-        "xlsx" | "xlsm" => {
-            bail!("spreadsheets have no built-in renderer; export them with LibreOffice or Office")
-        }
+        "xlsx" | "xlsm" => render_xlsx(&bytes, &out, dpi, pages.as_deref(), cells.as_ref())?,
         other => bail!("unsupported format: {other}"),
     };
     Ok(json!({
@@ -101,6 +112,23 @@ fn render(args: &[String]) -> Result<Value> {
         "pages": produced.len(),
         "files": produced,
     }))
+}
+
+/// A sheet's geometry is pixels at 96 dpi, so `--dpi` acts as a zoom over it.
+fn render_xlsx(
+    bytes: &[u8],
+    out: &Path,
+    dpi: f64,
+    pages: Option<&[usize]>,
+    cells: Option<&zepi_ui::sheet_raster::Cells>,
+) -> Result<Vec<String>> {
+    let sheets = zepi_ui::sheet_raster::sheet_pngs(bytes, dpi / 96.0, pages, cells)?;
+    let mut files = Vec::new();
+    for (name, png) in sheets {
+        std::fs::write(out.join(&name), png).with_context(|| format!("writing {name}"))?;
+        files.push(name);
+    }
+    Ok(files)
 }
 
 fn next(args: &[String], index: &mut usize) -> Result<String> {
@@ -221,60 +249,11 @@ fn render_docx(
     Ok(files)
 }
 
-/// Renders live in the user's profile, never next to the document or in the working directory.
-/// State root shared with the viewers: renders and slide images live side by side.
+/// State root shared with the viewers: temp images live here.
 pub fn state_root() -> PathBuf {
     match std::env::var_os("LOCALAPPDATA") {
         Some(dir) => PathBuf::from(dir).join("Zepi"),
         None => std::env::temp_dir().join("zepi"),
-    }
-}
-
-fn render_root() -> PathBuf {
-    state_root().join("render")
-}
-
-fn out_for(cache: &Path, file: &Path) -> PathBuf {
-    let stem: String = file
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("document")
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    cache.join(if stem.is_empty() {
-        "document".to_owned()
-    } else {
-        stem
-    })
-}
-
-/// Drops renders nobody looked at for a week; a render in progress keeps its directory fresh.
-fn purge_old(cache: &Path) {
-    let Ok(entries) = std::fs::read_dir(cache) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if !metadata.is_dir() {
-            continue;
-        }
-        let stale = metadata
-            .modified()
-            .ok()
-            .and_then(|modified| modified.elapsed().ok())
-            .is_some_and(|age| age.as_secs() > RENDER_TTL_SECS);
-        if stale {
-            std::fs::remove_dir_all(entry.path()).ok();
-        }
     }
 }
 

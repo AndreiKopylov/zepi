@@ -20,6 +20,9 @@ set INCLUDE=%MSVC%\include;%SDK%\Include\10.0.26100.0\ucrt;%SDK%\Include\10.0.26
 set LIB=%MSVC%\lib\x64;%SDK%\Lib\10.0.26100.0\ucrt\x64;%SDK%\Lib\10.0.26100.0\um\x64
 if "%ZEPI_EXTRA_PATH%"=="" set ZEPI_EXTRA_PATH=%REPO%\..\tools\cmake-3.30.5-windows-x86_64\bin;%REPO%\..\tools\nasm-2.16.03
 set PATH=%MSVC%\bin\Hostx64\x64;%ZEPI_EXTRA_PATH%;%PATH%
+rem Stale-overlay guard, same as win-build.cmd: a check against an unprepared tree lies.
+python "%REPO%\scripts\native.py" guard
+if errorlevel 1 exit /b 1
 cd /d %REPO%\.local\upstream\zed
 if "%PKG%"=="zed" (
   cargo check -p zed --features gpui_platform/runtime_shaders 2>&1

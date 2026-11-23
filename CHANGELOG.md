@@ -4,6 +4,43 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.8] - 2026-11-23
+
+### Added
+
+- `zepi office render` renders `.xlsx`/`.xlsm` in the viewer's own layout: `sheet-N.png`, sampled
+  `-top/-middle/-bottom` windows for a sheet too big for one readable image, `--cells B10:E40` for a
+  box of cells (`A100:`, `:E40` open-ended). `--pages` selects sheets, `--dpi` acts as zoom, and the
+  PNGs go where `--out` says (default: the current directory). The office skills verify spreadsheets
+  visually now, with no LibreOffice fallback.
+- Typing starts replacing the cell where the selection began, without first opening the editor.
+  Formulas are left-aligned while editing, with matching colors for direct references and their
+  cells or ranges on the current sheet.
+
+### Fixed
+
+- Windows updates download in the background and open one installer only when requested. A
+  newer release replaces the previous offer; canceling setup restores the install button.
+- The spreadsheet viewer and PNG export calculate formulas that lack a saved result when opening
+  an automatic workbook. Spreadsheet edits, paste, clear, and undo/redo recalculate dependent
+  formulas, and workbook saves include the calculated results.
+- Background spreadsheet saves and reloads no longer discard newer edits. If the file changed
+  on disk, Zepi refuses to overwrite it and offers **Save a Copy**.
+- Partially imported workbooks show warnings and can be saved as copies without replacing the
+  original.
+- Auto-fit checks only stored cells, so sparse workbooks with cells far down or across the sheet
+  open faster. Explicit row heights are preserved.
+- Right-aligned numbers no longer jump left when edited in place. Copying formatted numbers
+  between cells preserves their number format without replacing the destination's visual style.
+- Save All and close prompts now include spreadsheets, including an unfinished cell edit.
+- Spreadsheet undo and redo apply to the sheet where the change was made.
+- Copying cells within Zepi preserves text such as `00123` and text containing tabs or newlines.
+  Pasting copied formulas shifts relative references and preserves absolute references. Pasting
+  can extend the used area and is clipped only at the XLSX row and column limits.
+- Ctrl+D and Ctrl+R fill the selection down or right, adjusting relative formula references.
+  Cutting ordinary cells within a sheet moves one block on paste instead of filling the selection;
+  formulas that reference the moved cells follow them.
+
 ## [0.0.7] - 2026-11-22
 
 ### Added

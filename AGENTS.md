@@ -68,6 +68,8 @@ scripts\win-build-bg.cmd             :: background full build: affinity 0x3FF + 
 scripts\win-check.cmd [crate]       :: fast inner loop: link-free type-check (defaults to whole zed)
 scripts\build-agent.cmd             :: agent.exe (bun); needed after packages/acp|runtime changes
 scripts\win-run.py                 :: run with seeded configs
+scripts\prune-deps.ps1             :: trims zepi-build artifacts older than 7 days (-DryRun, -Days);
+                                   :: run it by hand when disk runs low
 scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PRODUCT_VERSION)
 ```
 
@@ -95,12 +97,16 @@ scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PR
 
 ## Gotchas (verified the hard way)
 
-- Without `native.py prepare`, cargo builds the STALE overlay from `.local/upstream/zed`.
+- Without `native.py prepare`, cargo builds the STALE overlay from `.local/upstream/zed`;
+  `win-build.cmd` and `win-check.cmd` now abort on an overlay stamp mismatch (`native.py guard`),
+  so it fails loudly instead of shipping a binary without the change.
 - ZEPI_JOBS=6 is a desktop-responsiveness limit, not a memory one (line-tables-only uses much
   less RAM). 12 was fatal under debug=full; 10+ saturates all cores and freezes Windows.
 - zepi-build/release-fast/deps grows without bound across zed.json pin bumps and profile
-  switches (cargo never deletes superseded artifacts). When disk runs low, delete deps files
-  older than a week; the next build recreates anything still needed (Nov 2026: ~35 GB reclaimed).
+  switches (cargo never deletes superseded artifacts). Run `scripts\prune-deps.ps1` by hand when
+  disk runs low: it deletes deps, build and incremental artifacts older than a week plus old
+  cargo-timings; the next build recreates anything still needed (Nov 2026: ~35 GB by hand, then
+  ~24 GB by the script).
 - `default-windows.json` is JSONC with comments; `json.load` is not a validity check.
 - A new office hotkey touches three places: overlay keymap, the seed in
   `zepi_runtime::prepare_settings`, and the live user keymap.json of existing profiles.
@@ -112,6 +118,11 @@ scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PR
   it — run the smoke against a dev deploy instead.
 - Installed bundle state lives in `%LOCALAPPDATA%\Zepi\{zed,pi}`; a dev build with an
   `zepi-root.txt` marker next to the exe keeps state next to the exe.
+- After manually replacing an installed exe, check `icacls <exe>` for a Low integrity label,
+  especially when copying via `C:\temp`. A Low-labeled `zepi.exe` runs Zepi and its agent at Low
+  integrity, preventing writes to the normal user profile and causing `EPERM` on the extensions
+  lock. Use `icacls <exe> /setintegritylevel M` if needed, then restart Zepi normally; this may
+  refresh inherited file permissions. Do not change the user's profile ACL or run Zepi elevated.
 - Excel holds open xlsx files with a sharing lock: writes fail with os error 32 and surface as the
   stock "Failed to save" prompt.
 - gpui caches textures globally by `Image.id`: slides/word rasters carry a per-view `image_tag`,

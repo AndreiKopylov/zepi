@@ -18,7 +18,8 @@ Foundation
 
 Vendored document engines (keep their own licenses)
 ---------------------------------------------------
-- gridcraft (xlsx) — https://github.com/storytold — MIT OR Apache-2.0
+- gridcraft (xlsx, formula calculation) — https://github.com/storytold/gridcraft
+  Revision 488f9982ebf05be9bfe581489d0edc6e3918eec7 — MIT OR Apache-2.0
 - deckcraft (pptx) — https://github.com/storytold — MIT OR Apache-2.0
 - wordcraft (docx) — https://github.com/storytold — MIT OR Apache-2.0
 

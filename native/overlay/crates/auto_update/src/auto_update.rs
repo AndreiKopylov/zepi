@@ -129,6 +129,11 @@ pub enum AutoUpdateStatus {
         /// when the total download size is not yet known.
         progress: Option<f32>,
     },
+    ReadyToInstall {
+        version: Version,
+        installer: PathBuf,
+        error: Option<Arc<anyhow::Error>>,
+    },
     Installing {
         version: Version,
     },
@@ -151,6 +156,22 @@ impl PartialEq for AutoUpdateStatus {
                 AutoUpdateStatus::Downloading { version: v1, .. },
                 AutoUpdateStatus::Downloading { version: v2, .. },
             ) => v1 == v2,
+            (
+                AutoUpdateStatus::ReadyToInstall {
+                    version: v1,
+                    installer: p1,
+                    error: e1,
+                },
+                AutoUpdateStatus::ReadyToInstall {
+                    version: v2,
+                    installer: p2,
+                    error: e2,
+                },
+            ) => {
+                v1 == v2
+                    && p1 == p2
+                    && e1.as_ref().map(ToString::to_string) == e2.as_ref().map(ToString::to_string)
+            }
             (
                 AutoUpdateStatus::Installing { version: v1 },
                 AutoUpdateStatus::Installing { version: v2 },
@@ -343,6 +364,13 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     }
 }
 
+pub fn install(_cx: &mut App) {
+    #[cfg(target_os = "windows")]
+    if let Some(updater) = AutoUpdater::get(_cx) {
+        updater.update(_cx, AutoUpdater::install);
+    }
+}
+
 pub fn release_notes_url(cx: &mut App) -> Option<String> {
     let _ = AutoUpdater::get(cx)?;
     Some("https://github.com/AndreiKopylov/zepi/releases".to_string())
@@ -380,6 +408,7 @@ struct InstallerDir(PathBuf);
 
 #[cfg(target_os = "windows")]
 impl InstallerDir {
+    #[cfg(not(test))]
     async fn new() -> Result<Self> {
         // Program Files is not writable by non-admin users, so stage under user data.
         // Completed downloads stay: a cached installer is reused, not re-downloaded.
@@ -496,11 +525,20 @@ impl AutoUpdater {
 
         cx.notify();
 
+        let previous_status = self.status.clone();
         self.pending_poll = Some(cx.spawn(async move |this, cx| {
             let result = Self::update(this.upgrade()?, cx).await;
             this.update(cx, |this, cx| {
                 this.pending_poll = None;
                 if let Err(error) = result {
+                    if matches!(this.status, AutoUpdateStatus::Checking)
+                        && matches!(previous_status, AutoUpdateStatus::ReadyToInstall { .. })
+                    {
+                        log::warn!("auto-update: could not refresh ready update: {error:#}");
+                        this.status = previous_status;
+                        cx.notify();
+                        return;
+                    }
                     let is_missing_dependency =
                         error.downcast_ref::<MissingDependencyError>().is_some();
                     this.status = match check_type {
@@ -525,6 +563,36 @@ impl AutoUpdater {
 
                     cx.notify();
                 }
+            })
+            .ok()
+        }));
+    }
+
+    #[cfg(target_os = "windows")]
+    fn install(&mut self, cx: &mut Context<Self>) {
+        let AutoUpdateStatus::ReadyToInstall {
+            version, installer, ..
+        } = &self.status else {
+            return;
+        };
+        if self.pending_poll.is_some() {
+            return;
+        }
+        let (version, installer) = (version.clone(), installer.clone());
+        self.status = AutoUpdateStatus::Installing {
+            version: version.clone(),
+        };
+        cx.notify();
+
+        self.pending_poll = Some(cx.spawn(async move |this, cx| {
+            let path = installer.clone();
+            let result = cx
+                .background_spawn(async move { install_release_windows(&path).await })
+                .await;
+            this.update(cx, |this, cx| {
+                this.pending_poll = None;
+                this.status = windows_install_finished(version, installer, result);
+                cx.notify();
             })
             .ok()
         }));
@@ -716,7 +784,7 @@ impl AutoUpdater {
         let Some(newer_version) = newer_version else {
             this.update(cx, |this, cx| {
                 this.status = match previous_status {
-                    AutoUpdateStatus::Updated { .. } | AutoUpdateStatus::Installing { .. } => previous_status,
+                    AutoUpdateStatus::Updated { .. } => previous_status,
                     _ => {
                         if this.update_check_type.is_manual() {
                             cx.emit(AutoUpdateEvent::UpToDate);
@@ -737,6 +805,11 @@ impl AutoUpdater {
             cx.notify();
         });
 
+        #[cfg(all(test, target_os = "windows"))]
+        let installer_dir = cx
+            .try_read_global::<tests::InstallerDirOverride, _>(|dir, _| InstallerDir(dir.0.clone()))
+            .context("test installer dir not configured")?;
+        #[cfg(not(all(test, target_os = "windows")))]
         let installer_dir = InstallerDir::new()
             .await
             .context("Failed to create installer dir")?;
@@ -747,18 +820,8 @@ impl AutoUpdater {
             .await
             .ok()
             .and_then(|s| s.trim().parse::<u64>().ok());
-        // Installers of other versions are garbage; a locked running one survives until unlocked.
-        if let Ok(mut entries) = smol::fs::read_dir(installer_dir.path()).await {
-            while let Some(Ok(entry)) = entries.next().await {
-                let name = entry.file_name();
-                if name != target_path.file_name().unwrap_or_default()
-                    && name != ok_path.file_name().unwrap_or_default()
-                {
-                    _ = smol::fs::remove_file(entry.path()).await;
-                }
-            }
-        }
-        if cached_len > 0 && marker_len == Some(cached_len) {
+        let cached = cached_len > 0 && marker_len == Some(cached_len);
+        if cached {
             log::info!("auto-update: reusing cached installer {}", target_path.display());
         } else {
             let progress_entity = this.clone();
@@ -783,6 +846,36 @@ impl AutoUpdater {
             )
             .await
             .with_context(|| format!("Failed to download update to {}", target_path.display()))?;
+        }
+
+        if cfg!(target_os = "windows") {
+            if let Ok(mut entries) = smol::fs::read_dir(installer_dir.path()).await {
+                while let Some(Ok(entry)) = entries.next().await {
+                    let name = entry.file_name();
+                    if name != target_path.file_name().unwrap_or_default()
+                        && name != ok_path.file_name().unwrap_or_default()
+                    {
+                        _ = smol::fs::remove_file(entry.path()).await;
+                    }
+                }
+            }
+            let error = match previous_status {
+                AutoUpdateStatus::ReadyToInstall { version, error, .. }
+                    if cached && version == newer_version =>
+                {
+                    error
+                }
+                _ => None,
+            };
+            this.update(cx, |this, cx| {
+                this.status = AutoUpdateStatus::ReadyToInstall {
+                    version: newer_version,
+                    installer: target_path,
+                    error,
+                };
+                cx.notify();
+            });
+            return Ok(());
         }
 
         this.update(cx, |this, cx| {
@@ -827,14 +920,6 @@ impl AutoUpdater {
                 };
                 cx.notify();
             });
-        } else {
-            // Windows: the elevated installer finishes outside the app; Updated here would be a lie.
-            this.update(cx, |this, cx| {
-                this.status = AutoUpdateStatus::Installing {
-                    version: newer_version,
-                };
-                cx.notify();
-            });
         }
         Ok(())
     }
@@ -863,7 +948,7 @@ impl AutoUpdater {
             }
             _ => {
                 let current_version = match status {
-                    AutoUpdateStatus::Updated { version } | AutoUpdateStatus::Installing { version } => version,
+                    AutoUpdateStatus::Updated { version } => version,
                     _ => installed_version,
                 };
                 Ok(Self::check_if_fetched_version_is_newer_non_nightly(
@@ -926,7 +1011,6 @@ impl AutoUpdater {
             "linux" => {
                 install_release_linux(&installer_dir, &target_path, channel, running_app_path).await
             }
-            "windows" => install_release_windows(&target_path).await,
             unsupported_os => anyhow::bail!("not supported: {unsupported_os}"),
         }
     }
@@ -1282,34 +1366,52 @@ async fn cleanup_windows() -> Result<()> {
     Ok(())
 }
 
-async fn install_release_windows(downloaded_installer: &Path) -> Result<Option<PathBuf>> {
-    // ShellExecute with RunAs (via Start-Process) reliably shows the installer UI and the
-    // UAC prompt and survives the app it is about to close; explorer.exe <file> is unreliable
-    // (it may just open the containing folder). Per-machine installs need elevation.
-    let path = downloaded_installer.display().to_string().replace('\'', "''");
-    // -FilePath, not -LiteralPath: Windows PowerShell 5.1 has no -LiteralPath on Start-Process.
-    let ps = format!("Start-Process -FilePath '{path}' -Verb RunAs");
-    // The app lives in a KILL_ON_JOB_CLOSE job; the installer must outlive the app it closes.
+#[cfg(target_os = "windows")]
+async fn install_release_windows(downloaded_installer: &Path) -> Result<bool> {
+    use smol::process::windows::CommandExt;
+
+    // The helper must hold the installer lock even if Setup closes Zepi's job.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    let spawn = |flags: u32| {
-        use smol::process::windows::CommandExt;
-        let mut cmd = smol::process::Command::new("powershell.exe");
-        cmd.creation_flags(flags);
-        cmd.args(["-NoProfile", "-Command", ps.as_str()]);
-        cmd.spawn()
-    };
-    let mut child = spawn(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB)
-        .or_else(|error| {
-            log::warn!("auto-update: breakaway spawn failed ({error}), installer stays job-bound");
-            spawn(CREATE_NO_WINDOW)
-        })
-        .context("failed to launch installer")?;
-    // powershell exits once ShellExecute returns; a declined UAC prompt exits non-zero.
-    let status = child.status().await.context("failed to await installer launch")?;
-    anyhow::ensure!(status.success(), "installer launch was declined or failed");
-    log::info!("auto-update: launched installer (RunAs): {}", downloaded_installer.display());
-    Ok(None)
+    let mut cmd = smol::process::Command::new("powershell.exe");
+    cmd.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB)
+        .env("ZEPI_UPDATE_INSTALLER", downloaded_installer)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            include_str!("install_windows.ps1"),
+        ]);
+    let output = cmd.output().await.context("failed to run Windows installer")?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(2 | 5) => Ok(false),
+        Some(20) => anyhow::bail!("Another Zepi installer is already running"),
+        _ => anyhow::bail!(
+            "Zepi installer failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ),
+    }
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn windows_install_finished(
+    version: Version,
+    installer: PathBuf,
+    result: Result<bool>,
+) -> AutoUpdateStatus {
+    match result {
+        Ok(true) => AutoUpdateStatus::Updated { version },
+        result => AutoUpdateStatus::ReadyToInstall {
+            version,
+            installer,
+            error: result.err().map(|error| {
+                log::error!("auto-update: {error:#}");
+                Arc::new(error)
+            }),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1324,7 +1426,7 @@ mod tests {
         rc::Rc,
         sync::{
             Arc,
-            atomic::{self, AtomicBool},
+            atomic::{self, AtomicU8},
         },
     };
     use tempfile::tempdir;
@@ -1338,6 +1440,38 @@ mod tests {
 
     pub(super) struct InstallOverride(pub Rc<dyn Fn(&Path, &AsyncApp) -> Result<Option<PathBuf>>>);
     impl Global for InstallOverride {}
+
+    #[cfg(target_os = "windows")]
+    pub(super) struct InstallerDirOverride(pub PathBuf);
+    #[cfg(target_os = "windows")]
+    impl Global for InstallerDirOverride {}
+
+    #[test]
+    fn windows_install_restores_the_cached_offer_when_not_completed() {
+        let version = Version::new(1, 0, 1);
+        let installer = PathBuf::from("zepi-setup-1.0.1.exe");
+        let cancelled = windows_install_finished(version.clone(), installer.clone(), Ok(false));
+        assert_eq!(
+            cancelled,
+            AutoUpdateStatus::ReadyToInstall {
+                version: version.clone(),
+                installer: installer.clone(),
+                error: None,
+            },
+        );
+        assert!(matches!(
+            windows_install_finished(
+                version.clone(),
+                installer.clone(),
+                Err(anyhow::anyhow!("Setup failed")),
+            ),
+            AutoUpdateStatus::ReadyToInstall { error: Some(_), .. }
+        ));
+        assert_eq!(
+            windows_install_finished(version.clone(), installer, Ok(true)),
+            AutoUpdateStatus::Updated { version },
+        );
+    }
 
     #[gpui::test]
     fn test_auto_update_defaults_to_true(cx: &mut TestAppContext) {
@@ -1358,40 +1492,41 @@ mod tests {
     async fn test_auto_update_downloads(cx: &mut TestAppContext) {
         cx.background_executor.allow_parking();
         zlog::init_test();
-        let release_available = Arc::new(AtomicBool::new(false));
+        let release_patch = Arc::new(AtomicU8::new(0));
 
-        let (dmg_tx, dmg_rx) = oneshot::channel::<String>();
+        let (download_tx, download_rx) = oneshot::channel::<String>();
+        let tmp_dir = Arc::new(tempdir().unwrap());
 
         cx.update(|cx| {
             settings::init(cx);
+            #[cfg(target_os = "windows")]
+            cx.set_global(InstallerDirOverride(tmp_dir.path().to_path_buf()));
 
             let current_version = semver::Version::new(0, 100, 0);
             release_channel::init_test(current_version, ReleaseChannel::Stable, cx);
 
             let clock = Arc::new(FakeSystemClock::new());
-            let release_available = Arc::clone(&release_available);
-            let dmg_rx = Arc::new(parking_lot::Mutex::new(Some(dmg_rx)));
+            let release_patch = Arc::clone(&release_patch);
+            let download_rx = Arc::new(parking_lot::Mutex::new(Some(download_rx)));
             let fake_client_http = FakeHttpClient::create(move |req| {
-                let release_available = release_available.load(atomic::Ordering::Relaxed);
-                let dmg_rx = dmg_rx.clone();
+                let release_patch = release_patch.load(atomic::Ordering::Relaxed);
+                let download_rx = download_rx.clone();
                 async move {
-                if req.uri().path() == "/releases/stable/latest/asset" {
-                    if release_available {
-                        return Ok(Response::builder().status(200).body(
-                            r#"{"version":"0.100.1","url":"https://test.example/new-download"}"#.into()
-                        ).unwrap());
+                    let path = req.uri().path();
+                    let response = if path == "/AndreiKopylov/zepi/releases/latest" {
+                        Response::builder()
+                            .status(302)
+                            .header("location", format!("https://github.com/AndreiKopylov/zepi/releases/tag/0.100.{release_patch}"))
+                            .body(Default::default())
+                    } else if path.ends_with("/zepi-0.100.1-setup.exe") {
+                        let download_rx = download_rx.lock().take().unwrap();
+                        Response::builder().status(200).body(download_rx.await.unwrap().into())
+                    } else if path.ends_with("/zepi-0.100.2-setup.exe") {
+                        Response::builder().status(200).body("<newer-update>".into())
                     } else {
-                        return Ok(Response::builder().status(200).body(
-                            r#"{"version":"0.100.0","url":"https://test.example/old-download"}"#.into()
-                        ).unwrap());
-                    }
-                } else if req.uri().path() == "/new-download" {
-                    return Ok(Response::builder().status(200).body({
-                        let dmg_rx = dmg_rx.lock().take().unwrap();
-                        dmg_rx.await.unwrap().into()
-                    }).unwrap());
-                }
-                Ok(Response::builder().status(404).body("".into()).unwrap())
+                        Response::builder().status(404).body("".into())
+                    };
+                    Ok(response.unwrap())
                 }
             });
             let client = Client::new(clock, fake_client_http, cx);
@@ -1407,7 +1542,7 @@ mod tests {
             assert_eq!(updater.current_version(), semver::Version::new(0, 100, 0));
         });
 
-        release_available.store(true, atomic::Ordering::SeqCst);
+        release_patch.store(1, atomic::Ordering::SeqCst);
         cx.background_executor.advance_clock(POLL_INTERVAL);
         cx.background_executor.run_until_parked();
 
@@ -1428,9 +1563,7 @@ mod tests {
             }
         );
 
-        dmg_tx.send("<fake-zed-update>".to_owned()).unwrap();
-
-        let tmp_dir = Arc::new(tempdir().unwrap());
+        download_tx.send("<fake-zed-update>".to_owned()).unwrap();
 
         cx.update(|cx| {
             let tmp_dir = tmp_dir.clone();
@@ -1451,6 +1584,36 @@ mod tests {
             }
         }
         let status = auto_updater.read_with(cx, |updater, _| updater.status());
+        if cfg!(target_os = "windows") {
+            let installer = tmp_dir.path().join("zepi-setup-0.100.1.exe");
+            assert_eq!(
+                status,
+                AutoUpdateStatus::ReadyToInstall {
+                    version: Version::new(0, 100, 1),
+                    installer: installer.clone(),
+                    error: None,
+                },
+            );
+            assert_eq!(std::fs::read_to_string(&installer).unwrap(), "<fake-zed-update>");
+            assert!(!tmp_dir.path().join("zed").exists());
+
+            release_patch.store(2, atomic::Ordering::SeqCst);
+            auto_updater.update(cx, |updater, cx| updater.poll(UpdateCheckType::Manual, cx));
+            while auto_updater.read_with(cx, |updater, _| updater.pending_poll.is_some()) {
+                cx.background_executor.timer(Duration::ZERO).await;
+                cx.run_until_parked();
+            }
+            assert_eq!(
+                auto_updater.read_with(cx, |updater, _| updater.status()),
+                AutoUpdateStatus::ReadyToInstall {
+                    version: Version::new(0, 100, 2),
+                    installer: tmp_dir.path().join("zepi-setup-0.100.2.exe"),
+                    error: None,
+                },
+            );
+            assert!(!installer.exists());
+            return;
+        }
         assert_eq!(
             status,
             AutoUpdateStatus::Updated {
