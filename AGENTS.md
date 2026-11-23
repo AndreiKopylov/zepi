@@ -118,6 +118,11 @@ scripts\build-installer.ps1        :: dist\zepi-<ver>-setup.exe (version from PR
   it — run the smoke against a dev deploy instead.
 - Installed bundle state lives in `%LOCALAPPDATA%\Zepi\{zed,pi}`; a dev build with an
   `zepi-root.txt` marker next to the exe keeps state next to the exe.
+- After manually replacing an installed exe, check `icacls <exe>` for a Low integrity label,
+  especially when copying via `C:\temp`. A Low-labeled `zepi.exe` runs Zepi and its agent at Low
+  integrity, preventing writes to the normal user profile and causing `EPERM` on the extensions
+  lock. Use `icacls <exe> /setintegritylevel M` if needed, then restart Zepi normally; this may
+  refresh inherited file permissions. Do not change the user's profile ACL or run Zepi elevated.
 - Excel holds open xlsx files with a sharing lock: writes fail with os error 32 and surface as the
   stock "Failed to save" prompt.
 - gpui caches textures globally by `Image.id`: slides/word rasters carry a per-view `image_tag`,

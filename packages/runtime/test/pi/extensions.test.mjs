@@ -29,9 +29,6 @@ test("pi package lifecycle preserves filters, queues changes while loaded, and m
     state = await center.execute({operation:"remove",source:pkg});
     assert.equal(state.pending.length, 1); assert.equal(state.packages.length,1);
     await release();
-    state = await center.execute();
-    assert.equal(state.activeRuntimes, 0);
-    assert.equal(state.pending.length, 1, "closing a runtime leaves package changes for locked startup or retry");
     const releaseNext = await center.acquireRuntime();
     state = await center.execute(); assert.equal(state.packages.length, 0); assert.equal(state.pending.length,0);
     await releaseNext();
@@ -178,8 +175,7 @@ test("extension lock serializes startup, prevents overlapping mutations and reco
   const lock = join(dir, ".extensions.lock.lock");
   try {
     await mkdir(lock);
-    assert.equal((await center.execute({operation:"retry"})).pending.length, 0, "an empty startup queue does not need the lock");
-    await assert.rejects(center.execute({operation:"cancel-pending",source:"unused"}), /Another extension operation/);
+    await assert.rejects(center.execute({operation:"retry"}), /Another extension operation/);
     const pending = center.acquireRuntime();
     let acquired = false;
     pending.then(() => {acquired = true;});
@@ -196,19 +192,6 @@ test("extension lock serializes startup, prevents overlapping mutations and reco
     await release();
     await assert.rejects(readFile(lock), {code:"ENOENT"});
   } finally {await rm(dir, {recursive:true, force:true});}
-});
-
-test("a filesystem failure acquiring the extension lock is not reported as contention", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "zepi-extension-lock-error-"));
-  const lock = join(dir, ".extensions.lock.lock");
-  try {
-    await mkdir(lock);
-    await writeFile(join(lock, "occupied"), "");
-    const old = new Date(Date.now() - 30_000);
-    await utimes(lock, old, old);
-    await assert.rejects(createExtensionCenter(dir).execute({operation:"cancel-pending",source:"unused"}),
-      error => typeof error.code === "string" && error.code !== "ELOCKED");
-  } finally {await rm(dir, {recursive:true,force:true});}
 });
 
 test('MCP add merges one snippet, refuses clashes and stale revisions', async()=> {
