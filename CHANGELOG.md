@@ -8,6 +8,14 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Changed
 
+- The chat model picker shows the model name first, with the provider and input capabilities below.
+  The composer button shows just the model name; both tooltips show the full model reference.
+- **Connect Provider** in Models and providers supports both API keys and OAuth account sign-in
+  without opening a chat. Both menus hide already connected providers. OAuth sign-in closes any
+  open API-key form, supports cancellation, and keeps optional manual redirect input collapsed.
+- The Providers header has a **Reload** action. **Add Custom API** and **Import from JSON** are
+  grouped on the right, with guidance below on environment variables, restarting, and locally stored
+  plaintext keys.
 - Updated the Windows build guide for the compiled agent, on-demand browse setup, and dev-bundle checks.
 - The shared Office skill focuses on choosing the right skill, running the bundled Python, preserving
   source files, and extracting PDF text. The Excel skill separates formula, value, and layout checks
@@ -15,6 +23,9 @@ All notable changes to Zepi are documented here. The format follows
 
 ### Fixed
 
+- Models and providers hides unconfigured built-in providers and their models from the main list,
+  default model picker, and enabled model list. Custom connections remain visible, even without
+  credentials. Editing visible enabled models preserves saved selections for disconnected providers.
 - Office skills now report when the bundled Python executable is missing instead of trying a broken
   path or falling back to system Python. Native Office viewers and PNG rendering still work without it.
 - Word skill examples replace a placeholder without rewriting its entire paragraph and no longer

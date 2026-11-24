@@ -92,18 +92,28 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       }
       return modelRuntime.getProviderAuthStatus(provider.id).configured ? "environment" : "none";
     };
-    const providers = modelRuntime.getProviders().map(provider => {
-      const credential = credentials.find(entry => entry.providerId === provider.id);
-      const state = modelRuntime.getProviderAuthStatus(provider.id);
-      return { id: provider.id, name: provider.name ?? provider.id, custom: customIds.has(provider.id),
-        credential: credential?.type ?? (state.configured ? state.source ?? "configured" : "none"),
+    const providers = [], keyProviders = [], oauthProviders = [];
+    for (const provider of modelRuntime.getProviders()) {
+      const { id, name = id } = provider;
+      const custom = customIds.has(id);
+      const configured = modelRuntime.hasConfiguredAuth(id);
+      if (!custom && !configured) {
+        if (provider.auth.apiKey) keyProviders.push({ id, name });
+        if (provider.auth.oauth?.login) oauthProviders.push({ id, name });
+        continue;
+      }
+      const credential = credentials.find(entry => entry.providerId === id);
+      const state = modelRuntime.getProviderAuthStatus(id);
+      providers.push({ id, name, custom,
+        credential: credential?.type ?? (configured ? state.source ?? "configured" : "none"),
         credentialSource: credentialSource(provider),
-        models: modelRuntime.getModels(provider.id).map(model => ({ id: model.id, name: model.name,
-          enabled: enabledRefs ? enabledRefs.has(`${provider.id}/${model.id}`) : true,
-          thinkingLevels: getSupportedThinkingLevels(model) })) };
-    }).filter(provider => provider.models.length)
-      // Built-in providers first, then custom connections, each alphabetically.
-      .sort((a, b) => Number(a.custom) - Number(b.custom) || a.name.localeCompare(b.name));
+        models: modelRuntime.getModels(id).map(model => ({ id: model.id, name: model.name,
+          enabled: enabledRefs ? enabledRefs.has(`${id}/${model.id}`) : true,
+          thinkingLevels: getSupportedThinkingLevels(model) })) });
+    }
+    providers.sort((a, b) => Number(a.custom) - Number(b.custom) || a.name.localeCompare(b.name));
+    keyProviders.sort((a, b) => a.name.localeCompare(b.name));
+    oauthProviders.sort((a, b) => a.name.localeCompare(b.name));
     return { version: bundledVersion, adapterVersion: "0.9.4", directory, modelCatalogNotice,
       defaultProvider: manager.getDefaultProvider() ?? "",
       defaultModel: manager.getDefaultModel() ?? "",
@@ -114,13 +124,13 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
       httpProxy: httpProxyStatus(manager.getGlobalSettings()),
       browser: await browserStatus(),
       customConnections: projectConnections(validated.providers, modelRuntime),
-      providers, update: await readJson(join(directory, "pi-update.json"), null) };
+      providers, keyProviders, oauthProviders, update: await readJson(join(directory, "pi-update.json"), null) };
   }
 
   async function execute(request) {
     const operation = request?.operation ?? "status";
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    if (!["status", "check-update", "import"].includes(operation)) await status();
+    const currentStatus = ["status", "check-update", "import"].includes(operation) ? null : await status();
     if (operation === 'http-proxy') {
       new FileSettingsStorage(directory, directory).withLock('global', current => {
         try { return JSON.stringify(mergeHttpProxy(current ? JSON.parse(current) : {}, request.proxy, request.expected), null, 2) + '\n'; }
@@ -283,15 +293,23 @@ export function createPiSettings(directory = piDirectory(root), sourceDirectory 
     } else if (operation === "enabled-models") {
       const manager = settings();
       if (manager.drainErrors().length) throw new PiConfigError("Unable to read pi settings. Configuration was not changed.");
-      const all = (await runtime()).getModels().map(model => `${model.provider}/${model.id}`);
       let patterns;
-      if (request.all === true) patterns = undefined;
-      else {
+      if (request.all !== true) {
         if (!Array.isArray(request.enabled) || request.enabled.length > 2000) throw new PiConfigError("Choose the models to enable.");
-        const known = new Set(all);
+        const visible = new Set(currentStatus.providers.flatMap(p => p.models.map(m => `${p.id}/${m.id}`)));
         const refs = [...new Set(request.enabled.map(ref => typeof ref === "string" ? ref.trim() : "").filter(Boolean))];
-        if (refs.some(ref => !known.has(ref))) throw new PiConfigError("The model list changed. Reload the page and try again.");
-        patterns = refs.length === all.length && all.every(ref => refs.includes(ref)) ? undefined : refs;
+        if (refs.some(ref => !visible.has(ref))) throw new PiConfigError("The model list changed. Reload the page and try again.");
+        patterns = refs;
+        const previous = manager.getEnabledModels();
+        if (previous?.length) {
+          const all = (await runtime()).getModels();
+          for (const {model, thinkingLevel} of resolveModelScopeFromModels(previous, all).scopedModels) {
+            const ref = `${model.provider}/${model.id}`;
+            if (!visible.has(ref)) patterns.push(thinkingLevel ? `${ref}:${thinkingLevel}` : ref);
+          }
+        } else if (refs.length === visible.size && refs.length > 0) {
+          patterns = undefined;
+        }
       }
       manager.setEnabledModels(patterns);
       await manager.flush();
