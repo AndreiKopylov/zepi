@@ -13,7 +13,7 @@ fn path_with(dir: &std::path::Path) -> String {
 use acp_thread::AgentConnection;
 use agent_client_protocol::v2::schema as acp_v2;
 use anyhow::{Context as _, Result};
-use collections::HashSet;
+use collections::{HashMap, HashSet};
 use fs::Fs;
 use gpui::{App, AppContext as _, Entity, Task};
 use language_model::{ApiKey, EnvVar, GOOGLE_AI_API_URL};
@@ -22,8 +22,21 @@ use project::{
     agent_server_store::{AgentId, AllAgentServersSettings},
 };
 use settings::{AgentConfigOptionValue, SettingsStore, update_settings_file};
-use std::{rc::Rc, sync::Arc};
+use std::{path::Path, rc::Rc, sync::Arc};
 use ui::IconName;
+
+fn set_office_python_env(root: &Path, env: &mut HashMap<String, String>) {
+    let directory = root.join("deps/python");
+    let python = directory.join("python.exe");
+    let path = if python.is_file() {
+        env.insert("PATH".into(), path_with(&directory));
+        python.to_string_lossy().into_owned()
+    } else {
+        String::new()
+    };
+    // An empty value masks any stale path inherited from the parent process.
+    env.insert("ZEPI_PYTHON".into(), path);
+}
 
 pub const GEMINI_ID: &str = "gemini";
 pub const CLAUDE_AGENT_ID: &str = "claude-acp";
@@ -309,14 +322,7 @@ impl AgentServer for CustomAgentServer {
                     })
                 });
                 extra_env.insert("ZEPI_ROOT".into(), root.to_string_lossy().into_owned());
-                // Bundled python leads PATH so `python` in agent commands never hits a system
-                // install or the Windows Store stub; ZEPI_PYTHON is the explicit form.
-                let python = root.join("deps/python");
-                extra_env.insert(
-                    "ZEPI_PYTHON".into(),
-                    python.join("python.exe").to_string_lossy().into_owned(),
-                );
-                extra_env.insert("PATH".into(), path_with(&python));
+                set_office_python_env(&root, &mut extra_env);
                 extra_env.insert(
                     "PI_CODING_AGENT_DIR".into(),
                     std::env::var_os("ZEPI_PI_CONFIG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join(".local/zepi")).to_string_lossy().into_owned(),
@@ -443,13 +449,32 @@ fn default_settings_for_agent() -> settings::CustomAgentServerSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use collections::HashMap;
     use gpui::TestAppContext;
     use project::agent_registry_store::{
         AgentRegistryStore, RegistryAgent, RegistryAgentMetadata, RegistryNpxAgent,
     };
     use settings::Settings as _;
     use ui::SharedString;
+
+    #[test]
+    fn test_zepi_office_python_requires_a_file() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("deps/python");
+        let python = directory.join("python.exe");
+        let mut env = HashMap::from_iter([
+            ("ZEPI_PYTHON".to_string(), "stale.exe".to_string()),
+            ("PATH".to_string(), "host".to_string()),
+        ]);
+        std::fs::create_dir_all(&directory).unwrap();
+        set_office_python_env(root.path(), &mut env);
+        assert!(env["ZEPI_PYTHON"].is_empty());
+        assert_eq!(env["PATH"], "host");
+
+        std::fs::write(&python, b"").unwrap();
+        set_office_python_env(root.path(), &mut env);
+        assert_eq!(env["ZEPI_PYTHON"].as_str(), python.to_str().unwrap());
+        assert_eq!(std::env::split_paths(&env["PATH"]).next(), Some(directory));
+    }
 
     fn init_test(cx: &mut TestAppContext) {
         cx.update(|cx| {

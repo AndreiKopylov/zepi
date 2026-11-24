@@ -5,17 +5,20 @@ description: Create, read, and edit Word (.docx), Excel (.xlsx), and PowerPoint 
 
 # Office documents
 
-Zepi ships a pinned Python runtime with the document libraries installed. Use it instead of any
-system Python: the system one may be missing, may be the Windows Store stub, or may lack packages.
+Use Zepi's bundled Office Python to run document scripts. Native viewers and `zepi office render`
+do not need Python.
 
 ## Runtime
 
 ```powershell
-python -c "import pptx, docx, openpyxl, PIL, pypdf; print(pptx.__version__)"   # resolves to the bundled one
-& $env:ZEPI_PYTHON --version                                                  # explicit path
+if (-not $env:ZEPI_PYTHON -or -not (Test-Path -LiteralPath $env:ZEPI_PYTHON -PathType Leaf)) {
+    throw "Zepi's bundled Office Python is unavailable."
+}
+& $env:ZEPI_PYTHON -c "import pptx, docx, openpyxl, PIL, pypdf; print(pptx.__version__)"
 ```
 
-`python` inside agent commands is the bundled runtime: `%ZEPI_ROOT%\deps\python\python.exe`.
+Run Office scripts with `& $env:ZEPI_PYTHON script.py`. If the runtime is unavailable, tell the user;
+do not fall back to `python`, `python3`, or `py`.
 Available: `python-pptx`, `python-docx`, `openpyxl`, `Pillow`, `pypdf`, `lxml`.
 
 Never run `pip install`. The runtime is offline and its package set is fixed. If a task needs a

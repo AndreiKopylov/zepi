@@ -50,13 +50,15 @@ guessing: it names the format, the page or the missing file.
 
 ## Self-check before blaming the environment
 
+Test the renderer independently of Python:
+
 ```powershell
-& "$env:ZEPI_PYTHON" -c "import pptx, docx, openpyxl; print(pptx.__version__)"
 & "$env:ZEPI_ROOT\zepi.exe" office render "sample.pptx" --pages 1 --out "$env:TEMP\zepi-selfcheck"
 ```
 
-Two lines, and you know whether documents work: the first proves the runtime, the second the renderer. If
-`ZEPI_PYTHON` is empty, use `"$env:ZEPI_ROOT\deps\python\python.exe"`.
+If a script also needs Python, check the bundled runtime as described in `zepi-office-docs`. If
+`ZEPI_PYTHON` is empty or the executable is missing, report that Office Python is unavailable. Do not
+use system Python or guess a path. The native render check can still run.
 
 ## Look at the result
 

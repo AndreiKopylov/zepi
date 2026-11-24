@@ -5,8 +5,8 @@ description: Read and edit Word documents with python-docx on the bundled runtim
 
 # Word documents
 
-The runtime is `$env:ZEPI_PYTHON` (`%ZEPI_ROOT%\deps\python\python.exe`), with `python-docx` and
-`Pillow` installed. Never run `pip install`; the package set is fixed and offline.
+Run scripts with `& $env:ZEPI_PYTHON script.py`; the bundled runtime includes `python-docx` and `Pillow`.
+If it is unavailable, tell the user rather than falling back to system Python. No `pip install`.
 
 ## Read
 

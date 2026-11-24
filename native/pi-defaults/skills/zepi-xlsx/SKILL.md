@@ -5,8 +5,8 @@ description: Read, analyze and edit Excel workbooks with openpyxl on the bundled
 
 # Excel workbooks
 
-Runtime: `$env:ZEPI_PYTHON` (`%ZEPI_ROOT%\deps\python\python.exe`) with `openpyxl`. No `pip install`, no
-network; the installed set is fixed.
+Run scripts with `& $env:ZEPI_PYTHON script.py`; the bundled runtime includes `openpyxl`.
+If it is unavailable, tell the user rather than falling back to system Python. No `pip install`.
 
 ## The one rule that matters
 

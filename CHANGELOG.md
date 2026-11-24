@@ -4,6 +4,17 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Updated the Windows build guide for the compiled agent, on-demand browse setup, and dev-bundle checks.
+
+### Fixed
+
+- Office skills now report when the bundled Python executable is missing instead of trying a broken
+  path or falling back to system Python. Native Office viewers and PNG rendering still work without it.
+
 ## [0.0.8] - 2026-11-23
 
 ### Added
