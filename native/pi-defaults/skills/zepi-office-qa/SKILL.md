@@ -1,6 +1,6 @@
 ---
 name: zepi-office-qa
-description: Visually check a generated or edited deck, document, or spreadsheet before reporting it done — render to PDF or images, open the result, and run a concrete defect checklist. Use after any Office file is created or modified, and when the user asks why a slide looks wrong.
+description: Visually check a generated or edited deck, document, or spreadsheet before reporting it done — render to PNG with Zepi, open the images, and check for visible defects. Use after any Office file is created or modified, and when the user asks why a slide looks wrong.
 ---
 
 # Visual check of Office files
@@ -8,63 +8,37 @@ description: Visually check a generated or edited deck, document, or spreadsheet
 Code that runs is not a document that looks right. Slides are the worst case: text overflow, overlaps,
 and broken alignment are invisible in `python-pptx` and obvious on screen.
 
-## Render
+## Render with Zepi
 
-`& "$env:ZEPI_ROOT\zepi.exe" office render` is the only renderer you need (there is no bare `zepi` command on PATH): it runs Zepi's own engine, the same one the
-built-in viewer uses, so the images match what the user sees on screen. No LibreOffice, no Office, no
-network.
-
-**Do not render with LibreOffice or Office.** A `soffice` install on the machine is not a reason to use
-it: it renders a spreadsheet differently from the viewer, takes seconds per file and needs
-reflection tricks to produce a PNG. Check for it and use it only when `office render` itself failed and
-say so in the answer.
+The editor sets `ZEPI_EXE` to the running Zepi executable. Do not guess a path from `ZEPI_ROOT` or
+fall back to LibreOffice or Microsoft Office. The native renderer does not need Python.
 
 ```powershell
-& "$env:ZEPI_ROOT\zepi.exe" office render "deck.pptx" --dpi 150
+if (-not $env:ZEPI_EXE -or -not (Test-Path -LiteralPath $env:ZEPI_EXE -PathType Leaf)) {
+    throw 'The Zepi Office renderer is unavailable in this session.'
+}
+$out = Join-Path $env:TEMP ('zepi-render-' + [guid]::NewGuid())
+$render = & $env:ZEPI_EXE office render 'deck.pptx' --out $out --dpi 150 | ConvertFrom-Json
+if (-not $render.ok) { throw "Office render failed: $($render.error)" }
+if (-not $render.data.files) { throw 'Office render returned no images.' }
+$render.data.files | ForEach-Object { Join-Path $render.data.out $_ }
 ```
 
-- pptx → `slide-N.png`, docx → `page-N.png`, xlsx → `sheet-N.png`; a sheet too big for one readable
-  image comes as `sheet-N-top.png`, `sheet-N-middle.png`, `sheet-N-bottom.png` (sampled windows across
-  the whole sheet, the row numbers on each tell which part it is).
-- `--pages 1-3,5` selects a subset: slides, pages, or sheets for xlsx. `--dpi 300` when details matter;
-  for xlsx a lower `--dpi` fits more rows into one image.
-- **xlsx: `--cells` renders any box you name**, instead of the automatic windows. Use it when a sheet
-  is too big to read whole or when the user asks about a place in it, and to look at what you just
-  changed:
-  ```powershell
-  office render "s.xlsx" --cells B10:E40        # that box
-  office render "s.xlsx" --cells A100:          # from row 100 to the end of the used range
-  office render "s.xlsx" --cells :E40           # from the start to E40
-  office render "s.xlsx" --cells A:E            # columns A..E, every used row
-  office render "s.xlsx" --pages 2 --cells A1:D30   # sheet 2 only
-  ```
-  A single reference works too (`--cells B7`). An unknown column or sheet is an error, not a guess:
-  read `sheet-N.png` once or the values with Python before naming a box you have not seen.
-- `--out DIR` picks the folder for the images when a specific place is wanted; the JSON prints the
-  folder it used.
-- Formulas written by a script carry no cached value, so a cell may show empty until opened in Excel;
-  check values programmatically as well when the file was written by openpyxl.
-
-A deck renders in well under a second per slide. If the command fails, read the JSON error instead of
-guessing: it names the format, the page or the missing file.
-
-## Self-check before blaming the environment
-
-Test the renderer independently of Python:
-
-```powershell
-& "$env:ZEPI_ROOT\zepi.exe" office render "sample.pptx" --pages 1 --out "$env:TEMP\zepi-selfcheck"
-```
-
-If a script also needs Python, check the bundled runtime as described in `zepi-office-docs`. If
-`ZEPI_PYTHON` is empty or the executable is missing, report that Office Python is unavailable. Do not
-use system Python or guess a path. The native render check can still run.
+- `--pages 1-3,5` selects slides, pages, or sheets (counting from 1). A selection outside the
+  document's range fails instead of returning incomplete results.
+- For spreadsheets, use `--cells B10:E40` to inspect the changed range on each selected sheet.
+  Open bounds (`A100:`, `:E40`), column ranges (`A:E`), and single cells (`B7`) also work.
+- PPTX produces `slide-N.png`, Word `page-N.png`, and Excel `sheet-N.png`. A large sheet may
+  produce sampled `-top`, `-middle`, and `-bottom` windows rather than the full sheet.
+- Use a fresh output directory for each run so stale PNGs cannot be mistaken for new results.
 
 ## Look at the result
 
-1. Open the produced PDF in Zepi's viewer (`office_viewer` page navigation works with up/down).
-2. Look at every page, in order, at full size. Zoom is for the details, full size is for the layout.
-3. For a deck, compare slides against each other: titles at the same height, margins equal, one accent.
+1. Open the PNGs listed by this run with the image read tool, in order. Zoom in or render again
+   with a higher `--dpi` if details are unreadable.
+2. Check the changed pages, slides, or cells against the checklist. For a deck, compare alignment
+   and typography across slides. Sampled windows do not verify the entire sheet.
+3. If the command fails or the images cannot be opened, state what blocked visual verification.
 
 ## Defect checklist
 

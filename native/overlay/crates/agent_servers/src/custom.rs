@@ -322,6 +322,10 @@ impl AgentServer for CustomAgentServer {
                     })
                 });
                 extra_env.insert("ZEPI_ROOT".into(), root.to_string_lossy().into_owned());
+                let zepi_exe = std::env::current_exe()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                extra_env.insert("ZEPI_EXE".into(), zepi_exe);
                 set_office_python_env(&root, &mut extra_env);
                 extra_env.insert(
                     "PI_CODING_AGENT_DIR".into(),

@@ -6,8 +6,8 @@ The whole "zepi" folder is replaced whenever the bundled content changes, so edi
 inside it are lost on the next install or update.
 
 Bundled:
-  zepi-office-docs  runtime overview: which libraries ship, how to read and save, what to verify
-  zepi-docx         Word: styles, tables, headers, find-and-replace across runs, templates, traps
+  zepi-office-docs  bundled Python, safe output, skill selection, and PDF text extraction
+  zepi-docx         Word: styles, tables, headers, targeted replacements, templates, traps
   zepi-xlsx         Excel: formulas vs cached values, styles, widths, charts, the data_only trap
   zepi-deck-design  design rules: grid, type scale, colour, slide compositions, charts, tables
   zepi-deck-build   building decks with python-pptx: template layouts, tables, native charts, Gantt

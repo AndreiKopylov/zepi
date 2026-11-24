@@ -34,6 +34,27 @@ pub(crate) fn disk_stamp(path: &std::path::Path) -> Option<(u64, u64)> {
     Some((modified, metadata.len()))
 }
 
+/// Validates a 1-based `--pages` selection and returns indices in the requested order.
+pub fn office_page_indices(spec: Option<&str>, count: usize) -> anyhow::Result<Vec<usize>> {
+    use anyhow::{Context as _, ensure};
+
+    ensure!(count > 0, "document has no pages or sheets to render");
+    let Some(spec) = spec else {
+        return Ok((0..count).collect());
+    };
+    let mut pages = Vec::new();
+    for part in spec.split(',').map(str::trim).filter(|part| !part.is_empty()) {
+        let invalid = || format!("invalid --pages selection {part:?}; valid numbers are 1..={count}");
+        let (first, last) = part.split_once('-').unwrap_or((part, part));
+        let first: usize = first.trim().parse().with_context(invalid)?;
+        let last: usize = last.trim().parse().with_context(invalid)?;
+        ensure!(first > 0 && first <= last && last <= count, "{}", invalid());
+        pages.extend(first - 1..last);
+    }
+    ensure!(!pages.is_empty(), "--pages got no page numbers");
+    Ok(pages)
+}
+
 pub fn init(cx: &mut App) {
     sheet_viewer::init(cx);
     slides_viewer::init(cx);
@@ -112,4 +133,23 @@ fn register_actions(workspace: &mut Workspace) {
                 .update(cx, |editor, cx| editor.send(cx));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::office_page_indices;
+
+    #[test]
+    fn office_pages_validate_all_indices_before_rendering() {
+        assert_eq!(office_page_indices(None, 3).unwrap(), [0, 1, 2]);
+        assert_eq!(office_page_indices(Some("3,1-2"), 3).unwrap(), [2, 0, 1]);
+        for invalid in ["0", "1,4", "1-4", "3-2", "nope"] {
+            let error = office_page_indices(Some(invalid), 3).unwrap_err();
+            assert!(error.to_string().contains("1..=3"));
+        }
+        let huge = format!("1-{}", usize::MAX);
+        assert!(office_page_indices(Some(&huge), 3).is_err());
+        assert!(office_page_indices(Some(""), 3).is_err());
+        assert!(office_page_indices(None, 0).is_err());
+    }
 }

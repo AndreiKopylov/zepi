@@ -8,11 +8,11 @@ description: Read, analyze and edit Excel workbooks with openpyxl on the bundled
 Run scripts with `& $env:ZEPI_PYTHON script.py`; the bundled runtime includes `openpyxl`.
 If it is unavailable, tell the user rather than falling back to system Python. No `pip install`.
 
-## The one rule that matters
+## Formulas and saved values
 
-`load_workbook(path, data_only=True)` returns **cached values** (what Excel computed last save) and, if you
-then `save`, every formula in the workbook is replaced by its last value. Read with
-`data_only=True` for analysis, but **reload without it for any file you intend to save**:
+`data_only=True` reads the last **saved results**, not the formulas, and never recalculates. Use it
+for reading only. Saving that workbook can replace formulas with cached values or erase them when
+the cache is missing. Open without `data_only` for edits:
 
 ```python
 from openpyxl import load_workbook
@@ -21,8 +21,9 @@ values = load_workbook("model.xlsx", data_only=True)        # analysis only, nev
 book = load_workbook("model.xlsx")                          # editing
 ```
 
-If a cell shows `None` with `data_only=True`, the file was never opened by Excel: the cache is empty.
-Say so instead of reporting zero.
+For a formula cell, `None` means no saved result is available; it does not mean zero. A saved result
+can also be stale. Zepi can calculate supported formulas with no saved result when opening or
+rendering automatic-calculation workbooks. This does not update the file's cache during rendering.
 
 ## Read
 
@@ -60,7 +61,6 @@ ws["A1"].font = Font(bold=True, size=14)
 ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
 ws["A1"].fill = PatternFill("solid", fgColor="FFEEEE")
 
-chart = wb.create_chartsheet() if False else None   # charts on a normal sheet instead:
 from openpyxl.chart import BarChart, Reference
 chart = BarChart()
 chart.add_data(Reference(ws, min_col=2, min_row=1, max_row=10), titles_from_data=True)
@@ -71,11 +71,11 @@ wb.save("out.xlsx")
 
 Traps:
 
-- Formulas written by openpyxl have **no cached value**. Excel and LibreOffice recalculate on open, but a
-  program reading `data_only=True` sees `None`. If the user needs values without opening the file, compute
-  them in Python and write numbers (or state that a recalculation is needed).
-- Charts do not survive a plain `load_workbook` + `save` round trip in all cases; if the workbook already
-  has charts, keep the original and edit in place, then check the result visually.
+- openpyxl does not write calculated results for formulas. Do not replace formulas with numbers just
+  to populate a missing cache.
+- An openpyxl round trip can change or drop charts. If the source has charts, save to a new path and
+  verify that the expected charts and their source ranges survived. Zepi's spreadsheet PNG shows the
+  cell grid, not the embedded charts. Do not overwrite the original to work around this limitation.
 - `ws.merge_cells` keeps only the top-left value; the rest is dropped. Write before merging.
 - Copying a cell with `ws["B2"] = ws["B1"].value` loses the style; copy `font`, `fill`,
   `number_format`, `alignment` and `border` explicitly, or use `copy(cell._style)` on the new cell.
@@ -85,19 +85,11 @@ Traps:
 
 ## Verify before reporting done
 
-1. Reopen the saved file (`load_workbook`, no `data_only`) and assert the cells, formulas and sheet names
-   you touched.
-2. If the numbers matter, read them again with `data_only=True` **in a fresh workbook opened by Excel or
-   LibreOffice**, or recompute the changed formulas in Python and compare.
-3. Render the sheets and look at them: `& "$env:ZEPI_ROOT\zepi.exe" office render <file> --dpi 150`
-   produces `sheet-N.png` per sheet, or `sheet-N-top/-middle/-bottom.png` sampled windows for a sheet
-   too big for one readable image; `--out DIR` picks the folder when a specific one is wanted and the
-   JSON prints it.
-   That is the renderer to use for xlsx as well: do not look for or
-   call LibreOffice/`soffice` (it renders differently from the viewer and is not needed).
-   Point it at the region you changed with `--cells`, for example
-   `office render <file> --cells C10:F40`; either side may be left open (`A100:`, `:E40`), and
-   `--pages <n>` picks one sheet. Formulas written by openpyxl
-   carry no cached value, so cells you just wrote may render empty even though Excel will compute
-   them on open.
+1. **Formula:** Reopen the output without `data_only`. Check the formula text and any changed input
+   values in their expected cells on the intended sheet.
+2. **Number:** Compute the expected result independently from the inputs and compare it with the
+   result available in the workbook or viewer. If no result is available, report the expected value
+   and that the workbook result could not be verified. A cache read is not a recalculation.
+3. **Layout:** Follow `zepi-office-qa` with `--pages` for the changed sheet and `--cells` for the
+   changed range. Inspect the PNG for clipped text and bad formatting, not as proof of the math.
 4. Report what changed, in which sheet and cells, and anything you could not verify.

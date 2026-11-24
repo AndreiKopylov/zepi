@@ -38,12 +38,13 @@ const MAX_WINDOWS: usize = 3;
 /// `sheet-N-middle.png`, `sheet-N-bottom.png` when the sheet is too big for one readable image.
 /// `--pages` maps to sheets; `cells` (`A1:E40`, each side open: `A100:`, `:E40`) draws exactly
 /// that box of every selected sheet instead.
-pub fn sheet_pngs(bytes: &[u8], zoom: f64, sheets: Option<&[usize]>, cells: Option<&Cells>) -> Result<Vec<(String, Vec<u8>)>> {
+pub fn sheet_pngs(bytes: &[u8], zoom: f64, pages: Option<&str>, cells: Option<&Cells>) -> Result<Vec<(String, Vec<u8>)>> {
     let (mut wb, _) = gridcraft_xlsx::read_xlsx(bytes).map_err(|error| anyhow!("xlsx import: {error:?}"))?;
+    let sheets = crate::office_page_indices(pages, wb.sheets.len())?;
     fill_missing_formulas(&mut wb);
     let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
     let mut out = Vec::new();
-    for index in selected(wb.sheets.len(), sheets) {
+    for index in sheets {
         let sheet = &wb.sheets[index];
         let (row0, col0, row1, col1) = sheet_bounds(sheet);
         let (draw_col0, draw_col1) = match cells {
@@ -150,13 +151,6 @@ fn column_of(letters: &str) -> Option<u32> {
 fn ordered(a: u32, b: u32, limit: u32) -> (u32, u32) {
     let (start, end) = (a.min(b), a.max(b));
     (start.min(limit - 1), end.min(limit - 1))
-}
-
-fn selected(count: usize, sheets: Option<&[usize]>) -> Vec<usize> {
-    match sheets {
-        Some(list) => list.iter().copied().filter(|index| *index < count).collect(),
-        None => (0..count).collect(),
-    }
 }
 
 /// The columns one image shows (the width wins the budget over the rows) and their width.
@@ -632,9 +626,11 @@ mod tests {
         let mut wb = Workbook::new();
         wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Sheet2")));
         let bytes = gridcraft_xlsx::write_xlsx(&wb).expect("write test workbook");
-        let pngs = sheet_pngs(&bytes, 1.0, Some(&[1]), None).expect("render sheet 2");
+        let pngs = sheet_pngs(&bytes, 1.0, Some("2"), None).expect("render sheet 2");
         assert_eq!(pngs.len(), 1);
         assert_eq!(pngs[0].0, "sheet-2.png");
+        let error = sheet_pngs(&bytes, 1.0, Some("2,3"), None).unwrap_err();
+        assert!(error.to_string().contains("1..=2"));
     }
 
     #[test]

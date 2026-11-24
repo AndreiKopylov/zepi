@@ -6,6 +6,7 @@
 use anyhow::{bail, Context as _, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use zepi_ui::office_page_indices;
 
 const MAX_PIXELS: f64 = 6_000_000.0;
 /// Renders older than this are removed on the next run, so the cache cannot grow forever.
@@ -62,7 +63,7 @@ fn render(args: &[String]) -> Result<Value> {
     let mut file: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut dpi = 150.0_f64;
-    let mut pages: Option<Vec<usize>> = None;
+    let mut pages = None;
     let mut cells: Option<zepi_ui::sheet_raster::Cells> = None;
     let mut index = 0;
     while index < args.len() {
@@ -73,7 +74,7 @@ fn render(args: &[String]) -> Result<Value> {
                     .parse()
                     .context("--dpi expects a number, for example 150")?
             }
-            "--pages" => pages = Some(parse_pages(&next(args, &mut index)?)?),
+            "--pages" => pages = Some(next(args, &mut index)?),
             "--cells" => {
                 let spec = next(args, &mut index)?;
                 cells = Some(zepi_ui::sheet_raster::Cells::parse(&spec).with_context(|| {
@@ -106,6 +107,9 @@ fn render(args: &[String]) -> Result<Value> {
         "xlsx" | "xlsm" => render_xlsx(&bytes, &out, dpi, pages.as_deref(), cells.as_ref())?,
         other => bail!("unsupported format: {other}"),
     };
+    if produced.is_empty() {
+        bail!("no images were rendered");
+    }
     Ok(json!({
         "file": file.display().to_string(),
         "out": out.display().to_string(),
@@ -119,7 +123,7 @@ fn render_xlsx(
     bytes: &[u8],
     out: &Path,
     dpi: f64,
-    pages: Option<&[usize]>,
+    pages: Option<&str>,
     cells: Option<&zepi_ui::sheet_raster::Cells>,
 ) -> Result<Vec<String>> {
     let sheets = zepi_ui::sheet_raster::sheet_pngs(bytes, dpi / 96.0, pages, cells)?;
@@ -138,57 +142,17 @@ fn next(args: &[String], index: &mut usize) -> Result<String> {
         .with_context(|| format!("{} expects a value", args[*index - 1]))
 }
 
-/// Parses "1-3,5" into zero-based page indexes, keeping the written order.
-fn parse_pages(spec: &str) -> Result<Vec<usize>> {
-    let mut pages = Vec::new();
-    for part in spec
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        match part.split_once('-') {
-            Some((from, to)) => {
-                let from: usize = from.trim().parse().context("--pages expects numbers")?;
-                let to: usize = to.trim().parse().context("--pages expects numbers")?;
-                if from == 0 || to < from {
-                    bail!("--pages range {part} is empty; pages start at 1");
-                }
-                pages.extend((from..=to).map(|page| page - 1));
-            }
-            None => {
-                let page: usize = part.parse().context("--pages expects numbers")?;
-                if page == 0 {
-                    bail!("--pages starts at 1");
-                }
-                pages.push(page - 1);
-            }
-        }
-    }
-    if pages.is_empty() {
-        bail!("--pages got no page numbers");
-    }
-    Ok(pages)
-}
-
-fn selected(count: usize, pages: Option<&[usize]>) -> Vec<usize> {
-    match pages {
-        Some(pages) => pages.iter().copied().filter(|page| *page < count).collect(),
-        None => (0..count).collect(),
-    }
-}
-
 fn render_pptx(
     bytes: &[u8],
     out: &Path,
     scale: f64,
     dpi: f64,
-    pages: Option<&[usize]>,
+    pages: Option<&str>,
 ) -> Result<Vec<String>> {
     let (presentation, _warnings) =
         deckcraft_pptx::import_checked(bytes).context("reading the presentation")?;
-    let count = presentation.slides.len();
     let mut files = Vec::new();
-    for page in selected(count, pages) {
+    for page in office_page_indices(pages, presentation.slides.len())? {
         let scale = fit_scale(
             scale,
             presentation.slide_size.width,
@@ -215,7 +179,7 @@ fn render_docx(
     bytes: &[u8],
     out: &Path,
     scale: f64,
-    pages: Option<&[usize]>,
+    pages: Option<&str>,
 ) -> Result<Vec<String>> {
     let document = if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         wordcraft_docbin::read(bytes).map_err(|error| anyhow::anyhow!("doc import: {error:?}"))?
@@ -227,9 +191,8 @@ fn render_docx(
     let mut cache = wordcraft_layout::LayoutCache::new();
     let opts = wordcraft_layout::LayoutOptions::default();
     let layout = wordcraft_layout::layout(&document, &mut cache, &opts);
-    let count = layout.pages.len();
     let mut files = Vec::new();
-    for page in selected(count, pages) {
+    for page in office_page_indices(pages, layout.pages.len())? {
         let raster = &layout.pages[page];
         let scale = fit_scale(scale, raster.w as f64, raster.h as f64);
         let rendered = wordcraft_render::render_page(
