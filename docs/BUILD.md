@@ -96,6 +96,10 @@ npm run test:runtime
 .\scripts\win-check.cmd # link-free Rust check; optionally pass a crate name
 ```
 
+On Windows, use `npm run test:acp:node` only to diagnose ACP cases skipped on Bun.
+It runs the affected test files one at a time at BelowNormal priority and is not part of CI
+or deployment. Do not run it alongside a build.
+
 For a built dev bundle, use `npm run smoke -- --root <dev-bundle>` (`--full` adds preview/shell
 checks). An installed copy or a portable ZIP is not a smoke-test target: it lacks the dev modules
 and fixtures. Run `prepare` before checking or testing modified Rust overlay code.
