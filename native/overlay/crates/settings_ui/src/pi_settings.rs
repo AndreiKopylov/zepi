@@ -47,9 +47,14 @@ pub(crate) struct PiSettingsView {
     ext_busy: bool,
     mcp_text: Entity<Editor>,
     mcp_add_open: bool,
-    auth_name: Option<String>,
+    auth: Option<(SignInKind, String)>,
     auth_input: Option<ChildStdin>,
     auth_task: Option<gpui::Task<()>>,
+    auth_cancelling: bool,
+    auth_prompt: Option<Value>,
+    auth_show_manual: bool,
+    auth_text: Entity<Editor>,
+    auth_browser: Option<SignInBrowser>,
     busy: bool,
     notice: String,
     failed: bool,
@@ -83,7 +88,8 @@ impl PiSettingsView {
             import_text: cx.new(|cx| { let mut editor = Editor::auto_height(6, 18, window, cx); editor.set_placeholder_text("Paste a provider JSON object, for example { \"my-gateway\": { \"baseUrl\": ..., \"api\": \"openai-completions\", \"models\": [...] } }", window, cx); editor }),
             extensions: None, ext_busy: false, mcp_add_open: false,
             mcp_text: cx.new(|cx| { let mut editor = Editor::auto_height(4, 12, window, cx); editor.set_placeholder_text("{ \"docs\": { \"url\": \"https://example.com/mcp\" } }", window, cx); editor }),
-            auth_name: None, auth_input: None, auth_task: None,
+            auth: None, auth_input: None, auth_task: None, auth_cancelling: false, auth_prompt: None,
+            auth_show_manual: false, auth_text: input("Sign-in response", true, window, cx), auth_browser: None,
             busy: false, notice: String::new(), failed: false,
         };
         view.request(json!({"operation":"status"}), window, cx);
@@ -173,21 +179,19 @@ impl PiSettingsView {
                             }).unwrap_or_default();
                             view.default_tools.update(cx, |editor, cx| editor.set_text(text, window, cx));
                         }
-                        if view.data.is_none() || matches!(operation.as_str(), "status" | "import") {
+                        if view.data.is_none() || matches!(operation.as_str(), "status" | "import" | "key" | "remove-key") {
                             view.provider = data["defaultProvider"].as_str().unwrap_or_default().into();
                             view.model = data["defaultModel"].as_str().unwrap_or_default().into();
                             view.thinking = data["defaultThinkingLevel"].as_str().unwrap_or("off").into();
                         }
                         view.data = Some(data);
-                        if view.provider.is_empty() {
-                            let saved_provider = view.data.as_ref().and_then(|d| d["defaultProvider"].as_str()).unwrap_or_default().to_owned();
-                            let saved_model = view.data.as_ref().and_then(|d| d["defaultModel"].as_str()).unwrap_or_default().to_owned();
-                            let has_provider = view.providers().iter().any(|p| p["id"].as_str() == Some(saved_provider.as_str()));
-                            view.provider = if has_provider { saved_provider } else {
-                                view.providers().first().map(|p| p["id"].as_str().unwrap_or_default().into()).unwrap_or_default()
-                            };
-                            if view.models().iter().any(|m| m["id"].as_str() == Some(saved_model.as_str())) { view.model = saved_model; }
-                            else { view.select_first_model(); }
+                        if view.models().is_empty() {
+                            view.provider = view.providers().iter()
+                                .find(|p| p["models"].as_array().is_some_and(|models| !models.is_empty()))
+                                .and_then(|p| p["id"].as_str()).unwrap_or_default().into();
+                            view.select_first_model();
+                        } else if !view.models().iter().any(|m| m["id"].as_str() == Some(view.model.as_str())) {
+                            view.select_first_model();
                         }
                         view.notice = match operation.as_str() {
                             "status" => model_catalog_notice,
@@ -415,61 +419,111 @@ impl PiSettingsView {
             "key":self.custom_key.read(cx).text(cx), "expectedRevision":self.custom_revision})
     }
 
-    fn sign_in_mcp(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.ext_busy { return; }
-        self.ext_busy = true;
+    fn sign_in(&mut self, kind: SignInKind, id: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.auth.is_some() { return; }
+        match kind {
+            SignInKind::Mcp if self.ext_busy => return,
+            SignInKind::Provider if self.busy => return,
+            SignInKind::Mcp => self.ext_busy = true,
+            SignInKind::Provider => {
+                self.busy = true;
+                if self.key_provider.take().is_some() {
+                    self.key.update(cx, |editor, cx| editor.set_text("", window, cx));
+                }
+            }
+        }
         self.failed = false;
-        self.notice = format!("Sign in to {name} in your browser.");
-        self.auth_name = Some(name.clone());
+        self.notice = format!("Starting sign-in to {name}…");
+        self.auth = Some((kind, name));
         self.mcp_confirm_remove = None;
         let (sender, receiver) = mpsc::channel();
-        cx.background_spawn(async move { run_mcp_sign_in(name, sender); }).detach();
+        cx.background_spawn(async move { run_sign_in(kind, id, sender); }).detach();
         self.auth_task = Some(cx.spawn_in(window, async move |this, cx| {
             loop {
-                match receiver.try_recv() {
-                    Ok(event) => {
-                        let finished = matches!(&event, AuthEvent::Finished(_));
-                        if this.update_in(cx, |this, window, cx| {
-                            match event {
-                                AuthEvent::Started(input) => {
-                                    if this.auth_name.is_some() { this.auth_input = Some(input); }
-                                }
-                                AuthEvent::Url(url) => {
-                                    if this.auth_name.is_some() { cx.open_url(&url); }
-                                }
-                                AuthEvent::Finished(result) => {
-                                    this.auth_input = None;
-                                    this.auth_name = None;
-                                    this.ext_busy = false;
-                                    match result {
-                                        Ok(()) => {
-                                            this.ext_request(json!({"operation":"status"}), window, cx);
-                                            this.notice = "Signed in. New tasks use these credentials.".into();
-                                        }
-                                        Err(error) => { this.failed = error != "Sign-in cancelled."; this.notice = error; }
-                                    }
-                                }
-                            }
-                            cx.notify();
-                        }).is_err() || finished { break; }
+                let event = match receiver.try_recv() {
+                    Ok(event) => event,
+                    Err(mpsc::TryRecvError::Disconnected) => AuthEvent::Finished(Err("Sign-in ended unexpectedly.".into())),
+                    Err(mpsc::TryRecvError::Empty) => {
+                        cx.background_executor().timer(Duration::from_millis(50)).await;
+                        continue;
                     }
-                    Err(mpsc::TryRecvError::Disconnected) => break,
-                    Err(mpsc::TryRecvError::Empty) => cx.background_executor().timer(Duration::from_millis(50)).await,
-                }
+                };
+                let finished = matches!(&event, AuthEvent::Finished(_));
+                if this.update_in(cx, |this, window, cx| {
+                    match event {
+                        AuthEvent::Started(input) => {
+                            if !this.auth_cancelling { this.auth_input = Some(input); }
+                        }
+                        AuthEvent::Browser(browser, auto_open) => {
+                            if !this.auth_cancelling {
+                                if auto_open { cx.open_url(&browser.url); }
+                                if let Some((_, name)) = &this.auth {
+                                    this.notice = format!("Complete sign-in to {name} in your browser.");
+                                }
+                                if matches!(kind, SignInKind::Provider) { this.auth_browser = Some(browser); }
+                            }
+                        }
+                        AuthEvent::Prompt(prompt) => {
+                            if !this.auth_cancelling {
+                                this.auth_text.update(cx, |editor, cx| {
+                                    editor.set_text("", window, cx);
+                                    editor.set_masked(matches!(prompt["type"].as_str(), Some("secret" | "manual_code")), cx);
+                                    editor.set_placeholder_text(prompt["placeholder"].as_str().unwrap_or_default(), window, cx);
+                                });
+                                this.auth_show_manual = false;
+                                this.auth_prompt = Some(prompt);
+                            }
+                        }
+                        AuthEvent::ClearPrompt(id) => {
+                            if this.auth_prompt.as_ref().and_then(|prompt| prompt["id"].as_u64()) == Some(id) {
+                                this.auth_prompt = None;
+                                this.auth_text.update(cx, |editor, cx| editor.set_text("", window, cx));
+                            }
+                        }
+                        AuthEvent::Finished(result) => {
+                            this.clear_sign_in(window, cx);
+                            match kind {
+                                SignInKind::Mcp => this.ext_busy = false,
+                                SignInKind::Provider => this.busy = false,
+                            }
+                            match result {
+                                Ok(()) => {
+                                    let status = json!({"operation":"status"});
+                                    match kind {
+                                        SignInKind::Mcp => this.ext_request(status, window, cx),
+                                        SignInKind::Provider => this.request(status, window, cx),
+                                    }
+                                    this.notice = "Signed in. New tasks use these credentials.".into();
+                                }
+                                Err(error) => { this.failed = error != "Sign-in cancelled."; this.notice = error; }
+                            }
+                        }
+                    }
+                    cx.notify();
+                }).is_err() || finished { break; }
             }
         }));
         cx.notify();
     }
 
+    fn clear_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.auth = None;
+        self.auth_cancelling = false;
+        self.auth_input = None;
+        self.auth_prompt = None;
+        self.auth_browser = None;
+        self.auth_text.update(cx, |editor, cx| editor.set_text("", window, cx));
+    }
+
     fn selector(&self, id: &'static str, label: String, choices: Vec<(String, String)>, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let weak = cx.entity().downgrade();
-        let busy = self.busy;
+        let disabled = self.busy || choices.is_empty();
         let menu = ContextMenu::build(window, cx, move |mut menu, _, _| {
             for (value, name) in choices {
                 let weak = weak.clone();
                 menu = menu.entry(name, None, move |window, cx| {
                     let _ = weak.update(cx, |view, cx| {
-                        if busy || view.busy { return; }
+                        if disabled || view.busy { return; }
                         match id {
                             "pi-default-model" => {
                                 if let Some((provider, model)) = value.split_once('/') {
@@ -490,7 +544,7 @@ impl PiSettingsView {
             }
             menu
         });
-        DropdownMenu::new(id, label, menu).style(DropdownStyle::Outlined).full_width(true).into_any_element()
+        DropdownMenu::new(id, label, menu).style(DropdownStyle::Outlined).full_width(true).disabled(disabled).into_any_element()
     }
 }
 
@@ -631,7 +685,9 @@ impl PiSettingsView {
                 choices.push((format!("{id}/{model_id}"), label));
             }
         }
-        let levels = self.levels().into_iter().map(|level| (level.clone(), level)).collect();
+        let levels = if self.model.is_empty() { Vec::new() } else {
+            self.levels().into_iter().map(|level| (level.clone(), level)).collect()
+        };
         v_flex().gap_4()
             .child(field("Default Model", self.selector("pi-default-model", default_label, choices, window, cx)))
             .child(field("Thinking Level", self.selector("pi-thinking", self.thinking.clone(), levels, window, cx)))
@@ -648,10 +704,138 @@ impl PiSettingsView {
             .into_any_element()
     }
 
+    fn open_key_form(&mut self, provider: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy { return; }
+        self.key.update(cx, |editor, cx| editor.set_text("", window, cx));
+        self.key_provider = Some(provider);
+        cx.notify();
+    }
+
+    fn connect_provider_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let choices = |key: &str| -> Vec<(String, String)> {
+            self.data.as_ref().and_then(|d| d[key].as_array()).into_iter().flatten()
+                .filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["name"].as_str()?.to_owned())))
+                .collect()
+        };
+        let menus = [("Add API Key", choices("keyProviders"), false), ("Sign In with Account", choices("oauthProviders"), true)];
+        let disabled = self.busy || self.auth.is_some() || menus.iter().all(|(_, choices, _)| choices.is_empty());
+        let weak = cx.entity().downgrade();
+        let menu = ContextMenu::build(window, cx, move |mut menu, _, _| {
+            for (label, choices, oauth) in menus {
+                if choices.is_empty() { continue; }
+                let weak = weak.clone();
+                menu = menu.submenu(label, move |mut menu, _, _| {
+                    for (id, name) in &choices {
+                        let id = id.clone();
+                        let provider_name = name.clone();
+                        let weak = weak.clone();
+                        menu = menu.entry(name.clone(), None, move |window, cx| {
+                            let _ = weak.update(cx, |view, cx| {
+                                if view.busy || view.auth.is_some() { return; }
+                                if oauth {
+                                    view.sign_in(SignInKind::Provider, id.clone(), provider_name.clone(), window, cx);
+                                } else {
+                                    view.open_key_form(id.clone(), window, cx);
+                                }
+                            });
+                        });
+                    }
+                    menu
+                });
+            }
+            menu
+        });
+        DropdownMenu::new("pi-connect-provider", "Connect Provider", menu)
+            .style(DropdownStyle::Solid).trigger_icon(IconName::ChevronDown).disabled(disabled).into_any_element()
+    }
+
+    fn answer_sign_in(&mut self, id: u64, value: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = self.auth_prompt.as_ref().filter(|p| p["id"].as_u64() == Some(id)) else { return; };
+        let Some(input) = self.auth_input.as_mut() else { return; };
+        if value.len() > 8192 || (prompt["type"] != "text" && value.trim().is_empty()) {
+            self.failed = true;
+            self.notice = "Enter a sign-in response of at most 8192 bytes.".into();
+        } else if writeln!(input, "{}", json!({"id":id, "value":value})).is_err() {
+            self.failed = true;
+            self.notice = "Unable to send the sign-in response.".into();
+        } else {
+            self.auth_prompt = None;
+            self.auth_text.update(cx, |editor, cx| editor.set_text("", window, cx));
+            self.failed = false;
+            self.notice = "Waiting for sign-in…".into();
+        }
+        cx.notify();
+    }
+
+    fn provider_sign_in_form(&self, provider: &str, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut form = v_flex().gap_2().child(Label::new(format!("Sign in to {provider}")));
+        if let Some(browser) = &self.auth_browser {
+            let url = browser.url.clone();
+            let mut actions = h_flex().gap_2().flex_wrap()
+                .child(Button::new("pi-provider-open-browser", "Open Browser").style(ButtonStyle::Outlined)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.auth_cancelling && this.auth_browser.as_ref().is_some_and(|browser| browser.url == url) { cx.open_url(&url); }
+                    })));
+            if let Some(code) = &browser.code {
+                form = form.child(Label::new(format!("Enter this code in your browser: {code}")).size(LabelSize::Small));
+                if browser.copy_code {
+                    actions = actions.child(Button::new("pi-provider-copy-code", "Copy Code").style(ButtonStyle::Outlined)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(code) = this.auth_browser.as_ref().and_then(|browser| browser.code.clone()) {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(code));
+                            }
+                        })));
+                }
+            }
+            form = form.child(actions);
+        }
+        if let Some(prompt) = &self.auth_prompt {
+            if let Some(id) = prompt["id"].as_u64() {
+                let message = prompt["message"].as_str().unwrap_or("Sign-in response");
+                if prompt["type"] == "select" {
+                    let mut options = h_flex().gap_2().flex_wrap();
+                    for (index, option) in prompt["options"].as_array().into_iter().flatten().enumerate() {
+                        let Some(value) = option["id"].as_str().map(str::to_owned) else { continue; };
+                        let label = option["label"].as_str().unwrap_or(&value).to_owned();
+                        options = options.child(Button::new(SharedString::from(format!("pi-provider-prompt-{index}")), label).style(ButtonStyle::Outlined)
+                            .on_click(cx.listener(move |this, _, window, cx| this.answer_sign_in(id, value.clone(), window, cx))));
+                    }
+                    form = form.child(field(message, options));
+                } else if !self.auth_show_manual && is_redirect_fallback(prompt) {
+                    form = form.child(h_flex().child(Button::new("pi-provider-auth-manual", "Paste redirect URL manually")
+                        .style(ButtonStyle::Transparent)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this.auth_prompt.as_ref().and_then(|prompt| prompt["id"].as_u64()) == Some(id) {
+                                this.auth_show_manual = true;
+                                cx.notify();
+                            }
+                        }))));
+                } else {
+                    form = form.child(field(message, text_field(self.auth_text.clone(), cx)))
+                        .child(Button::new("pi-provider-auth-submit", "Continue").style(ButtonStyle::Filled)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let value = this.auth_text.read(cx).text(cx);
+                                this.answer_sign_in(id, value, window, cx);
+                            })));
+                }
+            }
+        }
+        form.child(Button::new("pi-provider-auth-cancel", "Cancel Sign-in").disabled(self.auth_cancelling)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.auth_cancelling = true;
+                this.auth_input = None;
+                this.auth_prompt = None;
+                this.auth_browser = None;
+                this.auth_text.update(cx, |editor, cx| editor.set_text("", window, cx));
+                this.notice = "Cancelling sign-in…".into();
+                cx.notify();
+            }))).into_any_element()
+    }
+
     fn providers_section(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let connections = self.data.as_ref().and_then(|d| d["customConnections"].as_array()).cloned().unwrap_or_default();
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
-        for provider in visible_providers(self.providers()) {
+        for provider in self.providers() {
             let id = provider["id"].as_str().unwrap_or_default().to_owned();
             let custom = provider["custom"] == true;
             let credential = provider["credential"].as_str().unwrap_or("none").to_owned();
@@ -661,6 +845,7 @@ impl PiSettingsView {
                 "api_key" => "api key stored".to_owned(),
                 "oauth" => "oauth session".to_owned(),
                 "environment" => "environment".to_owned(),
+                "none" => "no credentials".to_owned(),
                 "models.json" => "models.json".to_owned(),
                 "" => match credential.as_str() {
                     "oauth" => "oauth session".to_owned(), "api_key" => "api key stored".to_owned(),
@@ -679,7 +864,9 @@ impl PiSettingsView {
                 .aria_label("Set API key")
                 .tooltip(Tooltip::text("Set API key"))
                 .disabled(self.busy)
-                .on_click(cx.listener(move |this, _, _, cx| { this.key_provider = Some(key_id.clone()); cx.notify(); }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_key_form(key_id.clone(), window, cx);
+                }))
                 .into_any_element());
             if stored {
                 let label = if credential == "oauth" { "Sign out" } else { "Remove key" };
@@ -713,35 +900,43 @@ impl PiSettingsView {
                     .color(if credential == "none" { Color::Warning } else { Color::Muted }).truncate()))
                 .child(action_group);
             rows.push(row.into_any_element());
-            if self.key_provider.as_deref() == Some(id.as_str()) {
-                rows.push(v_flex().gap_2()
-                    .child(text_field(self.key.clone(), cx))
-                    .child(h_flex().gap_2()
-                        .child(Button::new("pi-save-key", "Save API Key").style(ButtonStyle::Outlined).disabled(self.busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let key = this.key.read(cx).text(cx);
-                                let provider = this.key_provider.clone().unwrap_or_default();
-                                this.key.update(cx, |editor, cx| editor.set_text("", window, cx));
-                                this.key_provider = None;
-                                this.request(json!({"operation":"key", "provider":provider, "key":key}), window, cx);
-                            })))
-                        .child(Button::new("pi-cancel-key", "Cancel").disabled(self.busy)
-                            .on_click(cx.listener(|this, _, window, cx| { this.key.update(cx, |editor, cx| editor.set_text("", window, cx)); this.key_provider = None; cx.notify(); }))))
-                    .into_any_element());
-            }
         }
+        let connect = self.connect_provider_menu(window, cx);
         v_flex().gap_3().pt_4().border_t_1().border_color(cx.theme().colors().border_variant)
-            .child(Label::new("Providers"))
-            .child(Label::new("Unconfigured built-in providers stay hidden until they have credentials. The badge names where the credential comes from.").size(LabelSize::XSmall).color(Color::Muted))
+            .child(h_flex().gap_2().justify_between()
+                .child(Label::new("Providers"))
+                .child(Button::new("pi-reload-providers", "Reload").start_icon(Icon::new(IconName::RotateCw)).disabled(self.busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.request(json!({"operation":"status"}), window, cx)))))
             .children(rows)
+            .child(v_flex().gap_2().when(!self.providers().is_empty(), |footer| {
+                footer.pt_3().border_t_1().border_color(cx.theme().colors().border_variant)
+            })
+                .child(h_flex().gap_2().flex_wrap()
+                    .child(connect)
+                    .child(h_flex().min_w_0().ml_auto().gap_2().justify_end().flex_wrap()
+                        .child(Button::new("pi-connection-add", "Add Custom API").style(ButtonStyle::Outlined)
+                            .disabled(self.busy || self.custom_model_open)
+                            .on_click(cx.listener(|this, _, window, cx| this.edit_connection(None, window, cx))))
+                        .child(Button::new("pi-connection-import", "Import from JSON").style(ButtonStyle::Outlined)
+                            .disabled(self.busy)
+                            .on_click(cx.listener(|this, _, _, cx| { this.import_open = !this.import_open; cx.notify(); })))))
+                .child(Label::new("Set your provider’s API key as an environment variable, then restart Zepi. Keys added here are stored locally in plain text. To use your account, choose Sign In with Account or run /login in chat.").size(LabelSize::Small).color(Color::Muted)))
+            .when_some(self.auth.as_ref().filter(|(kind, _)| matches!(kind, SignInKind::Provider)), |section, (_, name)| {
+                section.child(self.provider_sign_in_form(name, cx))
+            })
+            .when_some(self.key_provider.as_deref(), |section, provider| section.child(v_flex().gap_2()
+                .child(field(&format!("API key for {provider}"), text_field(self.key.clone(), cx)))
+                .child(h_flex().gap_2()
+                    .child(Button::new("pi-save-key", "Save API Key").style(ButtonStyle::Outlined).disabled(self.busy)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let Some(provider) = this.key_provider.take() else { return; };
+                            let key = this.key.read(cx).text(cx);
+                            this.key.update(cx, |editor, cx| editor.set_text("", window, cx));
+                            this.request(json!({"operation":"key", "provider":provider, "key":key}), window, cx);
+                        })))
+                    .child(Button::new("pi-cancel-key", "Cancel").disabled(self.busy)
+                        .on_click(cx.listener(|this, _, window, cx| { this.key.update(cx, |editor, cx| editor.set_text("", window, cx)); this.key_provider = None; cx.notify(); }))))))
             .when(self.custom_model_open, |section| section.child(self.connection_form(window, cx)))
-            .child(h_flex().gap_2()
-                .child(Button::new("pi-connection-add", "+ Add custom API")
-                    .disabled(self.busy || self.custom_model_open)
-                    .on_click(cx.listener(|this, _, window, cx| this.edit_connection(None, window, cx))))
-                .child(Button::new("pi-connection-import", "Import from JSON")
-                    .disabled(self.busy)
-                    .on_click(cx.listener(|this, _, _, cx| { this.import_open = !this.import_open; cx.notify(); }))))
             .when(self.import_open, |section| section.child(v_flex().gap_2().p_4().rounded_md()
                 .border_1().border_color(cx.theme().colors().border)
                 .child(Label::new("Paste a provider object"))
@@ -882,7 +1077,7 @@ impl PiSettingsView {
         let total: usize = self.providers().iter().map(|p| p["models"].as_array().map(|m| m.len()).unwrap_or(0)).sum();
         let enabled = self.enabled_refs().len();
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
-        for provider in visible_providers(self.providers()) {
+        for provider in self.providers() {
             let id = provider["id"].as_str().unwrap_or_default().to_owned();
             let name = provider["name"].as_str().unwrap_or(&id).to_owned();
             let models = provider["models"].as_array().cloned().unwrap_or_default();
@@ -1071,8 +1266,8 @@ impl PiSettingsView {
             } else if enabled && needs_sign_in {
                 actions.push(Button::new(SharedString::from(format!("pi-mcp-auth-{name}")), "Sign in")
                     .style(ButtonStyle::Outlined)
-                    .disabled(self.ext_busy)
-                    .on_click(cx.listener(move |this, _, window, cx| this.sign_in_mcp(signin_name.clone(), window, cx)))
+                    .disabled(self.ext_busy || self.auth.is_some())
+                    .on_click(cx.listener(move |this, _, window, cx| this.sign_in(SignInKind::Mcp, signin_name.clone(), signin_name.clone(), window, cx)))
                     .into_any_element());
             }
             let confirming = self.mcp_confirm_remove.as_deref() == Some(name.as_str());
@@ -1275,14 +1470,6 @@ impl PiSettingsView {
     }
 }
 
-fn visible_providers(providers: &[Value]) -> Vec<&Value> {
-    providers.iter().filter(|provider| {
-        provider["custom"] == true
-            || provider["credential"].as_str().unwrap_or("none") != "none"
-            || provider["models"].as_array().into_iter().flatten().any(|model| model["enabled"] == true)
-    }).collect()
-}
-
 fn candidate_label(item: &Value, id: &str) -> String {
     let mut parts = vec![id.to_owned()];
     if let Some(context) = item["contextWindow"].as_u64() {
@@ -1317,36 +1504,102 @@ fn text_field(editor: Entity<Editor>, cx: &App) -> gpui::AnyElement {
         .bg(cx.theme().colors().editor_background).child(editor).into_any_element()
 }
 
-enum AuthEvent { Started(ChildStdin), Url(String), Finished(Result<(), String>) }
+#[derive(Clone, Copy)]
+enum SignInKind { Mcp, Provider }
 
-fn run_mcp_sign_in(name: String, events: mpsc::Sender<AuthEvent>) {
+struct SignInBrowser {
+    url: String,
+    code: Option<String>,
+    copy_code: bool,
+}
+
+fn is_redirect_fallback(prompt: &Value) -> bool {
+    prompt["type"] == "manual_code" && prompt["placeholder"].as_str().is_some_and(|hint| {
+        ["http://localhost:", "http://127.0.0.1:", "http://[::1]:"].iter().any(|prefix| hint.starts_with(*prefix))
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn only_loopback_redirect_prompts_are_collapsed() {
+    assert!(is_redirect_fallback(&json!({"type":"manual_code", "placeholder":"http://127.0.0.1:1455/auth/callback"})));
+    assert!(is_redirect_fallback(&json!({"type":"manual_code", "placeholder":"http://localhost:1455/auth/callback"})));
+    assert!(!is_redirect_fallback(&json!({"type":"manual_code", "placeholder":"code#state"})));
+    assert!(!is_redirect_fallback(&json!({"type":"text", "placeholder":"http://localhost:1455/"})));
+}
+
+enum AuthEvent {
+    Started(ChildStdin),
+    Browser(SignInBrowser, bool),
+    Prompt(Value),
+    ClearPrompt(u64),
+    Finished(Result<(), String>),
+}
+
+fn run_sign_in(kind: SignInKind, id: String, events: mpsc::Sender<AuthEvent>) {
     let result = (|| -> Result<(), String> {
         let root = std::env::var_os("ZEPI_ROOT").ok_or("Zepi runtime directory is unavailable.")?;
         let root = std::path::PathBuf::from(root);
         let agent = std::env::var_os("ZEPI_AGENT").map(std::path::PathBuf::from).filter(|p| p.is_file())
             .or_else(|| { let b = root.join("agent.exe"); b.is_file().then_some(b) });
-        let mut child = match agent {
-            Some(a) => { let mut c = util::command::new_std_command(a); c.arg("mcp-auth").arg(name); c }
-            None => { let mut c = util::command::new_std_command(std::env::var_os("ZEPI_NODE").ok_or("Zepi Node.js runtime is unavailable.")?); c.arg(root.join("packages/runtime/bin/mcp-auth.mjs")).arg(name); c }
-        }.current_dir(root)
+        let subcommand = match kind { SignInKind::Mcp => "mcp-auth", SignInKind::Provider => "provider-auth" };
+        let mut command = if let Some(agent) = agent {
+            let mut command = util::command::new_std_command(agent);
+            command.arg(subcommand);
+            command
+        } else {
+            let mut command = util::command::new_std_command(std::env::var_os("ZEPI_NODE").ok_or("Zepi Node.js runtime is unavailable.")?);
+            match kind {
+                SignInKind::Mcp => command.arg(root.join("packages/runtime/bin/mcp-auth.mjs")),
+                SignInKind::Provider => {
+                    let compiled = root.join("packages/acp/src/cli.js");
+                    if compiled.is_file() {
+                        command.arg(compiled);
+                    } else {
+                        let loader = root.join("node_modules/tsx/dist/loader.mjs");
+                        let loader = if cfg!(windows) {
+                            format!("file:///{}", loader.to_string_lossy().replace('\\', "/"))
+                        } else {
+                            loader.to_string_lossy().into_owned()
+                        };
+                        command.arg("--import").arg(loader).arg(root.join("packages/acp/src/cli.ts"));
+                    }
+                    command.arg(subcommand)
+                }
+            };
+            command
+        };
+        let mut child = command.arg(id).current_dir(root)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
-            .map_err(|_| "Unable to start MCP sign-in.".to_owned())?;
+            .map_err(|_| "Unable to start sign-in.".to_owned())?;
         // Dropping the pipe cancels in pi and closes its callback listener.
-        let input = child.stdin.take().ok_or("MCP sign-in input is unavailable.")?;
+        let input = child.stdin.take().ok_or("Sign-in input is unavailable.")?;
         if events.send(AuthEvent::Started(input)).is_err() {
             let _ = child.wait();
             return Ok(());
         }
-        let output = child.stdout.take().ok_or("MCP sign-in output is unavailable.")?;
-        let mut result = Err("MCP sign-in did not complete.".to_owned());
+        let output = child.stdout.take().ok_or("Sign-in output is unavailable.")?;
+        let mut result = Err("Sign-in did not complete.".to_owned());
         for line in BufReader::new(output).lines() {
             let Ok(line) = line else { break; };
-            let Ok(value) = serde_json::from_str::<Value>(&line) else { continue; };
-            if let Some(url) = value["url"].as_str() {
+            let Ok(mut value) = serde_json::from_str::<Value>(&line) else { continue; };
+            let event = if let Some(url) = value["url"].as_str() {
                 if !(url.starts_with("https://") || url.starts_with("http://")) { continue; }
-                if events.send(AuthEvent::Url(url.to_owned())).is_err() { break; }
-            } else if value["ok"] == true { result = Ok(()); }
-            else if value["ok"] == false { result = Err(value["error"].as_str().unwrap_or_default().to_owned()); }
+                AuthEvent::Browser(SignInBrowser {
+                    url: url.to_owned(), code: value["code"].as_str().map(str::to_owned),
+                    copy_code: value["copyCode"] == true,
+                }, value["autoOpen"] != false)
+            } else if value["prompt"]["id"].is_u64() {
+                AuthEvent::Prompt(value["prompt"].take())
+            } else if let Some(id) = value["clearPrompt"].as_u64() {
+                AuthEvent::ClearPrompt(id)
+            } else {
+                if let Some(ok) = value["ok"].as_bool() {
+                    result = if ok { Ok(()) } else { Err(value["error"].as_str().unwrap_or("Sign-in failed.").to_owned()) };
+                }
+                continue;
+            };
+            if events.send(event).is_err() { break; }
         }
         let _ = child.wait();
         result

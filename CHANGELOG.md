@@ -4,6 +4,37 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.9] - 2026-11-24
+
+### Changed
+
+- The chat model picker shows the model name first, with the provider and input capabilities below.
+  The composer button shows just the model name; both tooltips show the full model reference.
+- **Connect Provider** in Models and providers supports both API keys and OAuth account sign-in
+  without opening a chat. Both menus hide already connected providers. OAuth sign-in closes any
+  open API-key form, supports cancellation, and keeps optional manual redirect input collapsed.
+- The Providers header has a **Reload** action. **Add Custom API** and **Import from JSON** are
+  grouped on the right, with guidance below on environment variables, restarting, and locally stored
+  plaintext keys.
+- Updated the Windows build guide for the compiled agent, on-demand browse setup, and dev-bundle checks.
+- The shared Office skill focuses on choosing the right skill, running the bundled Python, preserving
+  source files, and extracting PDF text. The Excel skill separates formula, value, and layout checks
+  and tells agents to save workbooks with charts to a new path.
+
+### Fixed
+
+- Models and providers hides unconfigured built-in providers and their models from the main list,
+  default model picker, and enabled model list. Custom connections remain visible, even without
+  credentials. Editing visible enabled models preserves saved selections for disconnected providers.
+- Office skills now report when the bundled Python executable is missing instead of trying a broken
+  path or falling back to system Python. Native Office viewers and PNG rendering still work without it.
+- Word skill examples replace a placeholder without rewriting its entire paragraph and no longer
+  suggest merging documents by copying body XML that can lose images or links.
+- Office QA uses the path of the running Zepi executable, including in dev builds, and checks the
+  PNGs listed in the render result without falling back to another renderer.
+- `zepi office render --pages` rejects out-of-range pages, slides, and sheets before rendering. A
+  request that produces no images is now an error rather than a successful result.
+
 ## [0.0.8] - 2026-11-23
 
 ### Added

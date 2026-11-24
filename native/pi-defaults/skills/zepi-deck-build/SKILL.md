@@ -7,6 +7,8 @@ description: Build or edit a PowerPoint deck with the bundled python-pptx — ou
 
 Design rules live in the `zepi-deck-design` skill; visual verification in `zepi-office-qa`. This skill is the
 mechanics: how to write the file correctly with `python-pptx` on the bundled runtime.
+Run scripts with `& $env:ZEPI_PYTHON script.py`. If it is unavailable, tell the user rather than falling
+back to system Python.
 
 ## Process
 

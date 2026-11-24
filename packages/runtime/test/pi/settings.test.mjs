@@ -87,6 +87,52 @@ test("auth responses contain metadata only; edits preserve other providers, OAut
   assert.deepEqual(await f.get(f.target,"auth.json"),{anthropic:oauth});
 });
 
+test("built-in provider models are visible only with configured API or OAuth credentials", async t => {
+  const f = await fixture(t);
+  const env = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => {
+    if (env === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = env;
+  });
+  const openai = status => status.providers.find(p => p.id === "openai");
+  const codex = status => status.providers.find(p => p.id === "openai-codex");
+  const initial = await f.bridge.status();
+  assert.equal(openai(initial), undefined);
+  assert.equal(codex(initial), undefined);
+  assert.deepEqual(initial.keyProviders.find(p => p.id === "openai"), {id: "openai", name: "OpenAI"});
+  assert.ok(!initial.keyProviders.some(p => p.id === "openai-codex"));
+  assert.deepEqual(initial.oauthProviders.find(p => p.id === "openai"), {id: "openai", name: "OpenAI"});
+  assert.deepEqual(initial.oauthProviders.find(p => p.id === "openai-codex"), {id: "openai-codex", name: "OpenAI Codex"});
+  assert.ok(!initial.oauthProviders.some(p => p.id === "azure"));
+  assert.ok(initial.providers.some(p => p.id === "zepi-fixture" && p.custom));
+
+  const withKey = await f.bridge.execute({operation: "key", provider: "openai", key: "fixture-api-key"});
+  assert.equal(openai(withKey).credential, "api_key");
+  assert.ok(!withKey.keyProviders.some(p => p.id === "openai"));
+  assert.ok(!withKey.oauthProviders.some(p => p.id === "openai"));
+  const model = openai(withKey).models[0].id;
+  const ref = `openai/${model}`;
+  const original = await f.get(f.target, "settings.json");
+  await f.put(f.target, "settings.json", {...original, enabledModels: [ref]});
+  const removed = await f.bridge.execute({operation: "remove-key", provider: "openai"});
+  assert.equal(openai(removed), undefined);
+  assert.ok(removed.keyProviders.some(p => p.id === "openai"));
+  assert.ok(removed.oauthProviders.some(p => p.id === "openai"));
+  assert.deepEqual(removed.enabledModels, [ref]);
+  const edited = await f.bridge.execute({operation: "enabled-models", enabled: ["zepi-fixture/test-model"]});
+  assert.deepEqual(edited.enabledModels, ["zepi-fixture/test-model", ref]);
+
+  process.env.OPENAI_API_KEY = "fixture-environment-key";
+  await f.put(f.target, "auth.json", {"openai-codex": {type: "oauth", access: "fixture-access", refresh: "fixture-refresh", expires: 9999999999999}});
+  const connected = await f.bridge.status();
+  assert.equal(openai(connected).credentialSource, "environment");
+  assert.deepEqual(openai(connected).models.filter(m => m.enabled).map(m => m.id), [model]);
+  assert.equal(codex(connected).credential, "oauth");
+  assert.ok(!connected.oauthProviders.some(p => p.id === "openai" || p.id === "openai-codex"));
+  assert.doesNotMatch(JSON.stringify(connected), /fixture-(?:environment-key|access|refresh)/);
+});
+
 test("custom model editing preserves pi advanced parameters and other models", async t => {
   const f=await fixture(t);
   f.config.providers["zepi-fixture"].headers={"X-Test":"retain"};

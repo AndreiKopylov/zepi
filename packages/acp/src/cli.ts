@@ -20,6 +20,11 @@ if (subcommand === "mcp-auth") {
   await import("../../runtime/bin/mcp-auth.mjs");
   process.exit(0);
 }
+if (subcommand === "provider-auth") {
+  const { runProviderSignIn } = await import("./provider-auth.ts");
+  await runProviderSignIn(process.argv[3]);
+  process.exit(0);
+}
 if (subcommand === "codemode-selftest") {
   const { CodemodeSandbox } = await import("../node_modules/@earendil-works/pi-codemode/dist/runtime/host.js");
   const { loadQuickJSWasm } = await import("../node_modules/@earendil-works/pi-codemode/dist/wasm.js");

@@ -135,14 +135,17 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
             const loaded = getExtensions();
             return { ...loaded, extensions: [...loaded.extensions, accessPolicy()] };
           };
+          const python = process.env.ZEPI_PYTHON;
+          const hasOfficePython = python && (await stat(python).catch(() => undefined))?.isFile();
           const append = options.resourceLoader.getAppendSystemPrompt.bind(options.resourceLoader);
           options.resourceLoader.getAppendSystemPrompt = () => [...append(),
-            "Office documents: when a task involves .docx, .xlsx, .pptx or .pdf, load the matching skill before writing any code — read its SKILL.md from the skill list in this prompt, or run /skill:zepi-docx, /skill:zepi-xlsx, /skill:zepi-deck-build, /skill:zepi-office-qa. A Word file means the \`zepi-docx\` skill, a spreadsheet the \`zepi-xlsx\` skill, a deck \`zepi-deck-build\` with \`zepi-deck-design\`. Those skills define the runtime (the bundled Python), the known traps and the verification step; re-deriving the pipeline from a sample file or from experience skips all three and is not acceptable. A visual check means rendering the result with \`zepi office render\` and looking at the PNGs, not only a script exiting zero. \`zepi office render\` is the only renderer: do not look for, test or call LibreOffice (\`soffice\`) or Microsoft Office, even when the machine has them. Reading a skill costs one tool call.",
+            "Before writing code for an Office file, read the matching skill: `.docx` uses `zepi-docx`, `.xlsx` uses `zepi-xlsx`, `.pptx` uses `zepi-deck-build` and `zepi-deck-design`, and PDF text extraction uses `zepi-office-docs`. For visual checks of Word, Excel and PowerPoint files, follow `zepi-office-qa`: use the native renderer and inspect the PNGs. If it is unavailable, report that visual verification could not be done; do not guess the path or use LibreOffice or Microsoft Office.",
             "If edit reports that the text was not found, re-read the file and retry against the current contents; writes always land on disk, so a missing match means stale text, never a change waiting in a buffer.",
-            "PowerShell has no heredocs (<<EOF, python - <<'PY') and no cmd flags such as dir /b. Write the script to a real file with the write tool, then run python <file>; never assume a heredoc created a file.",
-            "Two Pythons, and they are not interchangeable.",
-            "Bundled (the default): `python`, `python3` or `$env:ZEPI_PYTHON`, living in `<ZEPI_ROOT>\\deps\\python`. Has python-docx, openpyxl, python-pptx, pypdf and Pillow, and no pip. Use it for every .docx/.xlsx/.pptx task; never invent a path under %LOCALAPPDATA% and never try `pip` here.",
-            "System: reachable only through `py` or `py -3`, if the machine has Python at all. It has pip but none of the Office libraries. Use it for anything else (pandas, requests, scraping) and always create a project venv (`.venv`) with `py -3 -m venv .venv`, installing into the venv rather than the global interpreter. If `py` is not found, tell the user the task needs a system Python instead of silently switching to the bundled one.",
+            "PowerShell has no heredocs (<<EOF, python - <<'PY') and no cmd flags such as dir /b. Write the script to a real file with the write tool, then invoke the appropriate interpreter on that file.",
+            hasOfficePython
+              ? "Zepi's bundled Office Python is available. Run Office scripts with `& $env:ZEPI_PYTHON <file>`. It includes python-docx, openpyxl, python-pptx, pypdf and Pillow; never run pip in it."
+              : "Zepi's bundled Office Python is unavailable. If the task requires Office Python, tell the user it is unavailable instead of attempting to run scripts. Native Office viewers and `zepi office render` do not require Python.",
+            "Never substitute `python`, `python3` or `py` for `$env:ZEPI_PYTHON` in Office tasks, guess an alternative path or install packages as a workaround. For non-Office Python tasks use `py -3` and create a project venv with `py -3 -m venv .venv`. If `py` is missing, tell the user the task needs system Python.",
             "fetch_content fetches http(s) URLs only. Local files are read with the read tool.",
           ];
         }

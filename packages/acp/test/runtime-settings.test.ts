@@ -3,10 +3,45 @@ import {test} from 'node:test';
 import {mkdir, mkdtemp, writeFile, readFile, rm, realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
+import {createInterface} from 'node:readline';
+import {PassThrough} from 'node:stream';
 import {client, methods} from '@agentclientprotocol/sdk';
 import {startZepiAgent} from '../src/server.ts';
 import {call, fixtureModel, type FixtureStep} from './fixture-model.ts';
 import {ModelRuntime} from '@earendil-works/pi-coding-agent';
+import {providerAuthInteraction} from '../src/provider-auth.ts';
+
+test('provider sign-in accepts only the active prompt response and clears cancelled prompts', async t => {
+  const stream = new PassThrough();
+  const input = createInterface({input: stream});
+  t.after(() => {input.close(); stream.destroy();});
+  const events: object[] = [];
+  const stop = new AbortController();
+  const auth = providerAuthInteraction(input, event => events.push(event), stop.signal);
+  const answer = (id: number, value: string) => stream.write(JSON.stringify({id, value}) + '\n');
+  const options = [{id: 'browser', label: 'Browser'}];
+  const method = auth.prompt({type: 'select', message: 'Sign-in method', options});
+  assert.deepEqual(events.at(-1), {prompt: {id: 1, type: 'select', message: 'Sign-in method', options}});
+  answer(1, 'unknown');
+  assert.equal(events.length, 1);
+  answer(1, 'browser');
+  assert.equal(await method, 'browser');
+  const browserWon = new AbortController();
+  const manual = auth.prompt({type: 'manual_code', message: 'Redirect URL', signal: browserWon.signal});
+  browserWon.abort(new Error('Callback completed'));
+  await assert.rejects(manual, /Callback completed/);
+  assert.deepEqual(events.at(-1), {clearPrompt: 2});
+  const next = auth.prompt({type: 'text', message: 'Optional domain'});
+  answer(2, 'stale response');
+  answer(3, '');
+  assert.equal(await next, '');
+  auth.notify({type: 'device_code', verificationUri: 'https://example.test', userCode: '1234', openBrowserOnConfirm: false});
+  assert.deepEqual(events.at(-1), {url: 'https://example.test', code: '1234', autoOpen: false, copyCode: true});
+  const pending = auth.prompt({type: 'manual_code', message: 'Authorization code'});
+  stop.abort(new Error('Owner closed'));
+  await assert.rejects(pending, /Owner closed/);
+  assert.deepEqual(events.at(-1), {clearPrompt: 4});
+});
 
 // The model config option carries a list; the ACP union type hides it behind a discriminated type.
 const modelValues = (options: typeof undefined | readonly {id: string; [key: string]: unknown}[]) =>
@@ -35,9 +70,20 @@ test('model defaults flow through ACP selection and pi compaction after reload',
     const task = await connection.agent.request(methods.agent.session.new,{cwd:dir,mcpServers:[]});
     const level = (options:typeof task.configOptions) => options?.find(o=>o.id==='thinkingLevel')?.currentValue;
     assert.equal(level(task.configOptions),'high');
+    const checkModelLabel = (options: typeof task.configOptions) => {
+      const model = options?.find(option => option.id === 'model');
+      assert.equal(model?.currentValue, key);
+      const choices = (model as {options?: {value: string; name: string; description?: string}[]} | undefined)?.options;
+      const choice = choices?.find(option => option.value === key);
+      assert.equal(choice?.name, 'Scripted (no inference)');
+      assert.equal(choice?.description, 'Local deterministic test fixture · Vision');
+    };
+    checkModelLabel(task.configOptions);
     const send = (text:string) => connection.agent.request(methods.agent.session.prompt,{sessionId:task.sessionId,prompt:[{type:'text',text}]});
     const select = (configId:string,value:string) => connection.agent.request(methods.agent.session.setConfigOption,{sessionId:task.sessionId,configId,value});
-    assert.equal(level((await select('thinkingLevel','medium')).configOptions),'medium');
+    const updated = (await select('thinkingLevel','medium')).configOptions;
+    assert.equal(level(updated),'medium');
+    checkModelLabel(updated);
     // An explicit task choice must not silently become a saved model default.
     assert.equal(JSON.parse(await readFile(join(dir,'settings.json'),'utf8')).modelThinkingLevels[key],'high');
     await send('Remember the marker. '.repeat(100)); await send('Continue.');

@@ -1,12 +1,12 @@
 ---
 name: zepi-docx
-description: Read and edit Word documents with python-docx on the bundled runtime — styles, numbering, tables, headers and footers, page breaks, images, find-and-replace across runs, and merging documents. Use for any task whose input or output is a .docx file, including extracting text or tables, filling a template, fixing formatting, and assembling a report from several sources.
+description: Read and edit Word documents with python-docx on the bundled runtime — styles, numbering, tables, headers and footers, page breaks, images, and targeted replacements. Use for any task whose input or output is a .docx file, including extracting text or tables, filling a template, fixing formatting, and assembling a report from several sources.
 ---
 
 # Word documents
 
-The runtime is `$env:ZEPI_PYTHON` (`%ZEPI_ROOT%\deps\python\python.exe`), with `python-docx` and
-`Pillow` installed. Never run `pip install`; the package set is fixed and offline.
+Run scripts with `& $env:ZEPI_PYTHON script.py`; the bundled runtime includes `python-docx` and `Pillow`.
+If it is unavailable, tell the user rather than falling back to system Python. No `pip install`.
 
 ## Read
 
@@ -30,17 +30,43 @@ Text lives in runs: a paragraph is a list of runs, each with its own bold/italic
 joins them for reading; writing `p.text = "..."` collapses the whole paragraph into one plain run and
 loses inline formatting inside it.
 
-## Edit
+## Edit a placeholder in an existing document
+
+Find the intended paragraph first. This example changes one single-line placeholder in one plain
+text run. Do not apply it to tracked changes. If a match spans runs or is inside a hyperlink or
+field, inspect it separately; never flatten the paragraph to make the replacement work.
 
 ```python
-# replace text while keeping the paragraph's formatting
-for p in doc.paragraphs:
-    if "OLD" in p.text:
-        p.runs[0].text = p.text.replace("OLD", "NEW")
-        for run in p.runs[1:]:
-            run.text = ""
+from docx import Document
 
-# add a paragraph with a style the template defines
+doc = Document("report.docx")
+p = doc.paragraphs[0]  # Select the intended body paragraph
+old, new = "{{COMPANY}}", "Acme"
+matches = [run for run in p.runs if old in run.text]
+if (
+    p.text.count(old) != 1
+    or len(matches) != 1
+    or p._p.xpath(".//w:fldChar | .//w:fldSimple | .//w:instrText")
+    or matches[0]._r.xpath("*[not(self::w:rPr or self::w:t)]")
+):
+    raise ValueError("Expected one placeholder in a plain text run; inspect the paragraph.")
+
+expected = p.text.replace(old, new, 1)
+run = matches[0]
+run.text = run.text.replace(old, new, 1)
+assert p.text == expected
+doc.save("out.docx")
+```
+
+## Add content to a new document
+
+```python
+from docx import Document
+from docx.shared import Inches
+
+doc = Document()
+
+# add a paragraph with a style the document defines
 doc.add_paragraph("Total: $2,052,800", style="Heading 1")
 
 # tables
@@ -55,11 +81,11 @@ row[0].text = "Rent"
 doc.add_picture("chart.png", width=Inches(5.5))
 doc.add_page_break()
 
-# headers, footers, page numbers
+# new header and footer
 section = doc.sections[0]
 section.header.paragraphs[0].text = "Acme · GovTech"
-section.footer.paragraphs[0].text = "Page "
-doc.save("out.docx")
+section.footer.paragraphs[0].text = "Draft"
+doc.save("new.docx")
 ```
 
 Traps that silently produce a wrong file:
@@ -82,15 +108,15 @@ Traps that silently produce a wrong file:
 ## Verify before reporting done
 
 1. Reopen the saved file and assert the paragraphs, tables and section texts you touched.
-2. Render and look: `& "$env:ZEPI_ROOT\zepi.exe" office render "out.docx" --dpi 110`, then read the
-   produced `page-N.png` files. Word's own layout is the reference; Zepi's renderer shows breaks,
-   overlaps and missing images.
+2. Follow `zepi-office-qa` to render the changed pages and open the PNGs. Check pagination, overlaps,
+   and missing images.
 3. Report what changed, in which file, and anything you could not verify.
 
 ## Merging and templates
 
-- `docxcompose` is not installed. To merge, copy the body elements of the source into the target:
-  `for element in source.element.body: target.element.body.insert(-1, element)` (styles may differ —
-  check the result visually).
-- To fill a template, open it, replace runs in place, and save under a new name. Do not rebuild the
-  document from scratch: the template carries fonts, headers and page setup.
+- Do not merge documents by moving or copying body XML: links, images, styles, and numbering can
+  depend on parts outside that body. If plain-text assembly is acceptable, create a new document from
+  the extracted text and state what will not carry over. Otherwise report that a faithful merge is not
+  covered by this workflow.
+- To fill a template, make targeted edits and save under a new name. Do not rebuild the document
+  from scratch: the template carries fonts, headers and page setup.

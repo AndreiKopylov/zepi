@@ -2,82 +2,116 @@
 
 ## Prerequisites
 
-- Windows 10/11 x64, git with `core.longpaths true`.
-- **MSVC v143** (Visual Studio Build Tools 2022) plus Windows SDK 10.0.26100, including the Spectre
-  libraries. The C++ workload is not required: `win-build.cmd` sets `INCLUDE`/`LIB`/`PATH` by hand.
-- **Rust 1.98.1** (`RUSTUP_TOOLCHAIN` in `win-build.cmd`).
-- **Node >= 22.19**, **Python 3.10+** (its pip downloads the Python layer wheels), **cmake** and
-  **nasm** in `PATH`.
+- Windows 10/11 x64 and Git with `core.longpaths=true`.
+- VS 2022 Build Tools: **MSVC v143 x64/x86**, its **Spectre libraries**, and **Windows SDK 10.0.26100**.
+  The full C++ workload is not required. The Windows scripts set `INCLUDE`, `LIB`, and `PATH`
+  directly; check their MSVC path if your toolset version differs.
+- Rust **1.98.1** (the toolchain pin is read from `native/zed.json`), Node **22.19+**, Python
+  **3.10+**, CMake, and NASM. Bun is needed on `PATH` for tests; `build-agent.cmd` uses its own
+  pinned Bun from `native/bun.json`.
 
-## Pipeline
+## First build
+
+From the repository root:
 
 ```powershell
-npm ci                                   # tsx/typescript for the adapter
+npm ci
 npm ci --prefix packages/acp --ignore-scripts
-python scripts\native.py prepare         # Zed tarball pinned by native/zed.json + native/overlay
-win-build.cmd                            # cargo build -p zed --bin zepi --profile release-fast
+npm ci --prefix packages/runtime
+python scripts\native.py fetch
 ```
 
-- `native.py prepare` unpacks Zed into `.local\upstream\zed`, copies `native/overlay/**` over it
-  and removes the paths listed in `native/removed-paths.json`. **Run prepare after any overlay
-  change** — cargo builds from `.local\upstream\zed`.
-- `win-build.cmd` builds from `.local\upstream\zed` with the target directory `..\zepi-build`
-  (outside the repository). The `release-fast` profile disables LTO and keeps `debug=full`, hence a
-  ~131 GB target and a ~374 MB executable.
-- The WebRTC win-x64 asset is downloaded manually, pinned in `native/assets.json`, into
-  `.local\upstream\zed\.webrtc-sys\webrtc-0001d84-4\win-x64-release`.
+`fetch` downloads the Zed archive pinned in `native/zed.json`, checks its SHA-256, prepares the
+source tree, and fills Cargo's dependency cache. `win-build.cmd` builds offline. Use the direct
+`npm ci` commands above if `npm run setup:acp` fails with `spawn npm ENOENT` on Windows.
 
-## Run and deploy
+Before building:
+
+- Extract `webrtc-win-x64-release.zip` from the `webrtc-0001d84-4` release of
+  `zed-industries/livekit-rust-sdks` into
+  `.local\upstream\zed\.webrtc-sys\webrtc-0001d84-4\win-x64-release` (the directory should contain
+  `include` and `lib`). `native/assets.json` describes the macOS asset, not this Windows archive.
+- For the C11 header used by `wasmtime-c-api`, create `.local/msvc-shim/stdalign.h`. The Windows
+  scripts already include this directory in `INCLUDE`:
+
+  ```c
+  #pragma once
+  #ifndef __cplusplus
+  #define alignas _Alignas
+  #define alignof _Alignof
+  #define __alignas_is_defined 1
+  #define __alignof_is_defined 1
+  #endif
+  ```
+
+## Build and run
 
 ```powershell
-python scripts\win-run.py                    # run with cwd = upstream (tree-sitter grammars)
-powershell -File scripts\deploy-bundle.ps1   # copy the build into the bundle and restart
+python scripts\native.py prepare
+.\win-build.cmd
+.\scripts\build-agent.cmd
+python scripts\win-run.py
 ```
 
-The bundle is a folder such as `C:\Llm\zepi` holding `zepi.exe`, `packages`, `node_modules`,
-`native` and `deps\{node,python}` (browsers are not bundled: the agent uses system Chrome/Edge or installs the pinned Chromium on demand into the state directory). It carries no state: that lives in
-`%LOCALAPPDATA%\Zepi`.
+- Run `prepare` after changing `native/overlay` or `native/removed-paths.json`. Cargo builds from
+  `.local\upstream\zed`; `win-build.cmd` and `scripts\win-check.cmd` refuse a stale overlay.
+- `win-build.cmd` builds `zepi.exe` with `release-fast` into `..\zepi-build\release-fast` by
+  default. It uses line-tables-only debug info, incremental compilation for workspace crates, and
+  sccache when available. `ZEPI_DEBUG=full` restores full debug info at the cost of a full rebuild.
+  `ZEPI_JOBS` defaults to 6; lower it if the machine struggles. `scripts\win-build-bg.cmd` is the
+  lower-priority background option (log: `.local\zbuild.log`).
+- `scripts\build-agent.cmd` builds `agent.exe` beside the default `release-fast` executable.
+  Rebuild it when changing ACP or runtime code embedded in the agent; a Rust rebuild is not needed
+  for those changes alone. `win-run.py` also builds the JavaScript ACP entry for development and
+  starts Zepi with the prepared Zed tree as its working directory (log: `.local\run.log`). If you
+  override the Cargo target directory, note that the launcher uses `ZEPI_BUILD_DIR` and the agent
+  script still writes to the default directory.
 
-## Payload (deps)
+## Runtime and dev bundles
+
+- The packaged editor launches `agent.exe` (Bun + pi + ACP), not a Node process. `pi/package.json`
+  and `photon/photon_rs_bg.wasm` are shipped beside it in their respective directories. System Node
+  is still useful for optional features such as language servers and preview helpers.
+- The browser is not bundled. Install **browse** from **Settings → AI → Browser use** to connect
+  a real Chromium browser through its extension. There is no bundled Chromium to prepare.
+- Native Office viewers don't need Python. For Office agent skills, run
+  `powershell -File scripts\prepare-python.ps1 -Deps .\deps` in the checkout to populate
+  `deps\python` for development. Without `-Deps`, the script builds `.local\payload\python` for
+  packaging instead.
+- A dev build with `zepi-root.txt` beside the executable keeps `.zed` and `.pi\agent` there.
+  Without that marker, the installed, portable, and dev bundle layouts use `%LOCALAPPDATA%\Zepi`.
+
+If you use the local, untracked `scripts\deploy-bundle.ps1`, pass a dedicated dev bundle directory
+with its runtime assets in place. Save and close Zepi first. The script refreshes the executables,
+ACP/runtime sources and their `node_modules`; it refuses a directory with an Inno uninstaller.
+Packaged copies intentionally omit `node_modules` and ACP tests; pi settings and extensions run as
+`agent.exe` subcommands.
+
+## Checks
 
 ```powershell
-# Python 3.13 + python-docx/openpyxl/python-pptx/pypdf/Pillow
-powershell -File scripts\prepare-python.ps1            # -> .local\payload\python
-
-# Node 24 (node.exe + npm.cmd): unpack the zip from nodejs.org into .local\payload\node
-# Chromium is not shipped: system Chrome/Edge or on-demand install into the state directory.
-# scripts\setup\browser.mjs (-> .local\browsers) remains for dev use only and is not copied to the payload.
+npm run check
+npm run test:acp        # Bun; unset OPENCODE_API_KEY first for a clean test environment
+npm run test:runtime
+.\scripts\win-check.cmd # link-free Rust check; optionally pass a crate name
 ```
 
-## Installer
+On Windows, use `npm run test:acp:node` only to diagnose ACP cases skipped on Bun.
+It runs the affected test files one at a time at BelowNormal priority and is not part of CI
+or deployment. Do not run it alongside a build.
 
-```powershell
-powershell -File scripts\build-installer.ps1 -Version 0.0.1-beta1
-# dist\zepi-0.0.1-beta1-setup.exe
-```
+For a built dev bundle, use `npm run smoke -- --root <dev-bundle>` (`--full` adds preview/shell
+checks). An installed copy or a portable ZIP is not a smoke-test target: it lacks the dev modules
+and fixtures. Run `prepare` before checking or testing modified Rust overlay code.
 
-The script stages three sources (the repository, `zepi-build\release-fast\zepi.exe` and
-`.local\payload`) and runs Inno Setup (`installer/zepi.iss`). No machine-specific paths are
-committed: everything derives from the repository location. Staging is removed after the build
-(`-KeepStaging` keeps it).
+If linking fails with `os error 5`, close the running `zepi.exe`. For `LNK1318 PDB LIMIT`, check
+free space in the target directory. `powershell -File scripts\prune-deps.ps1 -DryRun` estimates how
+much space stale build artifacts occupy before you decide whether to remove them.
 
-Package the `stable` channel. The Start menu and desktop shortcuts use `Zepi-Editor-Stable`,
-matching `release_channel::app_identifier()` in the installed executable. If an older taskbar
-pin still produces a second icon, unpin it and pin Zepi again from the Start menu.
+## Packaging
 
-## Tests
-
-```powershell
-npm run test:acp        # ACP adapter
-npm run test:runtime    # pi runtime: extensions, settings, browser
-scripts\win-check.cmd   # cargo check -p zed --bin zepi
-```
-
-## Common pitfalls
-
-- Editing `native/overlay` without `prepare` ships the old copy inside the exe.
-- `LNK1318 PDB LIMIT` means the disk is full; `os error 5` during linking means `zepi.exe` is running.
-- A clean build of the vendor crates with 6 parallel rustc processes can run out of memory: set
-  `ZEPI_JOBS=3`.
-- `deploy-bundle.ps1` will not start the new build while an old process is alive (single-instance
-  hands the window to it) — close it manually.
+`scripts\build-installer.ps1` stages a Windows bundle from the repository, the built editor and
+agent, and `.local\payload\python`. It reads the version from `PRODUCT_VERSION` and prefers the
+`release-installer` build (`win-build.cmd installer`), falling back to `release-fast`. Use the
+`stable` channel for a release so the executable's AppUserModelID matches the shortcuts. Inno
+Setup produces `dist\zepi-<version>-setup.exe`; `-Zip` builds a portable archive instead.
