@@ -9,11 +9,20 @@ All notable changes to Zepi are documented here. The format follows
 ### Changed
 
 - Updated the Windows build guide for the compiled agent, on-demand browse setup, and dev-bundle checks.
+- The shared Office skill focuses on choosing the right skill, running the bundled Python, preserving
+  source files, and extracting PDF text. The Excel skill separates formula, value, and layout checks
+  and tells agents to save workbooks with charts to a new path.
 
 ### Fixed
 
 - Office skills now report when the bundled Python executable is missing instead of trying a broken
   path or falling back to system Python. Native Office viewers and PNG rendering still work without it.
+- Word skill examples replace a placeholder without rewriting its entire paragraph and no longer
+  suggest merging documents by copying body XML that can lose images or links.
+- Office QA uses the path of the running Zepi executable, including in dev builds, and checks the
+  PNGs listed in the render result without falling back to another renderer.
+- `zepi office render --pages` rejects out-of-range pages, slides, and sheets before rendering. A
+  request that produces no images is now an error rather than a successful result.
 
 ## [0.0.8] - 2026-11-23
 
