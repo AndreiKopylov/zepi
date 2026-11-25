@@ -70,6 +70,7 @@ function watchModelsFile(paths: string[], onChange: () => Promise<void>) {
 }
 
 export async function startZepiAgent(agentDir: string, sessionDir: string, stream?: Stream, modelRuntime?: ModelRuntime) {
+  const zedConfigDir = process.env.ZEPI_ZED_CONFIG_DIR;
   const runtime = modelRuntime ?? await ModelRuntime.create({
     authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), allowModelNetwork: false,
   });
@@ -139,6 +140,11 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
           const hasOfficePython = python && (await stat(python).catch(() => undefined))?.isFile();
           const append = options.resourceLoader.getAppendSystemPrompt.bind(options.resourceLoader);
           options.resourceLoader.getAppendSystemPrompt = () => [...append(),
+            "Zepi uses Zed for the editor UI and pi for the coding agent. The paths below are Zepi's user-level configuration, not project settings.",
+            `pi settings, models, and extensions are under ${agentDir} (settings.json, models.json, extensions/).`,
+            zedConfigDir
+              ? `Zed editor settings and keybindings are under ${zedConfigDir} (settings.json, keymap.json).`
+              : "Zed's configuration directory was not provided by the editor. Do not guess it from standalone Zed defaults.",
             "Before writing code for an Office file, read the matching skill: `.docx` uses `zepi-docx`, `.xlsx` uses `zepi-xlsx`, `.pptx` uses `zepi-deck-build` and `zepi-deck-design`, and PDF text extraction uses `zepi-office-docs`. For visual checks of Word, Excel and PowerPoint files, follow `zepi-office-qa`: use the native renderer and inspect the PNGs. If it is unavailable, report that visual verification could not be done; do not guess the path or use LibreOffice or Microsoft Office.",
             "If edit reports that the text was not found, re-read the file and retry against the current contents; writes always land on disk, so a missing match means stale text, never a change waiting in a buffer.",
             "PowerShell has no heredocs (<<EOF, python - <<'PY') and no cmd flags such as dir /b. Write the script to a real file with the write tool, then invoke the appropriate interpreter on that file.",

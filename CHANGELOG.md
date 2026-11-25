@@ -13,6 +13,8 @@ All notable changes to Zepi are documented here. The format follows
   while still sending the selected content to the agent.
 - Word and PowerPoint attach the selected region as an image with a preview, not as a temporary
   file path.
+- The agent receives the active Zed and pi configuration paths in its system prompt, so it can
+  point users to the right editor, keybinding, model, and extension settings.
 
 ### Fixed
 
