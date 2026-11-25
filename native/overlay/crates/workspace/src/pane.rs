@@ -4688,8 +4688,8 @@ impl Render for Pane {
                                                 v_flex()
                                                     .items_center()
                                                     .gap_2()
-                                                    .child(Label::new("Understand. Create. Evolve.").color(Color::Muted))
-                                                    .child(Label::new("Open a file to explore your code.").size(LabelSize::Small).color(Color::Muted)),
+                                                    .child(Label::new("Start with a file").color(Color::Muted))
+                                                    .child(Label::new("Explore code, documents, spreadsheets, or slides.").size(LabelSize::Small).color(Color::Muted)),
                                             )
                                             .child(
                                                 Button::new("zepi-open-file", "Open File")

@@ -16,6 +16,8 @@ pub struct CaptureMetadata {
     version: u8,
     pub unsaved: bool,
     pub summary: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub office_location: Option<String>,
 }
 
 impl CaptureMetadata {
@@ -24,8 +26,24 @@ impl CaptureMetadata {
             version: 1,
             unsaved,
             summary,
+            office_location: None,
         }
     }
+
+    pub(crate) fn office(location: String) -> Self {
+        Self {
+            office_location: Some(location),
+            ..Self::new(false, false)
+        }
+    }
+
+    pub(crate) fn to_meta(&self) -> agent_client_protocol::v1::schema::Meta {
+        agent_client_protocol::v1::schema::Meta::from_iter([(
+            "zepiReference".into(),
+            serde_json::to_value(self).unwrap(),
+        )])
+    }
+
     pub fn from_meta(meta: Option<&agent_client_protocol::v1::schema::Meta>) -> Option<Self> {
         let value: Self = serde_json::from_value(meta?.get("zepiReference")?.clone()).ok()?;
         (value.version == 1).then_some(value)
@@ -197,7 +215,9 @@ impl ReferenceSnapshot {
             editor.set_read_only(true);
             editor
         });
-        let path = source(&uri).map(|(path, _)| path);
+        let path = source(&uri)
+            .filter(|_| capture.as_ref().is_none_or(|capture| capture.office_location.is_none()))
+            .map(|(path, _)| path);
         let status = if path.is_some() {
             ReferenceStatus::Loading
         } else {
@@ -331,17 +351,20 @@ impl Render for ReferenceSnapshot {
                         )
                         .size(LabelSize::Small),
                     )
-                    .when_some(self.capture.as_ref(), |this, capture| {
-                        this.child(
-                            Label::new(if capture.unsaved {
-                                "Captured from unsaved editor content"
-                            } else {
-                                "Captured from saved editor content"
-                            })
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                        )
-                    })
+                    .when_some(
+                        self.capture.as_ref().filter(|capture| capture.office_location.is_none()),
+                        |this, capture| {
+                            this.child(
+                                Label::new(if capture.unsaved {
+                                    "Captured from unsaved editor content"
+                                } else {
+                                    "Captured from saved editor content"
+                                })
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                            )
+                        },
+                    )
                     .child(
                         Label::new(self.status.label())
                             .size(LabelSize::Small)

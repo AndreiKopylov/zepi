@@ -66,6 +66,16 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
+pub(crate) fn place_region_toolbar(anchor: Point<Pixels>, toolbar: gpui::Div) -> gpui::Div {
+    ui::h_flex()
+        .absolute()
+        .left_0()
+        .right(px(16.)) // Keep the scrollbar hit area clear.
+        .top(anchor.y)
+        .child(div().w(anchor.x.max(px(0.))).min_w_0().flex_shrink_1())
+        .child(toolbar.flex_none().max_w_full().flex_wrap())
+}
+
 fn raster_for(zoom: f64) -> f64 {
     (((zoom * BASE_SUPERSAMPLE) * 2.0).round() / 2.0).clamp(0.5, 4.0)
 }
@@ -566,80 +576,17 @@ impl SlidesView {
             .join("\n")
     }
 
-    fn region_image(&self, region: Region, _cx: &App) -> Option<gpui::Image> {
+    fn region_image(&self, region: Region, cx: &App) -> Option<gpui::Image> {
         let key = raster_key(self.zoom);
-        let raster = raster_for(self.zoom);
         let image = self.cache.get(&(region.slide, key))?;
-        let decoded = image::load_from_memory(&image.bytes).ok()?;
-        let (x0, y0, x1, y1) = region.norm();
-        let cx0 = (x0 as f64 * raster) as u32;
-        let cy0 = (y0 as f64 * raster) as u32;
-        let cw = ((x1 - x0) as f64 * raster) as u32;
-        let ch = ((y1 - y0) as f64 * raster) as u32;
-        let (iw, ih) = (decoded.width(), decoded.height());
-        if cx0 >= iw || cy0 >= ih || cw == 0 || ch == 0 {
-            return None;
-        }
-        let cropped = decoded.crop_imm(cx0, cy0, cw.min(iw - cx0), ch.min(ih - cy0));
-        let mut bytes = Vec::new();
-        cropped
-            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
-            .ok()?;
-        Some(gpui::Image {
-            format: ImageFormat::Png,
-            bytes,
-            id: 1 << 62
-                | (self.image_tag as u64 & 0x3FFF) << 48
-                | (self.raster_gen as u64 & 0xFFFF) << 32
-                | (region.slide as u64 & 0xFF_FFFF) << 8
-                | key as u64 & 0xFF,
-        })
+        let size = self.item.read(cx).pres.as_ref()?.slide_size;
+        crate::crop_office_region(&image.bytes, region.norm(), (size.width, size.height))
     }
 
-    fn send_text_to_agent(&self, text: &str, window: &mut Window, cx: &mut App) {
-        let Some(workspace) = window.root::<Workspace>().flatten().or_else(|| {
-            window.root::<workspace::MultiWorkspace>().flatten().and_then(|multi| {
-                Some(multi.read(cx).workspace().clone())
-            })
-        }) else {
-            log::error!("slides_viewer send: no workspace root");
-            return;
-        };
-        let Some(panel) = workspace.read(cx).panel::<agent_ui::AgentPanel>(cx) else {
-            log::error!("slides_viewer send: no agent panel");
-            return;
-        };
-        let panel_ref = panel.read(cx);
-        let Some(conversation) = panel_ref
-            .visible_conversation_view()
-            .or_else(|| panel_ref.active_conversation_view())
-            .cloned() else {
-            log::error!("slides_viewer send: no active conversation");
-            return;
-        };
-        let Some(thread_view) = conversation.read(cx).active_thread().cloned() else {
-            log::error!("slides_viewer send: no root thread view");
-            return;
-        };
-        thread_view.update(cx, |thread_view, cx| {
-            thread_view
-                .message_editor
-                .update(cx, |editor, cx| editor.zepi_append_text(text, window, cx));
-        });
-        log::info!("slides_viewer send: appended {} chars to composer", text.len());
-    }
-
-    fn source_note(&self, slide: usize, region: Option<(f32, f32, f32, f32)>, cx: &App) -> String {
+    fn source_note(&self, slide: usize, cx: &App) -> String {
         let path = self.item.read(cx).abs_path.display();
         let total = self.slide_count(cx);
-        match region {
-            Some((x0, y0, x1, y1)) => format!(
-                "\n[source: {path} | slide {}/{} | region ({x0:.0},{y0:.0})-({x1:.0},{y1:.0}) pt]",
-                slide + 1,
-                total
-            ),
-            None => format!("\n[source: {path} | slide {}/{}]", slide + 1, total),
-        }
+        format!("\n[source: {path} | slide {}/{}]", slide + 1, total)
     }
 
     fn set_zoom(&mut self, zoom: f64, cx: &mut Context<Self>) {
@@ -824,35 +771,33 @@ impl SlidesView {
     }
 
     fn send_slide_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let region_text = self.region.map(|region| (region.slide, self.region_text(region, cx)));
-        let (slide, text) = match region_text {
-            // a sliver or empty selection must not swallow the send
-            Some((slide, text)) if !text.trim().is_empty() => (slide, text),
-            _ => {
-                let ix = self
-                    .region
-                    .map(|region| region.slide)
-                    .unwrap_or_else(|| self.center_slide(cx));
-                let blocks = self.blocks_for(ix, cx);
-                cx.notify();
-                (
-                    ix,
-                    blocks
-                        .iter()
-                        .map(|block| block.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                )
+        if let Some(region) = self.region {
+            let text = self.region_text(region, cx);
+            if text.trim().is_empty() {
+                return;
             }
-        };
-        if text.is_empty() {
+            let path = self.item.read(cx).abs_path.clone();
+            let location = format!("slide {}", region.slide + 1);
+            let content = crate::OfficeContent::Selection { path, location, text };
+            if crate::send_office_to_agent(content, window, cx) {
+                self.region = None;
+                cx.notify();
+            }
             return;
         }
-        let note = self.source_note(slide, None, cx);
-        self.send_text_to_agent(&format!("{text}{note}"), window, cx);
-        // the selection served its purpose - drop the outline
-        self.region = None;
-        cx.notify();
+
+        let slide = self.center_slide(cx);
+        let blocks = self.blocks_for(slide, cx);
+        let text = blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.is_empty() {
+            let note = self.source_note(slide, cx);
+            let content = crate::OfficeContent::Text(format!("{text}{note}"));
+            crate::send_office_to_agent(content, window, cx);
+        }
     }
 
     pub fn deploy_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -881,24 +826,13 @@ impl SlidesView {
         let Some(image) = self.region_image(region, cx) else {
             return;
         };
-        let dir = crate::temp_dir();
-        if std::fs::create_dir_all(&dir).is_err() {
-            return;
+        let path = self.item.read(cx).abs_path.clone();
+        let location = format!("slide {}", region.slide + 1);
+        let content = crate::OfficeContent::Image { path, location, image };
+        if crate::send_office_to_agent(content, window, cx) {
+            self.region = None;
+            cx.notify();
         }
-        let file = dir.join(format!(
-            "slide-{}-{}.png",
-            region.slide,
-            Instant::now().elapsed().as_millis()
-        ));
-        if std::fs::write(&file, &image.bytes).is_err() {
-            return;
-        }
-        let (x0, y0, x1, y1) = region.norm();
-        let note = self.source_note(region.slide, Some((x0, y0, x1, y1)), cx);
-        let text = format!("[slide image: {}]{note}", file.display());
-        self.send_text_to_agent(&text, window, cx);
-        self.region = None;
-        cx.notify();
     }
 
     fn step_match(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -1508,14 +1442,13 @@ impl gpui::Render for SlidesView {
                         }
                     }),
             );
-            region_bubble = Some(
-                div()
-                    .absolute()
-                    // bubble follows the cursor at the end of the selection
-                    .left(origin.x + px(region.x1 * zoom) - px(4.))
-                    .top((origin.y + px(region.y1 * zoom) - px(28.)).max(origin.y))
-                    .child(bubble),
-            );
+            region_bubble = Some(place_region_toolbar(
+                gpui::point(
+                    origin.x + px(region.x1 * zoom) - px(4.),
+                    (origin.y + px(region.y1 * zoom) - px(28.)).max(origin.y),
+                ),
+                bubble,
+            ));
         }
 
         if self.focus_on_first_render {
@@ -2040,7 +1973,34 @@ pub(crate) fn scan_char_matches(text: &str, query_lower: &str) -> Vec<(usize, us
 
 #[cfg(test)]
 mod tests {
-    use super::scan_char_matches;
+    use super::{place_region_toolbar, scan_char_matches};
+    use gpui::{ParentElement, Styled, TestAppContext, div, point, px, size};
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui::test]
+    fn region_toolbar_stays_inside_viewer(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        for (width, anchor, left, right, height) in [
+            (320., 50., 50., 146., 20.),
+            (240., 230., 128., 224., 20.),
+            (80., 75., 0., 64., 40.),
+        ] {
+            let bounds = Rc::new(Cell::new(None));
+            cx.draw(point(px(0.), px(0.)), size(px(width), px(100.)), |_, _| {
+                let toolbar = ui::h_flex().children((0..4).map(|_| div().w(px(24.)).h(px(20.))));
+                div().size_full().relative().child(
+                    place_region_toolbar(point(px(anchor), px(10.)), toolbar)
+                        .on_children_prepainted({
+                            let bounds = bounds.clone();
+                            move |children, _, _| bounds.set(Some(children[1]))
+                        }),
+                )
+            });
+            let bounds = bounds.get().unwrap();
+            assert_eq!((bounds.left(), bounds.right()), (px(left), px(right)));
+            assert_eq!(bounds.size.height, px(height));
+        }
+    }
 
     #[test]
     fn ascii_basics() {

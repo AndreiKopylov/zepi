@@ -5378,8 +5378,17 @@ impl Sidebar {
                     task.await?;
                 }
                 this.update_in(cx, |this, window, cx| {
-                    panel.update(cx, |panel, cx| panel.remove_thread(thread_id, window, cx));
-                    ThreadMetadataStore::global(cx).update(cx, |store, cx| store.delete(thread_id, cx));
+                    panel.update(cx, |panel, cx| panel.remove_deleted_thread(thread_id, window, cx));
+                    if this
+                        .active_entry
+                        .as_ref()
+                        .is_some_and(|active| active.is_active_thread(&thread_id))
+                    {
+                        this.active_entry = None;
+                    }
+                    if this.pending_thread_activation == Some(thread_id) {
+                        this.pending_thread_activation = None;
+                    }
                     this.update_entries(cx);
                     cx.notify();
                 })?;

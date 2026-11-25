@@ -23,6 +23,7 @@ export async function resolveDeps(partial = {}) {
         create: SessionManager.create,
         open: SessionManager.open,
         forkFrom: SessionManager.forkFrom,
+        findById: SessionManager.findById,
         list: SessionManager.list,
         listAll: (sessionDir) => SessionManager.listAll(sessionDir),
     };

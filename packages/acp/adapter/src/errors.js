@@ -52,6 +52,8 @@ export function redactedDiagnostics(diagnostics) {
 }
 export function adapterError(kind, extras = {}) {
     const data = { errorKind: kind, message: LABELS[kind] };
+    if (["auth_error", "rate_limit", "billing_error", "provider_error"].includes(kind))
+        data.zepiProviderError = extras.reason ?? kind;
     if ("server" in extras)
         data.server = extras.server;
     if ("field" in extras)
@@ -83,6 +85,7 @@ export function classifyTerminal(message) {
             item.type,
             item.error?.name ?? "",
             item.error?.message ?? "",
+            item.error?.code ?? "",
         ]),
     ]
         .join("\n")
@@ -93,10 +96,13 @@ export function classifyTerminal(message) {
     if (/quota|billing|insufficient|payment|credit|exceeded your/.test(haystack)) {
         return adapterError("billing_error");
     }
-    if (/\b429\b|rate limit|too many requests|overloaded/.test(haystack)) {
+    if (/\b429\b|rate limit|too many requests/.test(haystack)) {
         return adapterError("rate_limit");
     }
-    return adapterError("provider_error", { details: redactedDiagnostics(diagnostics) });
+    const networkCode = haystack.match(/\b(?:econnrefused|econnreset|etimedout|enotfound|eai_again)\b/)?.[0];
+    const reason = networkCode ?? (/\b503\b|overloaded|server_busy|servers? (?:are )?(?:currently )?busy/.test(haystack)
+        ? "provider_unavailable" : undefined);
+    return adapterError("provider_error", { reason, details: redactedDiagnostics(diagnostics) });
 }
 export function unexpectedError(error, terminal) {
     console.error("pi-acp internal error:", error);

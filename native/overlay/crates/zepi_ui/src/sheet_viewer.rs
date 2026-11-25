@@ -991,62 +991,18 @@ impl SheetView {
         lines.join("\n")
     }
 
-    fn selection_text(&self, cx: &App) -> String {
+    fn send_selection(&self, window: &mut Window, cx: &mut App) {
         let item = self.item.read(cx);
-        let Some(wb) = item.wb.as_ref() else {
-            return String::new();
-        };
-        let Some(sheet) = wb.sheets.get(self.sheet) else {
-            return String::new();
+        let Some(sheet) = item.wb.as_ref().and_then(|wb| wb.sheets.get(self.sheet)) else {
+            return;
         };
         let (r0, r1, c0, c1) = self.sel_range();
-        let body = self.tsv_of_range(r0, r1, c0, c1, cx);
-        let path = item.abs_path.display();
-        let name = sheet.name.clone();
-        format!(
-            "{} :: {} :: {}:{}\n{}",
-            path,
-            name,
-            cell_ref_text(r0, c0),
-            cell_ref_text(r1, c1),
-            body
-        )
-    }
-
-    fn send_selection(&self, window: &mut Window, cx: &mut App) {
-        let text = self.selection_text(cx);
-        if text.trim().is_empty() {
-            return;
-        }
-        let Some(workspace) = window.root::<Workspace>().flatten().or_else(|| {
-            window.root::<workspace::MultiWorkspace>().flatten().and_then(|multi| {
-                Some(multi.read(cx).workspace().clone())
-            })
-        }) else {
-            log::error!("sheet_viewer send: no workspace root");
-            return;
-        };
-        let Some(panel) = workspace.read(cx).panel::<agent_ui::AgentPanel>(cx) else {
-            log::error!("sheet_viewer send: no agent panel");
-            return;
-        };
-        let panel_ref = panel.read(cx);
-        let Some(conversation) = panel_ref
-            .visible_conversation_view()
-            .or_else(|| panel_ref.active_conversation_view())
-            .cloned() else {
-            log::error!("sheet_viewer send: no active conversation");
-            return;
-        };
-        let Some(thread_view) = conversation.read(cx).active_thread().cloned() else {
-            log::error!("sheet_viewer send: no root thread view");
-            return;
-        };
-        thread_view.update(cx, |thread_view, cx| {
-            thread_view
-                .message_editor
-                .update(cx, |editor, cx| editor.zepi_append_text(&text, window, cx));
-        });
+        let range = RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
+        let location = format!("{}!{range}", sheet.name);
+        let path = item.abs_path.clone();
+        let text = self.tsv_of_range(r0, r1, c0, c1, cx);
+        let content = crate::OfficeContent::Selection { path, location, text };
+        crate::send_office_to_agent(content, window, cx);
     }
 
     fn push_op(&mut self, op: SheetOp) {

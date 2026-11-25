@@ -502,19 +502,22 @@ export class PiAcpAgent {
         const task = (async () => {
             try {
                 this.gate(opening);
-                const infos = await this.deps.sessions.list(context.params.cwd, this.deps.sessionDir);
+                const { cwd, sessionId } = context.params;
+                const { sessions, sessionDir } = this.deps;
+                const path = sessions.findById
+                    ? sessions.findById(cwd, sessionId, sessionDir)
+                    : (await sessions.list(cwd, sessionDir)).find(({ id }) => id === sessionId)?.path;
                 this.gate(opening);
-                const info = infos.find(({ id }) => id === context.params.sessionId);
-                if (!info)
+                if (!path)
                     throw adapterError("unknown_session");
                 let manager;
                 try {
-                    manager = this.deps.sessions.open(info.path, this.deps.sessionDir);
+                    manager = sessions.open(path, sessionDir);
                 }
                 catch {
                     throw adapterError("session_corrupt");
                 }
-                const session = await this.construct(opening, manager, context.params.cwd, context.client, context.params.mcpServers ?? [], replay, undefined, systemPrompt);
+                const session = await this.construct(opening, manager, cwd, context.client, context.params.mcpServers ?? [], replay, undefined, systemPrompt);
                 return { configOptions: session.configOptions(), modes: null };
             }
             catch (error) {

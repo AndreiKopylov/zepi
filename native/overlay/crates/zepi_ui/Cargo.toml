@@ -59,6 +59,7 @@ workspace.workspace = true
 
 [dev-dependencies]
 db = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true

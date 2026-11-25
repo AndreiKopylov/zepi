@@ -175,18 +175,23 @@ impl From<anyhow::Error> for ThreadError {
 impl From<&anyhow::Error> for ThreadError {
     fn from(error: &anyhow::Error) -> Self {
         let protocol_error = ProtocolErrorInfo::from_error(error);
+        let zepi_provider_failure = protocol_error
+            .and_then(|error| error.data?.get("zepiProviderError")?.as_str())
+            .and_then(acp_thread::zepi_provider_error_message);
         if error.is::<MaxOutputTokensError>() {
             Self::MaxOutputTokens
         } else if error.is::<NoModelConfiguredError>() {
             Self::NoModelSelected
         } else if let Some(auth_error) = AuthRequired::from_error(error) {
             Self::AuthenticationRequired(
-                auth_error
-                    .description
-                    .clone()
+                zepi_provider_failure
+                    .map(str::to_owned)
+                    .or_else(|| auth_error.description.clone())
                     .unwrap_or_else(|| auth_error.to_string())
                     .into(),
             )
+        } else if let Some(message) = zepi_provider_failure {
+            Self::ProviderRejection { message: message.into() }
         } else if let Some(lm_error) = error.downcast_ref::<LanguageModelCompletionError>() {
             use LanguageModelCompletionError::*;
             match lm_error {
@@ -2244,8 +2249,9 @@ impl ConversationView {
             AcpThreadEvent::ElicitationResponded(_) => {}
             AcpThreadEvent::Retry(retry) => {
                 if let Some(active) = self.thread_view(&session_id) {
-                    active.update(cx, |active, _cx| {
-                        active.thread_retry_status = Some(retry.clone());
+                    active.update(cx, |active, cx| {
+                        active.thread_retry_status = retry.clone();
+                        cx.notify();
                     });
                 }
             }
@@ -4769,6 +4775,63 @@ pub(crate) mod tests {
     }
 
     #[gpui::test]
+    async fn test_zepi_collapsed_tool_call_does_not_move_the_response(cx: &mut TestAppContext) {
+        init_test(cx);
+        let connection = StubAgentConnection::new()
+            .with_agent_id(AgentId::new("zepi-pi"))
+            .with_receipt_submissions(true);
+        let (conversation, cx) = setup_conversation_view(StubAgentServer::zepi(connection), cx).await;
+        cx.simulate_resize(size(px(800.), px(480.)));
+        add_to_workspace_with_size(conversation.clone(), true, cx);
+        let (thread, list) = active_thread(&conversation, cx)
+            .read_with(cx, |view, _| (view.thread.clone(), view.list_state.clone()));
+        thread.update(cx, |thread, cx| {
+            thread
+                .update_session_state(
+                    acp_v2::StateUpdate::Running(acp_v2::RunningStateUpdate::new()),
+                    cx,
+                )
+                .unwrap();
+            for update in [
+                acp_v1::SessionUpdate::UserMessageChunk(acp_v1::ContentChunk::new(
+                    "Inspect a file".into(),
+                )),
+                acp_v1::SessionUpdate::ToolCall(
+                    acp_v1::ToolCall::new("first", "Read file")
+                        .status(acp_v1::ToolCallStatus::Completed),
+                ),
+                acp_v1::SessionUpdate::AgentMessageChunk(acp_v1::ContentChunk::new(
+                    "A line of the response.\n\n".repeat(30).into(),
+                )),
+            ] {
+                thread.handle_session_update(update, cx).unwrap();
+            }
+        });
+        cx.run_until_parked();
+        let response = thread.read_with(cx, |thread, _| thread.entries().len() - 1);
+        assert!(list.is_following_tail());
+        assert_ne!(list.logical_scroll_top(), ListOffset::default());
+        let response_top = list.bounds_for_item(response).unwrap().top();
+
+        thread.update(cx, |thread, cx| {
+            thread
+                .handle_session_update(
+                    acp_v1::SessionUpdate::ToolCall(
+                        acp_v1::ToolCall::new("second", "Read another file")
+                            .status(acp_v1::ToolCallStatus::InProgress),
+                    ),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(thread.entries().len(), response + 2);
+        });
+        cx.run_until_parked();
+
+        assert!(list.is_following_tail());
+        assert_eq!(list.bounds_for_item(response).unwrap().top(), response_top);
+    }
+
+    #[gpui::test]
     async fn test_zepi_activity_headers_toggle_from_the_label_area(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
@@ -4984,6 +5047,19 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_zepi_provider_failure_uses_safe_description() {
+        let error = anyhow!(acp_v2::Error::internal_error().data(json!({
+            "zepiProviderError": "econnrefused",
+            "message": "private-response",
+        })));
+        assert!(matches!(
+            ThreadError::from(&error),
+            ThreadError::ProviderRejection { message }
+                if message == "Could not reach the model provider: connection refused (ECONNREFUSED)."
+        ));
     }
 
     #[test]

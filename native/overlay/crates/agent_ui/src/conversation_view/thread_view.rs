@@ -4455,36 +4455,36 @@ impl ThreadView {
 
     pub fn render_thread_retry_status_callout(&self, cx: &mut Context<Self>) -> Option<Callout> {
         let state = self.thread_retry_status.as_ref()?;
+        let callout = Callout::new()
+            .icon(IconName::Warning)
+            .severity(Severity::Warning)
+            .title(state.last_error.clone())
+            .dismiss_action(
+                IconButton::new("dismiss-retry-status", IconName::Close)
+                    .icon_size(IconSize::Small)
+                    .tooltip(Tooltip::text("Dismiss"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.thread_retry_status = None;
+                        cx.notify();
+                    })),
+            );
 
         if let Some(fallback_model) = acp_thread::refusal_fallback_model_from_meta(&state.meta) {
-            return Some(
-                Callout::new()
-                    .icon(IconName::Warning)
-                    .severity(Severity::Warning)
-                    .title(state.last_error.clone())
-                    .description(format!("Retrying with {fallback_model}"))
-                    .dismiss_action(
-                        IconButton::new("dismiss-refusal-fallback", IconName::Close)
-                            .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Dismiss"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.thread_retry_status = None;
-                                cx.notify();
-                            })),
-                    ),
-            );
+            return Some(callout.description(format!("Retrying with {fallback_model}")));
         }
 
         let next_attempt_in = state
             .duration
             .saturating_sub(Instant::now().saturating_duration_since(state.started_at));
-        if next_attempt_in.is_zero() {
+        if next_attempt_in.is_zero() && self.agent_id.as_ref() != "zepi-pi" {
             return None;
         }
 
-        let next_attempt_in_secs = next_attempt_in.as_secs() + 1;
+        let next_attempt_in_secs = next_attempt_in.as_secs_f64().ceil() as u64;
 
-        let retry_message = if state.max_attempts == 1 {
+        let retry_message = if next_attempt_in.is_zero() {
+            format!("Retrying (Attempt {} of {})…", state.attempt, state.max_attempts)
+        } else if state.max_attempts == 1 {
             if next_attempt_in_secs == 1 {
                 "Retrying. Next attempt in 1 second.".to_string()
             } else {
@@ -4503,11 +4503,8 @@ impl ThreadView {
         };
 
         Some(
-            Callout::new()
+            callout
                 .border_position(self.callout_border_position())
-                .icon(IconName::Warning)
-                .severity(Severity::Warning)
-                .title(state.last_error.clone())
                 .description(retry_message),
         )
     }
@@ -8074,6 +8071,8 @@ impl ThreadView {
         )
         .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
         .flex_grow_1()
+        // Keep the bottom gap when a collapsed tool call becomes the last entry.
+        .when(self.agent_id.as_ref() == "zepi-pi", |list| list.pb(rems_from_px(10.)))
     }
 
     /// A turn's execution is one disclosure. Inner thinking/tool disclosures keep
@@ -8393,7 +8392,9 @@ impl ThreadView {
                     v_flex()
                         .px_5()
                         .py_1p5()
-                        .when(is_thread_bottom, |this| this.pb_4())
+                        .when(is_thread_bottom && self.agent_id.as_ref() != "zepi-pi", |this| {
+                            this.pb_4()
+                        })
                         .w_full()
                         .text_ui(cx)
                         .child(message_body)
@@ -15027,13 +15028,13 @@ impl Render for ThreadView {
                                                 .color(Color::Muted),
                                         )
                                         .child(
-                                            Label::new("Start with your code")
+                                            Label::new("What are you working on?")
                                                 .size(LabelSize::Large),
                                         ),
                                 )
                                 .child(
                                     Label::new(
-                                        "Describe your goal, or add a code selection to the conversation.",
+                                        "Describe a task or add context from a file or selection.",
                                     )
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),

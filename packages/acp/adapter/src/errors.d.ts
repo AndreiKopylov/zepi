@@ -22,6 +22,7 @@ export declare function redactedDiagnostics(diagnostics: readonly DiagnosticLike
     timestamp: number;
 }[] | undefined;
 type DiagnosticDetails = {
+    reason?: string;
     details?: Array<{
         type: string;
         timestamp: number;

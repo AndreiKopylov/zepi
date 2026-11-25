@@ -323,6 +323,11 @@ fn main() {
         }
     }
 
+    if std::env::var_os("ZEPI_ROOT").is_some() {
+        // SAFETY: startup is still single-threaded, before GPUI starts.
+        unsafe { std::env::set_var("ZEPI_ZED_CONFIG_DIR", paths::config_dir()) };
+    }
+
     let file_errors = init_paths();
     if !file_errors.is_empty() {
         files_not_created_on_launch(file_errors);
