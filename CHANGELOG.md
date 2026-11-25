@@ -16,6 +16,7 @@ All notable changes to Zepi are documented here. The format follows
 - The agent receives the active Zed and pi configuration paths in its system prompt, so it can
   point users to the right editor, keybinding, model, and extension settings.
 - Reopening a saved pi session finds it by ID from journal headers without loading other chats' histories.
+- Empty editor and new chat screens now mention files and selections instead of assuming you're working with code.
 
 ### Fixed
 
@@ -27,6 +28,9 @@ All notable changes to Zepi are documented here. The format follows
   If the request still fails, the chat shows a readable error instead of raw protocol JSON.
 - Retry warnings can be dismissed without stopping pi from retrying or hiding future warnings.
 - Chat history no longer jumps backward when a collapsed tool call follows a streaming response.
+- Deleting the open thread leaves the agent panel without a selected chat or a composer. The empty
+  panel shows the workspace name and a **New Thread** button; deleting another thread leaves the
+  current chat open.
 
 ## [0.0.9] - 2026-11-24
 

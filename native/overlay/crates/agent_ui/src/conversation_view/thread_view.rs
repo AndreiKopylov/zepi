@@ -15028,13 +15028,13 @@ impl Render for ThreadView {
                                                 .color(Color::Muted),
                                         )
                                         .child(
-                                            Label::new("Start with your code")
+                                            Label::new("What are you working on?")
                                                 .size(LabelSize::Large),
                                         ),
                                 )
                                 .child(
                                     Label::new(
-                                        "Describe your goal, or add a code selection to the conversation.",
+                                        "Describe a task or add context from a file or selection.",
                                     )
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),

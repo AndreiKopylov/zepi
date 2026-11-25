@@ -1071,6 +1071,7 @@ pub struct AgentPanel {
     connection_store: Entity<AgentConnectionStore>,
     focus_handle: FocusHandle,
     base_view: BaseView,
+    waiting_for_thread_selection: bool,
     last_created_entry_kind: AgentPanelEntryKind,
     draft_thread: Option<Entity<ConversationView>>,
     retained_threads: HashMap<ThreadId, Entity<ConversationView>>,
@@ -1480,6 +1481,7 @@ impl AgentPanel {
         let panel = Self {
             workspace_id,
             base_view,
+            waiting_for_thread_selection: false,
             last_created_entry_kind: AgentPanelEntryKind::Thread,
             workspace,
             user_store,
@@ -3300,6 +3302,18 @@ impl AgentPanel {
         self.remove_thread_internal(id, false, window, cx);
     }
 
+    pub fn remove_deleted_thread(
+        &mut self,
+        id: ThreadId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_thread_id(cx) == Some(id) {
+            self.waiting_for_thread_selection = true;
+        }
+        self.remove_thread_without_activating_draft(id, window, cx);
+    }
+
     fn remove_thread_internal(
         &mut self,
         id: ThreadId,
@@ -4378,6 +4392,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         let old_view = std::mem::replace(&mut self.base_view, new_view);
+        self.waiting_for_thread_selection = false;
         self.retain_running_thread(old_view, cx);
 
         if let BaseView::AgentThread { conversation_view } = &self.base_view {
@@ -5245,7 +5260,7 @@ impl Panel for AgentPanel {
 
 impl AgentPanel {
     fn ensure_thread_initialized(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.base_view, BaseView::Uninitialized) {
+        if matches!(self.base_view, BaseView::Uninitialized) && !self.waiting_for_thread_selection {
             if self.pending_terminal_spawn.is_some() {
                 return;
             }
@@ -5869,6 +5884,65 @@ impl AgentPanel {
         })
     }
 
+    fn render_no_thread_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let workspace_name = self
+            .project
+            .read(cx)
+            .visible_worktrees(cx)
+            .map(|worktree| worktree.read(cx).root_name_str().to_owned())
+            .join(", ");
+
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .px_6()
+            .items_center()
+            .justify_center()
+            .bg(ConversationView::surface_background(cx))
+            .child(
+                v_flex()
+                    .max_w_full()
+                    .items_start()
+                    .gap_3()
+                    .child(
+                        h_flex()
+                            .max_w_full()
+                            .gap_2()
+                            .child(
+                                Icon::new(IconName::Folder)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                Label::new(workspace_name)
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted)
+                                    .truncate(),
+                            ),
+                    )
+                    .child(Label::new("No thread selected").size(LabelSize::Large))
+                    .child(
+                        Label::new("Open a thread from the sidebar or start a new one.")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Button::new("new-thread-after-delete", "New Thread")
+                            .start_icon(Icon::new(IconName::Plus).size(IconSize::Small))
+                            .style(ButtonStyle::Tinted(ui::TintColor::Accent))
+                            .tab_index(0isize)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.activate_new_thread(
+                                    true,
+                                    AgentThreadSource::AgentPanel,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    ),
+            )
+    }
+
     fn render_zepi_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .h(Tab::container_height(cx))
@@ -6201,7 +6275,9 @@ impl AgentPanel {
             .flex_none()
             .justify_between();
 
-        let empty_thread_title = matches!(mode, ToolbarMode::EmptyThread).then(|| {
+        let show_draft_title =
+            matches!(mode, ToolbarMode::EmptyThread) && !self.waiting_for_thread_selection;
+        let empty_thread_title = show_draft_title.then(|| {
             let custom = self
                 .active_conversation_view()
                 .and_then(|cv| cv.read(cx).root_thread_view())
@@ -6725,6 +6801,9 @@ impl Render for AgentPanel {
             .map(|parent| match self.visible_surface() {
                 VisibleSurface::Uninitialized if !self.has_open_project(cx) => {
                     parent.child(self.render_no_project_state(cx))
+                }
+                VisibleSurface::Uninitialized if self.waiting_for_thread_selection => {
+                    parent.child(self.render_no_thread_state(cx))
                 }
                 VisibleSurface::Uninitialized => parent,
                 VisibleSurface::AgentThread(conversation_view) => parent
@@ -7829,6 +7908,40 @@ mod tests {
                 panel.active_conversation_view().is_none(),
                 "activation while a terminal restore is pending should not fall back to a draft"
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_deleting_active_thread_waits_for_explicit_selection(cx: &mut TestAppContext) {
+        let (panel, mut cx) = setup_panel(cx).await;
+        panel.update_in(&mut cx, |panel, window, cx| {
+            panel.selected_agent = Agent::Stub;
+            panel.set_active(true, window, cx);
+        });
+        cx.run_until_parked();
+        crate::test_support::send_message(&panel, &mut cx);
+        let first = crate::test_support::active_thread_id(&panel, &mut cx);
+        panel.update_in(&mut cx, |panel, window, cx| panel.new_thread(&NewThread, window, cx));
+        cx.run_until_parked();
+        crate::test_support::send_message(&panel, &mut cx);
+        let second = crate::test_support::active_thread_id(&panel, &mut cx);
+        assert_ne!(first, second);
+
+        panel.update_in(&mut cx, |panel, window, cx| {
+            panel.remove_deleted_thread(first, window, cx);
+            assert_eq!(panel.active_thread_id(cx), Some(second));
+
+            panel.remove_deleted_thread(second, window, cx);
+            assert_eq!(panel.active_thread_id(cx), None);
+            panel.set_active(false, window, cx);
+            panel.set_active(true, window, cx);
+        });
+        cx.run_until_parked();
+        panel.update_in(&mut cx, |panel, window, cx| {
+            assert_eq!(panel.active_thread_id(cx), None);
+            assert!(panel.draft_thread.is_none());
+            panel.activate_new_thread(true, AgentThreadSource::AgentPanel, window, cx);
+            assert!(panel.active_thread_id(cx).is_some());
         });
     }
 
