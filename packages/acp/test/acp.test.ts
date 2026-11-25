@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { client, methods } from "@agentclientprotocol/sdk";
 import { startZepiAgent } from "../src/server.ts";
+import type { PiAcpDeps } from "../adapter/src/deps.js";
 import { fixtureModel, call, lastToolText } from "./fixture-model.ts";
 import { createExtensionCenter } from "../../runtime/src/pi/extensions.mjs";
 
@@ -127,9 +128,18 @@ test("existing ACP adapter retains sessions and delegates edits to editor buffer
     assert.ok(updates.includes(a.sessionId)&&updates.includes(b.sessionId));
     assert.equal(fixture.requests(),5);
     await connection.agent.request(methods.agent.session.close,{sessionId:a.sessionId});
+    const { sessions } = (server.agent as unknown as {deps: PiAcpDeps}).deps;
+    sessions.list = async () => assert.fail("Loading by ID must not list all session histories");
+    const otherCwd = join(cwd, "other-workspace");
+    await mkdir(otherCwd);
     replayed.length = 0;
     locations.length = 0;
-    await connection.agent.request(methods.agent.session.load,{sessionId:a.sessionId,cwd,mcpServers:[]});
+    const load = {sessionId:a.sessionId,cwd,mcpServers:[]};
+    await assert.rejects(connection.agent.request(methods.agent.session.load,{...load,cwd:otherCwd}), {
+      data: {errorKind:"unknown_session",message:"unknown session id"},
+    });
+    assert.deepEqual(replayed, []);
+    await connection.agent.request(methods.agent.session.load,load);
     assert.match(replayed.join(""), /apricot/);
     assert.match(replayed.join(""), /Updated the editor buffer/);
     assert.deepEqual(locations, [path, path], "restored file navigation must match the live turn");

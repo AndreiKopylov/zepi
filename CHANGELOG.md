@@ -15,6 +15,7 @@ All notable changes to Zepi are documented here. The format follows
   file path.
 - The agent receives the active Zed and pi configuration paths in its system prompt, so it can
   point users to the right editor, keybinding, model, and extension settings.
+- Reopening a saved pi session finds it by ID from journal headers without loading other chats' histories.
 
 ### Fixed
 

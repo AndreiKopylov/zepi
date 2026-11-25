@@ -7,6 +7,7 @@ export interface PiAcpDeps {
         create(cwd: string, sessionDir?: string, options?: NewSessionOptions): SessionManager;
         open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager;
         forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string, options?: NewSessionOptions): SessionManager;
+        findById?(cwd: string, id: string, sessionDir?: string): string | undefined;
         list(cwd: string, sessionDir?: string): Promise<SessionInfo[]>;
         listAll(sessionDir?: string): Promise<SessionInfo[]>;
     };
