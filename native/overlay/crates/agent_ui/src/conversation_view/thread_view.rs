@@ -4455,24 +4455,22 @@ impl ThreadView {
 
     pub fn render_thread_retry_status_callout(&self, cx: &mut Context<Self>) -> Option<Callout> {
         let state = self.thread_retry_status.as_ref()?;
+        let callout = Callout::new()
+            .icon(IconName::Warning)
+            .severity(Severity::Warning)
+            .title(state.last_error.clone())
+            .dismiss_action(
+                IconButton::new("dismiss-retry-status", IconName::Close)
+                    .icon_size(IconSize::Small)
+                    .tooltip(Tooltip::text("Dismiss"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.thread_retry_status = None;
+                        cx.notify();
+                    })),
+            );
 
         if let Some(fallback_model) = acp_thread::refusal_fallback_model_from_meta(&state.meta) {
-            return Some(
-                Callout::new()
-                    .icon(IconName::Warning)
-                    .severity(Severity::Warning)
-                    .title(state.last_error.clone())
-                    .description(format!("Retrying with {fallback_model}"))
-                    .dismiss_action(
-                        IconButton::new("dismiss-refusal-fallback", IconName::Close)
-                            .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Dismiss"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.thread_retry_status = None;
-                                cx.notify();
-                            })),
-                    ),
-            );
+            return Some(callout.description(format!("Retrying with {fallback_model}")));
         }
 
         let next_attempt_in = state
@@ -4505,11 +4503,8 @@ impl ThreadView {
         };
 
         Some(
-            Callout::new()
+            callout
                 .border_position(self.callout_border_position())
-                .icon(IconName::Warning)
-                .severity(Severity::Warning)
-                .title(state.last_error.clone())
                 .description(retry_message),
         )
     }
@@ -8076,6 +8071,8 @@ impl ThreadView {
         )
         .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
         .flex_grow_1()
+        // Keep the bottom gap when a collapsed tool call becomes the last entry.
+        .when(self.agent_id.as_ref() == "zepi-pi", |list| list.pb(rems_from_px(10.)))
     }
 
     /// A turn's execution is one disclosure. Inner thinking/tool disclosures keep
@@ -8395,7 +8392,9 @@ impl ThreadView {
                     v_flex()
                         .px_5()
                         .py_1p5()
-                        .when(is_thread_bottom, |this| this.pb_4())
+                        .when(is_thread_bottom && self.agent_id.as_ref() != "zepi-pi", |this| {
+                            this.pb_4()
+                        })
                         .w_full()
                         .text_ui(cx)
                         .child(message_body)

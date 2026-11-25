@@ -4775,6 +4775,63 @@ pub(crate) mod tests {
     }
 
     #[gpui::test]
+    async fn test_zepi_collapsed_tool_call_does_not_move_the_response(cx: &mut TestAppContext) {
+        init_test(cx);
+        let connection = StubAgentConnection::new()
+            .with_agent_id(AgentId::new("zepi-pi"))
+            .with_receipt_submissions(true);
+        let (conversation, cx) = setup_conversation_view(StubAgentServer::zepi(connection), cx).await;
+        cx.simulate_resize(size(px(800.), px(480.)));
+        add_to_workspace_with_size(conversation.clone(), true, cx);
+        let (thread, list) = active_thread(&conversation, cx)
+            .read_with(cx, |view, _| (view.thread.clone(), view.list_state.clone()));
+        thread.update(cx, |thread, cx| {
+            thread
+                .update_session_state(
+                    acp_v2::StateUpdate::Running(acp_v2::RunningStateUpdate::new()),
+                    cx,
+                )
+                .unwrap();
+            for update in [
+                acp_v1::SessionUpdate::UserMessageChunk(acp_v1::ContentChunk::new(
+                    "Inspect a file".into(),
+                )),
+                acp_v1::SessionUpdate::ToolCall(
+                    acp_v1::ToolCall::new("first", "Read file")
+                        .status(acp_v1::ToolCallStatus::Completed),
+                ),
+                acp_v1::SessionUpdate::AgentMessageChunk(acp_v1::ContentChunk::new(
+                    "A line of the response.\n\n".repeat(30).into(),
+                )),
+            ] {
+                thread.handle_session_update(update, cx).unwrap();
+            }
+        });
+        cx.run_until_parked();
+        let response = thread.read_with(cx, |thread, _| thread.entries().len() - 1);
+        assert!(list.is_following_tail());
+        assert_ne!(list.logical_scroll_top(), ListOffset::default());
+        let response_top = list.bounds_for_item(response).unwrap().top();
+
+        thread.update(cx, |thread, cx| {
+            thread
+                .handle_session_update(
+                    acp_v1::SessionUpdate::ToolCall(
+                        acp_v1::ToolCall::new("second", "Read another file")
+                            .status(acp_v1::ToolCallStatus::InProgress),
+                    ),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(thread.entries().len(), response + 2);
+        });
+        cx.run_until_parked();
+
+        assert!(list.is_following_tail());
+        assert_eq!(list.bounds_for_item(response).unwrap().top(), response_top);
+    }
+
+    #[gpui::test]
     async fn test_zepi_activity_headers_toggle_from_the_label_area(cx: &mut TestAppContext) {
         init_test(cx);
         let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));

@@ -25,6 +25,8 @@ All notable changes to Zepi are documented here. The format follows
   of the image at higher display scaling.
 - The chat shows why pi is retrying a model request, which attempt is next, and when it will start.
   If the request still fails, the chat shows a readable error instead of raw protocol JSON.
+- Retry warnings can be dismissed without stopping pi from retrying or hiding future warnings.
+- Chat history no longer jumps backward when a collapsed tool call follows a streaming response.
 
 ## [0.0.9] - 2026-11-24
 
