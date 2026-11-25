@@ -1519,7 +1519,15 @@ impl Render for LoadingContext {
 
         let id = ElementId::from(("loading_context", self.id));
 
-        MentionCrease::new(id, self.icon.clone(), self.label.clone())
+        let label = match self
+            .snapshot_capture
+            .as_ref()
+            .and_then(|capture| capture.office_location.as_deref())
+        {
+            Some(location) => format!("{} · {location}", self.label).into(),
+            None => self.label.clone(),
+        };
+        MentionCrease::new(id, self.icon.clone(), label)
             .mention_uri(self.mention_uri.clone())
             .workspace(self.workspace.clone())
             .is_toggled(is_in_text_selection)

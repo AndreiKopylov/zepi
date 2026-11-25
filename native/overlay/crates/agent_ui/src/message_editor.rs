@@ -36,7 +36,7 @@ use project::{
 };
 use rope::Point;
 use settings::Settings;
-use std::{cmp::min, fmt::Write, ops::Range, rc::Rc, sync::Arc};
+use std::{cmp::min, fmt::Write, ops::Range, path::PathBuf, rc::Rc, sync::Arc};
 use text::LineEnding;
 use theme_settings::ThemeSettings;
 use ui::{ContextMenu, Tooltip, prelude::*};
@@ -852,10 +852,90 @@ impl MessageEditor {
         ))
     }
 
-    /// zepi: slides viewer appends extracted slide text to the composer
     pub fn zepi_append_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.editor
             .update(cx, |editor, cx| editor.insert(text, window, cx));
+    }
+
+    pub fn zepi_append_office_text(
+        &mut self,
+        abs_path: PathBuf,
+        location: String,
+        mut text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.editor.read(cx).read_only(cx) || self.workspace.upgrade().is_none() {
+            return false;
+        }
+        write!(text, "\n[source: {} | {location}]", abs_path.display()).unwrap();
+        let blocks = if self.session_capabilities.read().supports_embedded_context() {
+            let uri = MentionUri::File { abs_path }.to_uri().to_string();
+            let capture = crate::zepi_reference::CaptureMetadata::office(location);
+            let resource = acp_v2::TextResourceContents::new(text, uri).meta(capture.to_meta());
+            vec![
+                acp_v2::ContentBlock::Resource(acp_v2::EmbeddedResource::new(
+                    acp_v2::EmbeddedResourceResource::TextResourceContents(resource),
+                )),
+                " ".into(),
+            ]
+        } else {
+            vec![text.into()]
+        };
+        let draft = self.text(cx);
+        let separator = (!draft.ends_with(char::is_whitespace)).then_some(" ");
+        self.set_cursor_offset(draft.len(), window, cx);
+        self.append_message(blocks, separator, window, cx);
+        true
+    }
+
+    pub fn zepi_append_office_image(
+        &mut self,
+        image: Image,
+        name: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return false;
+        };
+        if !self.session_capabilities.read().supports_images() {
+            struct OfficeImageUnsupported;
+            workspace.update(cx, |workspace, cx| {
+                workspace.show_toast(
+                    workspace::Toast::new(
+                        workspace::notifications::NotificationId::unique::<OfficeImageUnsupported>(),
+                        "This agent does not accept image attachments.",
+                    ),
+                    cx,
+                );
+            });
+            return false;
+        }
+        if self.editor.read(cx).read_only(cx) {
+            return false;
+        }
+
+        let draft = self.text(cx);
+        self.set_cursor_offset(draft.len(), window, cx);
+        if !draft.is_empty() && !draft.ends_with(char::is_whitespace) {
+            self.zepi_append_text(" ", window, cx);
+        }
+        let editor = self.editor.clone();
+        let mention_set = self.mention_set.clone();
+        let workspace = self.workspace.clone();
+        cx.spawn_in(window, async move |_, cx| {
+            crate::mention_set::insert_images_as_context(
+                vec![(image, name)],
+                editor,
+                mention_set,
+                workspace,
+                cx,
+            )
+            .await;
+        })
+        .detach();
+        true
     }
 
     pub fn insert_thread_summary(
@@ -2170,6 +2250,7 @@ impl MessageEditor {
                     (
                         range.start.to_offset(&snapshot),
                         range.end.to_offset(&snapshot),
+                        crease_id,
                         uri,
                     )
                 })
@@ -2206,14 +2287,22 @@ impl MessageEditor {
             prev_was_entire_line = is_entire_line;
 
             let mut cursor = range.start;
-            for (start, end, uri) in mention_ranges
+            for (start, end, crease_id, uri) in mention_ranges
                 .iter()
-                .filter(|(start, end, _)| *start < range.end && range.start < *end)
+                .filter(|(start, end, ..)| *start < range.end && range.start < *end)
             {
                 if cursor < *start {
                     text.extend(snapshot.text_for_range(cursor..*start));
                 }
-                write!(text, "{}", uri.as_link()).unwrap();
+                if matches!(uri, MentionUri::File { .. })
+                    && let Some((_, Some(Mention::Text { content, capture: Some(capture), .. }))) =
+                        mention_set.resolved_mention_for_crease(crease_id)
+                    && capture.office_location.is_some()
+                {
+                    text.push_str(&content);
+                } else {
+                    write!(text, "{}", uri.as_link()).unwrap();
+                }
                 cursor = *end;
                 has_mentions = true;
             }
@@ -2441,12 +2530,7 @@ fn mention_to_content_block(
                             content.clone(),
                             uri.to_uri().to_string(),
                         )
-                        .meta(capture.as_ref().map(|capture| {
-                            acp_v2::Meta::from_iter([(
-                                "zepiReference".into(),
-                                serde_json::to_value(capture).unwrap(),
-                            )])
-                        })),
+                        .meta(capture.as_ref().map(crate::zepi_reference::CaptureMetadata::to_meta)),
                     ),
                 ))
             } else {
@@ -6270,6 +6354,71 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![&original]
         );
+    }
+
+    #[gpui::test]
+    async fn test_zepi_office_image_is_sent_with_its_pixels(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (message_editor, cx) = setup_message_editor(cx).await;
+        let (original, image) = paste_test_image();
+        let name = "Review.pptx · slide 2";
+        message_editor.update_in(cx, |editor, window, cx| {
+            editor.session_capabilities.write().set_prompt_capabilities(
+                acp_v2::PromptCapabilities::new().image(acp_v2::PromptImageCapabilities::new()),
+            );
+            editor.insert_text("Look at this", window, cx);
+            editor.set_cursor_offset(4, window, cx);
+            assert!(editor.zepi_append_office_image(image, name.into(), window, cx));
+        });
+        cx.run_until_parked();
+        let (blocks, _) = message_editor.update(cx, |editor, cx| editor.contents(true, cx)).await.unwrap();
+        let [acp_v2::ContentBlock::Text(prefix), acp_v2::ContentBlock::Image(attachment)] =
+            blocks.as_slice()
+        else {
+            panic!("Expected the draft followed by an image attachment: {blocks:?}");
+        };
+        assert_eq!(prefix.text, "Look at this ");
+        assert_eq!(attachment.mime_type.0, "image/png");
+        assert_eq!(attachment.uri, Some(MentionUri::PastedImage { name: name.into() }.to_uri().to_string()));
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&attachment.data).unwrap();
+        assert_eq!(image::load_from_memory(&bytes).unwrap().to_rgb8(), original.to_rgb8());
+    }
+
+    #[gpui::test]
+    async fn test_zepi_office_selection_appends_an_exact_snapshot(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (message_editor, cx) = setup_message_editor(cx).await;
+        let selected = "Item\tTotal\nOrders\t289\u{2009}938";
+        let path = PathBuf::from(path!("/project/report #2026.xlsx"));
+        let location = "Totals!A1:B2";
+        let source = format!("{selected}\n[source: {} | {location}]", path.display());
+        let blocks = message_editor.update_in(cx, |editor, window, cx| {
+            editor.session_capabilities.write().set_prompt_capabilities(
+                acp_v2::PromptCapabilities::new()
+                    .embedded_context(acp_v2::PromptEmbeddedContextCapabilities::new()),
+            );
+            editor.insert_text("Keep this draft", window, cx);
+            editor.set_cursor_offset(4, window, cx);
+            assert!(editor.zepi_append_office_text(path.clone(), location.into(), selected.into(), window, cx));
+            assert!(!editor.text(cx).contains(selected));
+            editor.draft_content_blocks_snapshot(cx)
+        });
+        let [acp_v2::ContentBlock::Text(prefix), acp_v2::ContentBlock::Resource(block)] = blocks.as_slice() else {
+            panic!("Expected the draft followed by one attachment: {blocks:?}");
+        };
+        assert_eq!(prefix.text, "Keep this draft ");
+        let acp_v2::EmbeddedResourceResource::TextResourceContents(resource) = &block.resource else {
+            panic!("Expected the attachment to carry text");
+        };
+        assert_eq!(resource.text, source);
+        assert_eq!(resource.uri, MentionUri::File { abs_path: path }.to_uri().to_string());
+        let capture = crate::zepi_reference::CaptureMetadata::from_meta(resource.meta.as_ref()).unwrap();
+        assert_eq!(capture.office_location.as_deref(), Some(location));
+
+        message_editor.update_in(cx, |editor, window, cx| {
+            editor.set_message(blocks.clone(), window, cx);
+            assert_eq!(editor.draft_content_blocks_snapshot(cx), blocks);
+        });
     }
 
     #[gpui::test]

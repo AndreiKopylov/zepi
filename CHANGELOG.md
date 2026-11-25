@@ -6,10 +6,20 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Selected text from Word and PowerPoint and selected cells from Excel appear as compact
+  attachments in the agent composer. Each attachment shows its source page, slide, or cell range
+  while still sending the selected content to the agent.
+- Word and PowerPoint attach the selected region as an image with a preview, not as a temporary
+  file path.
+
 ### Fixed
 
 - Region selection buttons in the Word and PowerPoint viewers stay visible beside the right panel
   and wrap onto a second row when the viewer is too narrow.
+- Office image crops use the actual rendered dimensions, so Word selections no longer lose part
+  of the image at higher display scaling.
 
 ## [0.0.9] - 2026-11-24
 

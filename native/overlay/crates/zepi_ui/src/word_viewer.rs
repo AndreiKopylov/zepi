@@ -601,81 +601,17 @@ impl WordView {
             .join("\n")
     }
 
-    fn region_image(&self, region: Region, _cx: &App) -> Option<gpui::Image> {
+    fn region_image(&self, region: Region, cx: &App) -> Option<gpui::Image> {
         let key = raster_key(self.zoom, self.scale);
-        let raster = raster_for(self.zoom);
         let image = self.cache.get(&(region.slide, key))?;
-        let decoded = image::load_from_memory(&image.bytes).ok()?;
-        let (x0, y0, x1, y1) = region.norm();
-        let cx0 = (x0 as f64 * raster) as u32;
-        let cy0 = (y0 as f64 * raster) as u32;
-        let cw = ((x1 - x0) as f64 * raster) as u32;
-        let ch = ((y1 - y0) as f64 * raster) as u32;
-        let (iw, ih) = (decoded.width(), decoded.height());
-        if cx0 >= iw || cy0 >= ih || cw == 0 || ch == 0 {
-            return None;
-        }
-        let cropped = decoded.crop_imm(cx0, cy0, cw.min(iw - cx0), ch.min(ih - cy0));
-        let mut bytes = Vec::new();
-        cropped
-            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
-            .ok()?;
-        Some(gpui::Image {
-            format: ImageFormat::Png,
-            bytes,
-            id: 1 << 62
-                | 1 << 63
-                | (self.image_tag as u64 & 0x3FFF) << 48
-                | (self.raster_gen as u64 & 0xFFFF) << 32
-                | (region.slide as u64 & 0xFF_FFFF) << 8
-                | key as u64 & 0xFF,
-        })
+        let page = self.item.read(cx).layout.as_ref()?.pages.get(region.slide)?;
+        crate::crop_office_region(&image.bytes, region.norm(), (page.w.into(), page.h.into()))
     }
 
-    fn send_text_to_agent(&self, text: &str, window: &mut Window, cx: &mut App) {
-        let Some(workspace) = window.root::<Workspace>().flatten().or_else(|| {
-            window.root::<workspace::MultiWorkspace>().flatten().and_then(|multi| {
-                Some(multi.read(cx).workspace().clone())
-            })
-        }) else {
-            log::error!("slides_viewer send: no workspace root");
-            return;
-        };
-        let Some(panel) = workspace.read(cx).panel::<agent_ui::AgentPanel>(cx) else {
-            log::error!("slides_viewer send: no agent panel");
-            return;
-        };
-        let panel_ref = panel.read(cx);
-        let Some(conversation) = panel_ref
-            .visible_conversation_view()
-            .or_else(|| panel_ref.active_conversation_view())
-            .cloned() else {
-            log::error!("slides_viewer send: no active conversation");
-            return;
-        };
-        let Some(thread_view) = conversation.read(cx).active_thread().cloned() else {
-            log::error!("slides_viewer send: no root thread view");
-            return;
-        };
-        thread_view.update(cx, |thread_view, cx| {
-            thread_view
-                .message_editor
-                .update(cx, |editor, cx| editor.zepi_append_text(text, window, cx));
-        });
-        log::info!("slides_viewer send: appended {} chars to composer", text.len());
-    }
-
-    fn source_note(&self, slide: usize, region: Option<(f32, f32, f32, f32)>, cx: &App) -> String {
+    fn source_note(&self, slide: usize, cx: &App) -> String {
         let path = self.item.read(cx).abs_path.display();
         let total = self.slide_count(cx);
-        match region {
-            Some((x0, y0, x1, y1)) => format!(
-                "\n[source: {path} | slide {}/{} | region ({x0:.0},{y0:.0})-({x1:.0},{y1:.0}) pt]",
-                slide + 1,
-                total
-            ),
-            None => format!("\n[source: {path} | slide {}/{}]", slide + 1, total),
-        }
+        format!("\n[source: {path} | slide {}/{}]", slide + 1, total)
     }
 
     fn set_zoom(&mut self, zoom: f64, cx: &mut Context<Self>) {
@@ -854,35 +790,33 @@ impl WordView {
     }
 
     fn send_slide_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let region_text = self.region.map(|region| (region.slide, self.region_text(region, cx)));
-        let (slide, text) = match region_text {
-            // a sliver or empty selection must not swallow the send
-            Some((slide, text)) if !text.trim().is_empty() => (slide, text),
-            _ => {
-                let ix = self
-                    .region
-                    .map(|region| region.slide)
-                    .unwrap_or_else(|| self.center_slide(cx));
-                let blocks = self.blocks_for(ix, cx);
-                cx.notify();
-                (
-                    ix,
-                    blocks
-                        .iter()
-                        .map(|block| block.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                )
+        if let Some(region) = self.region {
+            let text = self.region_text(region, cx);
+            if text.trim().is_empty() {
+                return;
             }
-        };
-        if text.is_empty() {
+            let path = self.item.read(cx).abs_path.clone();
+            let location = format!("page {}", region.slide + 1);
+            let content = crate::OfficeContent::Selection { path, location, text };
+            if crate::send_office_to_agent(content, window, cx) {
+                self.region = None;
+                cx.notify();
+            }
             return;
         }
-        let note = self.source_note(slide, None, cx);
-        self.send_text_to_agent(&format!("{text}{note}"), window, cx);
-        // the selection served its purpose - drop the outline
-        self.region = None;
-        cx.notify();
+
+        let slide = self.center_slide(cx);
+        let blocks = self.blocks_for(slide, cx);
+        let text = blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.is_empty() {
+            let note = self.source_note(slide, cx);
+            let content = crate::OfficeContent::Text(format!("{text}{note}"));
+            crate::send_office_to_agent(content, window, cx);
+        }
     }
 
     pub fn deploy_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -911,24 +845,13 @@ impl WordView {
         let Some(image) = self.region_image(region, cx) else {
             return;
         };
-        let dir = crate::temp_dir();
-        if std::fs::create_dir_all(&dir).is_err() {
-            return;
+        let path = self.item.read(cx).abs_path.clone();
+        let location = format!("page {}", region.slide + 1);
+        let content = crate::OfficeContent::Image { path, location, image };
+        if crate::send_office_to_agent(content, window, cx) {
+            self.region = None;
+            cx.notify();
         }
-        let file = dir.join(format!(
-            "slide-{}-{}.png",
-            region.slide,
-            Instant::now().elapsed().as_millis()
-        ));
-        if std::fs::write(&file, &image.bytes).is_err() {
-            return;
-        }
-        let (x0, y0, x1, y1) = region.norm();
-        let note = self.source_note(region.slide, Some((x0, y0, x1, y1)), cx);
-        let text = format!("[slide image: {}]{note}", file.display());
-        self.send_text_to_agent(&text, window, cx);
-        self.region = None;
-        cx.notify();
     }
 
     fn step_match(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -1705,7 +1628,7 @@ impl gpui::Render for WordView {
                     .tooltip({
                         let focus = self.focus_handle.clone();
                         move |_window, cx| {
-                            Tooltip::for_action_in("Send slide text to agent", &SendSlideText, &focus, cx)
+                            Tooltip::for_action_in("Send page text to agent", &SendSlideText, &focus, cx)
                         }
                     })
                     .on_click({

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use agent_ui::AgentPanel;
 use gpui::{App, Context, KeyBinding, Window, actions};
 use project_panel::ProjectPanel;
@@ -12,12 +14,84 @@ mod word_viewer;
 
 actions!(zepi, [FocusComposer, Submit]);
 
-/// `%LOCALAPPDATA%\Zepi\temp`: slide and page images handed to the agent.
-pub(crate) fn temp_dir() -> std::path::PathBuf {
-    match std::env::var_os("LOCALAPPDATA") {
-        Some(dir) => std::path::PathBuf::from(dir).join("Zepi").join("temp"),
-        None => std::env::temp_dir().join("zepi-temp"),
+pub(crate) enum OfficeContent {
+    Text(String),
+    Selection {
+        path: PathBuf,
+        location: String,
+        text: String,
+    },
+    Image {
+        path: PathBuf,
+        location: String,
+        image: gpui::Image,
+    },
+}
+
+pub(crate) fn send_office_to_agent(content: OfficeContent, window: &mut Window, cx: &mut App) -> bool {
+    let workspace = window.root::<Workspace>().flatten().or_else(|| {
+        window
+            .root::<MultiWorkspace>()
+            .flatten()
+            .map(|multi| multi.read(cx).workspace().clone())
+    });
+    let thread = workspace
+        .and_then(|workspace| workspace.read(cx).panel::<AgentPanel>(cx))
+        .and_then(|panel| {
+            let panel = panel.read(cx);
+            panel
+                .visible_conversation_view()
+                .or_else(|| panel.active_conversation_view())?
+                .read(cx)
+                .active_thread()
+                .cloned()
+        });
+    let Some(thread) = thread else {
+        log::error!("office viewer send: no active agent thread");
+        return false;
+    };
+    let editor = thread.read(cx).message_editor.clone();
+    editor.update(cx, |editor, cx| match content {
+        OfficeContent::Text(text) => {
+            editor.zepi_append_text(&text, window, cx);
+            true
+        }
+        OfficeContent::Selection { path, location, text } => {
+            editor.zepi_append_office_text(path, location, text, window, cx)
+        }
+        OfficeContent::Image { path, location, image } => {
+            let file = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+            let name = format!("{file} · {location}");
+            editor.zepi_append_office_image(image, name.into(), window, cx)
+        }
+    })
+}
+
+pub(crate) fn crop_office_region(
+    bytes: &[u8],
+    (x0, y0, x1, y1): (f32, f32, f32, f32),
+    (page_width, page_height): (f64, f64),
+) -> Option<gpui::Image> {
+    if page_width <= 0.0 || page_height <= 0.0 {
+        return None;
     }
+    let image = image::load_from_memory(bytes).ok()?;
+    let pixel = |coord, extent, limit: u32| {
+        ((f64::from(coord) / extent * f64::from(limit)) as u32).min(limit)
+    };
+    let left = pixel(x0, page_width, image.width());
+    let top = pixel(y0, page_height, image.height());
+    let width = pixel(x1, page_width, image.width()).saturating_sub(left);
+    let height = pixel(y1, page_height, image.height()).saturating_sub(top);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    image
+        .crop_imm(left, top, width, height)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .ok()?;
+    Some(gpui::Image::from_bytes(gpui::ImageFormat::Png, png.into_inner()))
 }
 
 /// Cheap identity of a file on disk: modification time in nanoseconds plus size.
@@ -137,7 +211,27 @@ fn register_actions(workspace: &mut Workspace) {
 
 #[cfg(test)]
 mod tests {
-    use super::office_page_indices;
+    use super::{crop_office_region, office_page_indices};
+
+    #[test]
+    fn office_image_clips_to_the_selection_and_uses_a_content_id() {
+        let image = image::RgbImage::from_fn(3, 2, |x, _| image::Rgb([x as u8, 0, 0]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let png = png.into_inner();
+
+        let page = (1.5, 1.);
+        let left = crop_office_region(&png, (-0.5, 0., 0.5, 0.5), page).unwrap();
+        let right = crop_office_region(&png, (0.5, 0., 1.5, 1.), page).unwrap();
+        let crop = image::load_from_memory(&left.bytes).unwrap().to_rgb8();
+        assert_eq!(crop.dimensions(), (1, 1));
+        assert_eq!(crop.get_pixel(0, 0), &image::Rgb([0, 0, 0]));
+        let crop = image::load_from_memory(&right.bytes).unwrap().to_rgb8();
+        assert_eq!(crop.dimensions(), (2, 2));
+        assert_eq!(crop.get_pixel(1, 1), &image::Rgb([2, 0, 0]));
+        assert_ne!(left.id, right.id);
+        assert!(crop_office_region(&png, (-2., 0., -1., 1.), page).is_none());
+    }
 
     #[test]
     fn office_pages_validate_all_indices_before_rendering() {
