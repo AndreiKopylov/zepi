@@ -1,4 +1,6 @@
 // Adapted for Zepi from @automatalabs/pi-acp 0.9.4 (Apache-2.0). See ../LICENSE.
+import { classifyTerminal } from "./errors.js";
+
 export function mapKind(toolName) {
     switch (toolName) {
         case "read":
@@ -105,6 +107,15 @@ export function translateEvent(event, failedResult) {
             return [];
         case "session_info_changed":
             return [{ sessionUpdate: "session_info_update", title: event.name ?? "" }];
+        case "auto_retry_start": {
+            const failure = classifyTerminal({ stopReason: "error", errorMessage: event.errorMessage });
+            return [{ sessionUpdate: "session_info_update", _meta: { zepiRetry: {
+                attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs,
+                reason: failure.data.zepiProviderError,
+            } } }];
+        }
+        case "auto_retry_end":
+            return [{ sessionUpdate: "session_info_update", _meta: { zepiRetry: null } }];
         case "agent_start":
         case "agent_end":
         case "turn_start":
@@ -116,8 +127,6 @@ export function translateEvent(event, failedResult) {
         case "compaction_end":
         case "entry_appended":
         case "thinking_level_changed":
-        case "auto_retry_start":
-        case "auto_retry_end":
         case "summarization_retry_scheduled":
         case "summarization_retry_attempt_start":
         case "summarization_retry_finished":

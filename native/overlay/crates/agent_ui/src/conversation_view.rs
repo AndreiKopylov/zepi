@@ -175,18 +175,23 @@ impl From<anyhow::Error> for ThreadError {
 impl From<&anyhow::Error> for ThreadError {
     fn from(error: &anyhow::Error) -> Self {
         let protocol_error = ProtocolErrorInfo::from_error(error);
+        let zepi_provider_failure = protocol_error
+            .and_then(|error| error.data?.get("zepiProviderError")?.as_str())
+            .and_then(acp_thread::zepi_provider_error_message);
         if error.is::<MaxOutputTokensError>() {
             Self::MaxOutputTokens
         } else if error.is::<NoModelConfiguredError>() {
             Self::NoModelSelected
         } else if let Some(auth_error) = AuthRequired::from_error(error) {
             Self::AuthenticationRequired(
-                auth_error
-                    .description
-                    .clone()
+                zepi_provider_failure
+                    .map(str::to_owned)
+                    .or_else(|| auth_error.description.clone())
                     .unwrap_or_else(|| auth_error.to_string())
                     .into(),
             )
+        } else if let Some(message) = zepi_provider_failure {
+            Self::ProviderRejection { message: message.into() }
         } else if let Some(lm_error) = error.downcast_ref::<LanguageModelCompletionError>() {
             use LanguageModelCompletionError::*;
             match lm_error {
@@ -2244,8 +2249,9 @@ impl ConversationView {
             AcpThreadEvent::ElicitationResponded(_) => {}
             AcpThreadEvent::Retry(retry) => {
                 if let Some(active) = self.thread_view(&session_id) {
-                    active.update(cx, |active, _cx| {
-                        active.thread_retry_status = Some(retry.clone());
+                    active.update(cx, |active, cx| {
+                        active.thread_retry_status = retry.clone();
+                        cx.notify();
                     });
                 }
             }
@@ -4984,6 +4990,19 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_zepi_provider_failure_uses_safe_description() {
+        let error = anyhow!(acp_v2::Error::internal_error().data(json!({
+            "zepiProviderError": "econnrefused",
+            "message": "private-response",
+        })));
+        assert!(matches!(
+            ThreadError::from(&error),
+            ThreadError::ProviderRejection { message }
+                if message == "Could not reach the model provider: connection refused (ECONNREFUSED)."
+        ));
     }
 
     #[test]

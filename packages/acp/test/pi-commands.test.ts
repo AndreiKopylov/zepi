@@ -1607,11 +1607,11 @@ test('pi extension cancellation settles after cleanup, survives reload and does 
 });
 
 
-test('pi 1.1.0 busy retries settle once, retain failure and remain cancellable', {timeout:30_000},async()=> {
+test('pi provider retries report progress, settle once and remain cancellable', {timeout:30_000},async()=> {
   for(const outcome of ['recovered','failed','cancelled']) {
     const h=await harness([
-      ()=>{throw new Error('servers are currently busy');},
-      ()=>{if(outcome==='failed')throw new Error('server_busy');return 'Recovered after busy response.';},
+      ()=>{throw new Error('servers are currently busy: private-response');},
+      ()=>{if(outcome==='failed')throw new Error('ECONNREFUSED: private-response');return 'Recovered after busy response.';},
       ()=> 'New turn after cancellation.',
     ], {setup:async cwd=>{
       const path=join(cwd,'settings.json'),settings=JSON.parse(await readFile(path,'utf8'));
@@ -1620,14 +1620,21 @@ test('pi 1.1.0 busy retries settle once, retain failure and remain cancellable',
     }});
     try {
       const task=await h.newTask(),pending=h.prompt(task.sessionId,'Exercise upstream busy retry.');
-      const failure=outcome==='failed'?assert.rejects(pending):undefined;
+      const retries=()=>h.updates.filter(({sessionId})=>sessionId===task.sessionId)
+        .flatMap(({update})=>update.sessionUpdate==='session_info_update' && update._meta && 'zepiRetry' in update._meta
+          ? [update._meta.zepiRetry] : []);
+      const failure=outcome==='failed'?assert.rejects(pending,(error: {data?: unknown})=>{
+        assert.deepEqual(error.data,{errorKind:'provider_error',message:'provider error',zepiProviderError:'econnrefused'});
+        return true;
+      }):undefined;
       if(outcome==='cancelled') {
-        for(let i=0;i<200&&h.requests()<1;i++)await delay(5);
-        await delay(40);
+        for(let i=0;i<200&&!retries().length;i++)await delay(5);
+        assert.equal(retries().length,1);
         await h.connection.agent.notify(methods.agent.session.cancel,{sessionId:task.sessionId});
       }
       if(failure)await failure;
       else assert.equal((await pending).stopReason,outcome==='cancelled'?'cancelled':'end_turn');
+      assert.deepEqual(retries(),[{attempt:1,maxAttempts:1,delayMs:outcome==='cancelled'?5000:10,reason:'provider_unavailable'},null]);
       const terminal=h.updates.map(u=>(u.update as any)._meta?.zepiTurn).filter(s=>s&&s.status!=='running');
       assert.equal(terminal.length,1);assert.equal(terminal[0].status,outcome==='recovered'?'completed':outcome);
       assert.equal(h.requests(),outcome==='cancelled'?1:2);

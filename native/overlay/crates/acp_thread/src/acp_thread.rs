@@ -3803,6 +3803,25 @@ pub struct RetryStatus {
     pub meta: Option<acp_v2::Meta>,
 }
 
+impl RetryStatus {
+    fn from_zepi_meta(value: &serde_json::Value) -> Option<Self> {
+        let attempt = usize::try_from(value.get("attempt")?.as_u64()?).ok()?;
+        let max_attempts = usize::try_from(value.get("maxAttempts")?.as_u64()?).ok()?;
+        if attempt == 0 || attempt > max_attempts {
+            return None;
+        }
+        let reason = value.get("reason")?.as_str()?;
+        Some(Self {
+            last_error: zepi_provider_error_message(reason)?.into(),
+            attempt,
+            max_attempts,
+            started_at: Instant::now(),
+            duration: Duration::from_millis(value.get("delayMs")?.as_u64()?),
+            meta: None,
+        })
+    }
+}
+
 pub const REFUSAL_FALLBACK_MODEL_META_KEY: &str = "refusal_fallback_model";
 
 pub fn meta_with_refusal_fallback(model_name: &str) -> acp_v2::Meta {
@@ -4038,7 +4057,7 @@ pub enum AcpThreadEvent {
     ElicitationRequested(ElicitationEntryId),
     /// The request left `Pending`; this does not imply delivery to its response waiter.
     ElicitationResponded(ElicitationEntryId),
-    Retry(RetryStatus),
+    Retry(Option<RetryStatus>),
     /// A child session was registered; read it with [`AcpThread::subagent`].
     SubagentSpawned(acp_v2::SessionId),
     Stopped {
@@ -5275,6 +5294,13 @@ impl AcpThread {
                     cx.emit(AcpThreadEvent::StatusChanged);
                     cx.notify();
                 }
+                if let Some(retry) = info_update.meta.as_ref().and_then(|meta| meta.get("zepiRetry")) {
+                    if retry.is_null() {
+                        cx.emit(AcpThreadEvent::Retry(None));
+                    } else if let Some(status) = RetryStatus::from_zepi_meta(retry) {
+                        self.update_retry_status(status, cx);
+                    }
+                }
                 self.update_session_info(info_update, cx);
             }
             acp_v1::SessionUpdate::AvailableCommandsUpdate(acp_v1::AvailableCommandsUpdate {
@@ -6430,7 +6456,7 @@ impl AcpThread {
     }
 
     pub fn update_retry_status(&mut self, status: RetryStatus, cx: &mut Context<Self>) {
-        cx.emit(AcpThreadEvent::Retry(status));
+        cx.emit(AcpThreadEvent::Retry(Some(status)));
     }
 
     pub fn update_tool_call(

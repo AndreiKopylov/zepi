@@ -22,6 +22,8 @@ All notable changes to Zepi are documented here. The format follows
   and wrap onto a second row when the viewer is too narrow.
 - Office image crops use the actual rendered dimensions, so Word selections no longer lose part
   of the image at higher display scaling.
+- The chat shows why pi is retrying a model request, which attempt is next, and when it will start.
+  If the request still fails, the chat shows a readable error instead of raw protocol JSON.
 
 ## [0.0.9] - 2026-11-24
 

@@ -4478,13 +4478,15 @@ impl ThreadView {
         let next_attempt_in = state
             .duration
             .saturating_sub(Instant::now().saturating_duration_since(state.started_at));
-        if next_attempt_in.is_zero() {
+        if next_attempt_in.is_zero() && self.agent_id.as_ref() != "zepi-pi" {
             return None;
         }
 
-        let next_attempt_in_secs = next_attempt_in.as_secs() + 1;
+        let next_attempt_in_secs = next_attempt_in.as_secs_f64().ceil() as u64;
 
-        let retry_message = if state.max_attempts == 1 {
+        let retry_message = if next_attempt_in.is_zero() {
+            format!("Retrying (Attempt {} of {})…", state.attempt, state.max_attempts)
+        } else if state.max_attempts == 1 {
             if next_attempt_in_secs == 1 {
                 "Retrying. Next attempt in 1 second.".to_string()
             } else {
