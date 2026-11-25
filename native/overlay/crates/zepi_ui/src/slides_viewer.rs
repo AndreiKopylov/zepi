@@ -66,6 +66,16 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
+pub(crate) fn place_region_toolbar(anchor: Point<Pixels>, toolbar: gpui::Div) -> gpui::Div {
+    ui::h_flex()
+        .absolute()
+        .left_0()
+        .right(px(16.)) // Keep the scrollbar hit area clear.
+        .top(anchor.y)
+        .child(div().w(anchor.x.max(px(0.))).min_w_0().flex_shrink_1())
+        .child(toolbar.flex_none().max_w_full().flex_wrap())
+}
+
 fn raster_for(zoom: f64) -> f64 {
     (((zoom * BASE_SUPERSAMPLE) * 2.0).round() / 2.0).clamp(0.5, 4.0)
 }
@@ -1508,14 +1518,13 @@ impl gpui::Render for SlidesView {
                         }
                     }),
             );
-            region_bubble = Some(
-                div()
-                    .absolute()
-                    // bubble follows the cursor at the end of the selection
-                    .left(origin.x + px(region.x1 * zoom) - px(4.))
-                    .top((origin.y + px(region.y1 * zoom) - px(28.)).max(origin.y))
-                    .child(bubble),
-            );
+            region_bubble = Some(place_region_toolbar(
+                gpui::point(
+                    origin.x + px(region.x1 * zoom) - px(4.),
+                    (origin.y + px(region.y1 * zoom) - px(28.)).max(origin.y),
+                ),
+                bubble,
+            ));
         }
 
         if self.focus_on_first_render {
@@ -2040,7 +2049,34 @@ pub(crate) fn scan_char_matches(text: &str, query_lower: &str) -> Vec<(usize, us
 
 #[cfg(test)]
 mod tests {
-    use super::scan_char_matches;
+    use super::{place_region_toolbar, scan_char_matches};
+    use gpui::{ParentElement, Styled, TestAppContext, div, point, px, size};
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui::test]
+    fn region_toolbar_stays_inside_viewer(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        for (width, anchor, left, right, height) in [
+            (320., 50., 50., 146., 20.),
+            (240., 230., 128., 224., 20.),
+            (80., 75., 0., 64., 40.),
+        ] {
+            let bounds = Rc::new(Cell::new(None));
+            cx.draw(point(px(0.), px(0.)), size(px(width), px(100.)), |_, _| {
+                let toolbar = ui::h_flex().children((0..4).map(|_| div().w(px(24.)).h(px(20.))));
+                div().size_full().relative().child(
+                    place_region_toolbar(point(px(anchor), px(10.)), toolbar)
+                        .on_children_prepainted({
+                            let bounds = bounds.clone();
+                            move |children, _, _| bounds.set(Some(children[1]))
+                        }),
+                )
+            });
+            let bounds = bounds.get().unwrap();
+            assert_eq!((bounds.left(), bounds.right()), (px(left), px(right)));
+            assert_eq!(bounds.size.height, px(height));
+        }
+    }
 
     #[test]
     fn ascii_basics() {

@@ -12,7 +12,7 @@ use crate::slides_viewer::{
     office_knob_f, scan_char_matches, ClearSelection, CopyRegionImage, PageNext, PagePrev, CopySelection, SearchNext, SearchPrev,
     SendRegionImage, SendSlideText, ToggleSearch,
 };
-use crate::slides_viewer::{office_knob, office_thumb_color};
+use crate::slides_viewer::{office_knob, office_thumb_color, place_region_toolbar};
 use wordcraft_doc::Document;
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Placed, ViewMode};
 use wordcraft_render::{RenderOptions, render_page};
@@ -1511,14 +1511,13 @@ impl gpui::Render for WordView {
                         }
                     }),
             );
-            region_bubble = Some(
-                div()
-                    .absolute()
-                    // bubble follows the cursor at the end of the selection
-                    .left(origin.x + px(region.x1 * zoom) - px(4.))
-                    .top((origin.y + px(region.y1 * zoom) - px(28.)).max(origin.y))
-                    .child(bubble),
-            );
+            region_bubble = Some(place_region_toolbar(
+                gpui::point(
+                    origin.x + px(region.x1 * zoom) - px(4.),
+                    (origin.y + px(region.y1 * zoom) - px(28.)).max(origin.y),
+                ),
+                bubble,
+            ));
         }
 
         if self.focus_on_first_render {

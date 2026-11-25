@@ -4,6 +4,13 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Region selection buttons in the Word and PowerPoint viewers stay visible beside the right panel
+  and wrap onto a second row when the viewer is too narrow.
+
 ## [0.0.9] - 2026-11-24
 
 ### Changed
