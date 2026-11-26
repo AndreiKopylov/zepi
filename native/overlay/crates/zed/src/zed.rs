@@ -427,6 +427,7 @@ pub fn build_window_options(display_uuid: Option<Uuid>, cx: &mut App) -> WindowO
 
 pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
     zepi_ui::init(cx);
+    image_viewer::register_region_attachment(zepi_ui::attach_image_region_to_agent, cx);
     let mut _on_close_subscription = bind_on_window_closed(cx);
     cx.observe_global::<SettingsStore>(move |cx| {
         // A 1.92 regression causes unused-assignment to trigger on this variable.

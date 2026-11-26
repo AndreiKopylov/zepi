@@ -3,6 +3,7 @@ import { adapterError } from "./errors.js";
 export function convertPromptContent(blocks) {
     const text = [];
     const images = [];
+    const imageSources = [];
     for (const block of blocks) {
         switch (block.type) {
             case "text":
@@ -10,6 +11,9 @@ export function convertPromptContent(blocks) {
                 break;
             case "image":
                 images.push({ type: "image", data: block.data, mimeType: block.mimeType });
+                if (typeof block._meta?.zepiImageSource === "string") {
+                    imageSources.push(`Image ${images.length}: ${block._meta.zepiImageSource}`);
+                }
                 break;
             case "resource_link":
                 text.push(`[${block.title ?? block.name ?? block.uri}](${block.uri})`);
@@ -28,7 +32,7 @@ export function convertPromptContent(blocks) {
             }
         }
     }
-    const joined = text.join("\n\n");
+    const joined = [...text, ...imageSources].join("\n\n");
     if (!text.some((segment) => segment.length > 0) && images.length === 0) {
         throw adapterError("empty_prompt");
     }

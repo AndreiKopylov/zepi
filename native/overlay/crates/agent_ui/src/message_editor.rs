@@ -474,6 +474,7 @@ async fn insert_resolved_pasted_context_items(
             ResolvedPastedContextItem::Image(image, name) => {
                 crate::mention_set::insert_images_as_context(
                     vec![(image, name)],
+                    None,
                     editor.clone(),
                     mention_set.clone(),
                     workspace.clone(),
@@ -889,10 +890,11 @@ impl MessageEditor {
         true
     }
 
-    pub fn zepi_append_office_image(
+    pub fn zepi_append_image(
         &mut self,
         image: Image,
         name: SharedString,
+        source: Option<&str>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -900,11 +902,11 @@ impl MessageEditor {
             return false;
         };
         if !self.session_capabilities.read().supports_images() {
-            struct OfficeImageUnsupported;
+            struct AgentImageUnsupported;
             workspace.update(cx, |workspace, cx| {
                 workspace.show_toast(
                     workspace::Toast::new(
-                        workspace::notifications::NotificationId::unique::<OfficeImageUnsupported>(),
+                        workspace::notifications::NotificationId::unique::<AgentImageUnsupported>(),
                         "This agent does not accept image attachments.",
                     ),
                     cx,
@@ -921,12 +923,14 @@ impl MessageEditor {
         if !draft.is_empty() && !draft.ends_with(char::is_whitespace) {
             self.zepi_append_text(" ", window, cx);
         }
+        let source = source.map(str::to_owned);
         let editor = self.editor.clone();
         let mention_set = self.mention_set.clone();
         let workspace = self.workspace.clone();
         cx.spawn_in(window, async move |_, cx| {
             crate::mention_set::insert_images_as_context(
                 vec![(image, name)],
+                source,
                 editor,
                 mention_set,
                 workspace,
@@ -1933,6 +1937,7 @@ impl MessageEditor {
 
                 crate::mention_set::insert_images_as_context(
                     images,
+                    None,
                     editor,
                     mention_set,
                     workspace,
@@ -2086,8 +2091,14 @@ impl MessageEditor {
                     uri,
                     data,
                     mime_type,
+                    meta,
                     ..
                 }) => {
+                    let source = meta
+                        .as_ref()
+                        .and_then(|meta| meta.get("zepiImageSource"))
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned);
                     let mention_uri = if let Some(uri) = uri {
                         MentionUri::parse(&uri, path_style)
                     } else {
@@ -2111,6 +2122,7 @@ impl MessageEditor {
                         Mention::Image(MentionImage {
                             data: data.into(),
                             format,
+                            source,
                         }),
                     ));
                 }
@@ -2550,7 +2562,12 @@ fn mention_to_content_block(
                         debug_panic!("unexpected mention uri for image: {:?}", other);
                         None
                     }
-                }),
+                })
+                .meta(mention_image.source.as_ref().map(|source| {
+                    [("zepiImageSource".to_owned(), source.clone().into())]
+                        .into_iter()
+                        .collect::<acp_v2::Meta>()
+                })),
         ),
         _ => acp_v2::ContentBlock::ResourceLink(acp_v2::ResourceLink::new(
             uri.name(),
@@ -6357,18 +6374,19 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_zepi_office_image_is_sent_with_its_pixels(cx: &mut TestAppContext) {
+    async fn test_zepi_image_is_sent_with_its_pixels_and_source(cx: &mut TestAppContext) {
         init_test(cx);
         let (message_editor, cx) = setup_message_editor(cx).await;
         let (original, image) = paste_test_image();
-        let name = "Review.pptx · slide 2";
+        let name = "Review.png · (25, 100, 50, 150)";
+        let source = "[Image source: Review.png | pixel box (25, 100, 50, 150)]\n";
         message_editor.update_in(cx, |editor, window, cx| {
             editor.session_capabilities.write().set_prompt_capabilities(
                 acp_v2::PromptCapabilities::new().image(acp_v2::PromptImageCapabilities::new()),
             );
             editor.insert_text("Look at this", window, cx);
             editor.set_cursor_offset(4, window, cx);
-            assert!(editor.zepi_append_office_image(image, name.into(), window, cx));
+            assert!(editor.zepi_append_image(image, name.into(), Some(source), window, cx));
         });
         cx.run_until_parked();
         let (blocks, _) = message_editor.update(cx, |editor, cx| editor.contents(true, cx)).await.unwrap();
@@ -6378,6 +6396,13 @@ mod tests {
             panic!("Expected the draft followed by an image attachment: {blocks:?}");
         };
         assert_eq!(prefix.text, "Look at this ");
+        assert_eq!(attachment.meta.as_ref().and_then(|m| m["zepiImageSource"].as_str()), Some(source));
+        message_editor.update_in(cx, |editor, window, cx| {
+            editor.set_message(blocks.clone(), window, cx);
+            assert!(!editor.text(cx).contains(source));
+            let snapshot = editor.draft_content_blocks_snapshot(cx);
+            assert!(snapshot.contains(&acp_v2::ContentBlock::Image(attachment.clone())));
+        });
         assert_eq!(attachment.mime_type.0, "image/png");
         assert_eq!(attachment.uri, Some(MentionUri::PastedImage { name: name.into() }.to_uri().to_string()));
         let bytes = base64::engine::general_purpose::STANDARD.decode(&attachment.data).unwrap();

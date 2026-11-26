@@ -11,6 +11,8 @@ import {fixtureModel} from './fixture-model.ts';
 const png = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGMwyXtAEmIY1TCqYfhqAACJooIQq9u/YAAAAABJRU5ErkJggg==';
 const image: ContentBlock = {type: 'image', data: png, mimeType: 'image/png'};
 const text = (text: string): ContentBlock => ({type: 'text', text});
+const source = '[Image source: C:\\temp\\example.png | pixel box (1, 2, 17, 18)]';
+const region = {...image, _meta: {zepiImageSource: source}};
 
 test('inline text keeps its source, binary images/text decode, linked resources are not fetched', () => {
   const uri = 'file:///project/unsaved.ts#L2:3';
@@ -56,6 +58,7 @@ test('ACP embeds editor context and passes images through templates, skills, rel
       assert.match(value, /Inspect attachment: present/);
       assert.match(value, /file:\/\/\/project\/unsaved.ts#L2:3/);
       assert.match(value, /buffer-only-marker/);
+      assert.ok(value.includes(`Image 1: ${source}`));
     } else if (checked === 1) assert.match(value, /<skill name="picture"/);
     else {assert.equal(images.length, 0); assert.match(value, /Image reading is disabled/);}
     if (checked < 2) {assert.equal(images.length, 1); assert.equal(images[0]!.data, png);}
@@ -74,7 +77,7 @@ test('ACP embeds editor context and passes images through templates, skills, rel
     assert.equal(initialized.agentCapabilities?.promptCapabilities?.image, true);
     const task = await connection.agent.request(methods.agent.session.new, {cwd, mcpServers: []});
     const send = (prompt: ContentBlock[], id?: string) => connection.agent.request(methods.agent.session.prompt, {sessionId: task.sessionId, prompt, ...(id ? {_meta: {zepiDeliveryId: id}} : {})});
-    const first: ContentBlock[] = [text('/inspect present'), {type: 'resource', resource: {uri: 'file:///project/unsaved.ts#L2:3', text: 'buffer-only-marker', _meta:{zepiReference:{version:1,unsaved:true,summary:false}}}}, image];
+    const first: ContentBlock[] = [text('/inspect present'), {type: 'resource', resource: {uri: 'file:///project/unsaved.ts#L2:3', text: 'buffer-only-marker', _meta:{zepiReference:{version:1,unsaved:true,summary:false}}}}, region];
     assert.equal((await send(first, 'attachment-delivery')).stopReason, 'end_turn');
     await send(first, 'attachment-delivery');
     assert.equal(checked, 1, 'the original attachment identity prevents duplicate inference');
@@ -86,7 +89,8 @@ test('ACP embeds editor context and passes images through templates, skills, rel
     await connection.agent.request(methods.agent.session.close, {sessionId: task.sessionId});
     updates.length = 0;
     await connection.agent.request(methods.agent.session.load, {sessionId: task.sessionId, cwd, mcpServers: []});
-    assert.ok(updates.some(update => update.sessionUpdate === 'user_message_chunk' && update.content.type === 'image' && update.content.data === png));
+    assert.ok(updates.some(update => update.sessionUpdate === 'user_message_chunk' && update.content.type === 'image' && update.content.data === png && update.content._meta?.zepiImageSource === source));
+    assert.ok(!updates.some(update => update.sessionUpdate === 'user_message_chunk' && update.content.type === 'text' && update.content.text.includes(source)));
     assert.match(JSON.stringify(updates), /buffer-only-marker/);
     const restored = updates.filter(update => update.sessionUpdate === 'user_message_chunk' && update.content.type === 'resource');
     assert.equal(restored.length, 1, 'one immutable reference survives history reload without duplicate model calls');

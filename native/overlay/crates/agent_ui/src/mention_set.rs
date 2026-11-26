@@ -56,6 +56,7 @@ pub enum Mention {
 pub struct MentionImage {
     pub data: SharedString,
     pub format: ImageFormat,
+    pub source: Option<String>,
 }
 
 pub struct MentionSet {
@@ -442,6 +443,7 @@ impl MentionSet {
                     Ok(Mention::Image(MentionImage {
                         data: image.source,
                         format: LanguageModelImage::FORMAT,
+                        source: None,
                     }))
                 } else {
                     Err(anyhow!("Failed to convert image"))
@@ -1043,6 +1045,7 @@ mod tests {
 /// This is the shared implementation used by both paste and file picker operations.
 pub(crate) async fn insert_images_as_context(
     images: Vec<(gpui::Image, SharedString)>,
+    source: Option<String>,
     editor: Entity<Editor>,
     mention_set: Entity<MentionSet>,
     workspace: WeakEntity<Workspace>,
@@ -1100,6 +1103,7 @@ pub(crate) async fn insert_images_as_context(
         }) else {
             continue;
         };
+        let source = source.clone();
         let task = cx
             .spawn(async move |cx| {
                 let image = cx
@@ -1111,6 +1115,7 @@ pub(crate) async fn insert_images_as_context(
                     Ok(Mention::Image(MentionImage {
                         data: image.source,
                         format: LanguageModelImage::FORMAT,
+                        source,
                     }))
                 } else {
                     Err("Failed to convert image".into())
@@ -1243,7 +1248,7 @@ pub(crate) fn paste_images_as_context(
         }
 
         if !images.is_empty() {
-            insert_images_as_context(images, editor, mention_set, workspace, &mut cx).await;
+            insert_images_as_context(images, None, editor, mention_set, workspace, &mut cx).await;
         } else if let Some(text) = fallback_text {
             editor
                 .update_in(cx, |editor, window, cx| editor.insert(&text, window, cx))

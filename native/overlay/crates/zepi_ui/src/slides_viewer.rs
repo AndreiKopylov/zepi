@@ -256,6 +256,7 @@ impl project::ProjectItem for SlidesItem {
 
 #[derive(Clone, Copy)]
 struct PanDrag {
+    button: MouseButton,
     start_pos: Point<Pixels>,
     start_offset: Point<Pixels>,
 }
@@ -1201,7 +1202,8 @@ impl gpui::Render for SlidesView {
                 .relative()
                 .shadow_lg()
                 .overflow_hidden()
-                .cursor_crosshair();
+                .cursor_crosshair()
+                .when(self.pan.is_some(), |page| page.cursor_grabbing());
             slide = match image {
                 Some(image) => slide.child(img(ImageSource::from(image)).w(px(slide_w)).h(px(slide_h))),
                 None => slide.child(
@@ -1266,8 +1268,9 @@ impl gpui::Render for SlidesView {
         }
 
         let view = cx.entity();
-        let wrapper = ui::v_flex()
+        let mut wrapper = ui::v_flex()
             .cursor_grab()
+            .when(self.pan.is_some(), |tape| tape.cursor_grabbing())
             .on_scroll({
                 let view = view.clone();
                 move |event, _, cx| {
@@ -1282,22 +1285,23 @@ impl gpui::Render for SlidesView {
                     });
                     cx.stop_propagation();
                 }
-            })
-            .on_mouse_down(MouseButton::Left, {
-                let view = view.clone();
-                move |event, _, cx| {
-                    let offset = view.read(cx).scroll.offset();
-                    let drag = PanDrag {
-                        start_pos: event.position,
-                        start_offset: offset,
-                    };
-                    let _ = view.update(cx, |this, cx| {
-                        this.pan = Some(drag);
+            });
+        for button in [MouseButton::Left, MouseButton::Right] {
+            let view = view.clone();
+            wrapper = wrapper.on_mouse_down(button, move |event, _, cx| {
+                view.update(cx, |this, cx| {
+                    if !this.sel_drag_active() {
+                        this.pan = Some(PanDrag {
+                            button,
+                            start_pos: event.position,
+                            start_offset: this.scroll.offset(),
+                        });
                         cx.notify();
-                    });
-                }
-            })
-            .child(tape);
+                    }
+                });
+            });
+        }
+        let wrapper = wrapper.child(tape);
 
         let scroll_area = div()
             .id("slides-scroll")
@@ -1753,6 +1757,13 @@ impl gpui::Render for SlidesView {
                                     return;
                                 }
                                 if let Some(drag) = this.pan {
+                                    if event.pressed_button != Some(drag.button) {
+                                        if event.pressed_button.is_none() {
+                                            this.pan = None;
+                                            cx.notify();
+                                        }
+                                        return;
+                                    }
                                     let max = this.scroll.max_offset();
                                     let current =
                                         drag.start_offset + (event.position - drag.start_pos);
@@ -1768,12 +1779,18 @@ impl gpui::Render for SlidesView {
                     });
                     window.on_mouse_event({
                         let view = view.clone();
-                        move |_: &gpui::MouseUpEvent, phase, _, cx: &mut App| {
+                        move |event: &gpui::MouseUpEvent, phase, _, cx: &mut App| {
                             if phase != gpui::DispatchPhase::Bubble {
                                 return;
                             }
                             let _ = view.update(cx, |this, cx| {
-                                this.pan = None;
+                                if this.pan.is_some_and(|pan| pan.button == event.button) {
+                                    this.pan = None;
+                                }
+                                if event.button != MouseButton::Left {
+                                    cx.notify();
+                                    return;
+                                }
                                 this.thumb_drag = None;
                                 if let Some(region) = this.region.as_mut() {
                                     if region.live {

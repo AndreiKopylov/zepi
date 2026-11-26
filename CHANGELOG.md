@@ -6,6 +6,18 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Select a region of a still PNG, JPEG, or WebP and attach it to the agent draft from the floating
+  selection toolbar without sending the message. The agent receives the source path and pixel
+  coordinates without adding them to the draft text.
+- Bundled `zepi-image-edit` skill for targeted image and diagram edits. Its local Pillow helper
+  replaces a line of text on a flat background, preserves its visible left edge, and saves a new
+  PNG without changing pixels outside the approved area. If the text does not fit, it offers an
+  exact expansion over clear background or a smaller font size for the user to approve.
+- Pan with the right mouse button in image, Word, and PowerPoint viewers. On Windows, the
+  four-way move cursor appears during the drag.
+
 ### Changed
 
 - Updated the bundled pi agent to 1.6.1.
