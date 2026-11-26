@@ -9,6 +9,7 @@ All notable changes to Zepi are documented here. The format follows
 ### Fixed
 
 - Scrolling across page boundaries in the Word viewer no longer jumps to the start of a page.
+- Scrolling between slides in the PowerPoint viewer no longer snaps to the start of a slide.
 
 ## [0.0.10] - 2026-11-25
 
