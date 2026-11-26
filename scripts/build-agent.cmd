@@ -19,6 +19,7 @@ mkdir "%HOST%\src\extensions\codemode" 2>nul
 > "%HOST%\src\extensions\codemode\worker.ts" echo // @ts-nocheck
 >> "%HOST%\src\extensions\codemode\worker.ts" echo import "../../../../../../../@earendil-works/pi-coding-agent/dist/extensions/codemode/worker.js";
 "%BUN%" build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv src/cli.ts src/extensions/codemode/worker.ts src/utils/image-resize-worker.ts "%HOST%\src\extensions\codemode\worker.ts" --outfile "%~dp0..\..\zepi-build\release-fast\agent.exe"
+if errorlevel 1 exit /b 1
 rem pi-tui native prebuild for the standalone interactive TUI (same layout as pi.exe).
 set "OUT=%~dp0..\..\zepi-build\release-fast"
 mkdir "%OUT%\native\win32\prebuilds\win32-x64" 2>nul

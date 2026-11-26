@@ -4,7 +4,8 @@ import { basename, join } from "node:path";
 import { spawn as spawnChild } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { getMcpToolExposure } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/mcp-servers.js";
-import { toToolExposure, createMcpResultSchema } from "../../node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.js";
+import { createMcpResultSchema } from "@earendil-works/pi-mcp";
+import { toToolExposure } from "../../node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.js";
 // Zepi MCP exposure v1
 function toolPolicy(state, name, synthetic = false) {
     const options = state.server[Symbol.for("zepi.pi.mcp.options")];

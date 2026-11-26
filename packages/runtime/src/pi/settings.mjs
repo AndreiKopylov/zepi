@@ -14,7 +14,7 @@ export class PiConfigError extends Error {}
 // APIs are audited against the exact bundled version, not reimplemented here.
 const manifest = piManifest;
 export const bundledVersion = manifest.version;
-if (bundledVersion !== "1.6.0") throw new PiConfigError("Zepi requires bundled pi 1.6.0. Run setup:acp.");
+if (bundledVersion !== "1.6.1") throw new PiConfigError("Zepi requires bundled pi 1.6.1. Run setup:acp.");
 
 async function readJson(path, fallback = {}) {
   try { return JSON.parse(await readFile(path, "utf8")); }

@@ -1,7 +1,7 @@
 use crate::{
     DEFAULT_THREAD_TITLE, SelectPermissionGranularity,
     conversation_view::thread_search_bar::{ThreadSearchBar, ThreadSearchBarEvent},
-    entry_view_state::TERMINAL_CONTENT_TOP_PADDING,
+    entry_view_state::{TERMINAL_CONTENT_TOP_PADDING, user_message_is_editable},
     open_abs_path_at_point, project_path_for_file_link,
     thread_metadata_store::{ThreadId, ThreadMetadataStore},
 };
@@ -1672,20 +1672,11 @@ impl ThreadView {
 
     pub(super) fn can_edit_user_message(&self, index: usize, cx: &App) -> bool {
         let thread = self.thread.read(cx);
-        let Some(message) = thread
+        thread
             .entries()
             .get(index)
-            .and_then(|entry| entry.user_message())
-        else {
-            return false;
-        };
-        thread.can_rewind_to(message.client_id.as_ref(), cx)
-            && !message.content.source_blocks().is_empty()
-            && message
-                .content
-                .source_blocks()
-                .iter()
-                .all(acp_thread::content::can_convert_to_v1)
+            .and_then(AgentThreadEntry::user_message)
+            .is_some_and(|message| user_message_is_editable(&self.agent_id, thread, message, cx))
     }
 
     /// Returns the currently active editor, either for a message that is being
@@ -1770,34 +1761,25 @@ impl ThreadView {
                 });
             }
             ViewEvent::MessageEditorEvent(_editor, MessageEditorEvent::Focus) => {
-                if let Some(AgentThreadEntry::UserMessage(user_message)) =
-                    self.thread.read(cx).entries().get(event.entry_index)
-                    && (self.agent_id.as_ref() == "zepi-pi" || (self.thread.read(cx).supports_truncate(cx)
-                    && user_message.client_id.is_some()))
-                    && !self.is_subagent()
-                {
+                if self.can_edit_user_message(event.entry_index, cx) {
                     self.editing_message = Some(event.entry_index);
                     cx.notify();
                 }
             }
             ViewEvent::MessageEditorEvent(editor, MessageEditorEvent::LostFocus) => {
-                if let Some(AgentThreadEntry::UserMessage(user_message)) =
-                    self.thread.read(cx).entries().get(event.entry_index)
-                    && (self.agent_id.as_ref() == "zepi-pi" || (self.thread.read(cx).supports_truncate(cx)
-                    && user_message.client_id.is_some()))
-                    && !self.is_subagent()
+                let thread = self.thread.read(cx);
+                if let Some(AgentThreadEntry::UserMessage(message)) =
+                    thread.entries().get(event.entry_index)
+                    && user_message_is_editable(&self.agent_id, thread, message, cx)
+                    && editor.read(cx).text(cx).as_str() == message.content.to_markdown(cx)
                 {
-                    if editor.read(cx).text(cx).as_str() == user_message.content.to_markdown(cx) {
-                        self.editing_message = None;
-                        cx.notify();
-                    }
+                    self.editing_message = None;
+                    cx.notify();
                 }
             }
             ViewEvent::MessageEditorEvent(_editor, MessageEditorEvent::SendImmediately) => {}
             ViewEvent::MessageEditorEvent(editor, MessageEditorEvent::Send) => {
-                if self.can_edit_user_message(event.entry_index, cx) {
-                    self.regenerate(event.entry_index, editor.clone(), window, cx);
-                }
+                self.regenerate(event.entry_index, editor.clone(), window, cx);
             }
             ViewEvent::MessageEditorEvent(_editor, MessageEditorEvent::Cancel) => {
                 self.cancel_editing(&Default::default(), window, cx);
@@ -8162,19 +8144,13 @@ impl ThreadView {
                     == gpui::WindowBackgroundAppearance::Opaque;
 
                 let is_subagent = self.is_subagent();
-                let can_rewind = self
-                    .thread
-                    .read(cx)
-                    .can_rewind_to(message.client_id.as_ref(), cx);
+                let is_editable =
+                    user_message_is_editable(&self.agent_id, self.thread.read(cx), message, cx);
                 let source_is_representable = message
                     .content
                     .source_blocks()
                     .iter()
                     .all(acp_thread::content::can_convert_to_v1);
-               let is_editable = (self.agent_id.as_ref() == "zepi-pi"
-                    || (can_rewind && message.client_id.is_some()))
-                    && !is_subagent
-                    && source_is_representable;
                 let agent_name = if is_subagent {
                     "subagents".into()
                 } else {

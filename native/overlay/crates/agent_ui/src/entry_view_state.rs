@@ -1,6 +1,6 @@
 use std::{ops::Range, sync::Arc};
 
-use acp_thread::{AcpThread, AgentThreadEntry, AssistantMessageChunk, ToolCall};
+use acp_thread::{AcpThread, AgentThreadEntry, AssistantMessageChunk, ToolCall, UserMessage};
 use agent::ThreadStore;
 use agent_client_protocol::v2::schema as acp_v2;
 use agent_settings::AgentSettings;
@@ -28,6 +28,22 @@ use crate::message_editor::{MessageEditor, MessageEditorEvent, SharedSessionCapa
 /// Top padding, in rems, inside agent terminals. The tool card adds it to the
 /// scrollable terminal's height so the number of visible rows doesn't change.
 pub(crate) const TERMINAL_CONTENT_TOP_PADDING: f32 = 0.5;
+
+pub(crate) fn user_message_is_editable(
+    agent_id: &AgentId,
+    thread: &AcpThread,
+    message: &UserMessage,
+    cx: &App,
+) -> bool {
+    let source = message.content.source_blocks();
+    !source.is_empty()
+        && source.iter().all(acp_thread::content::can_convert_to_v1)
+        && if agent_id.as_ref() == "zepi-pi" {
+            thread.parent_session_id().is_none()
+        } else {
+            thread.can_rewind_to(message.client_id.as_ref(), cx)
+        }
+}
 
 /// Maps an entry index through the removal of `removed` (a contiguous range of
 /// entries), returning `None` if the index referred to a removed entry.
@@ -311,21 +327,16 @@ impl EntryViewState {
         );
         let run_terminal_lifecycle =
             matches!(tool_call_sync, ToolCallSync::Live | ToolCallSync::Restore);
-        let Some(thread_entry) = thread.read(cx).entries().get(index) else {
+        let acp_thread = thread.read(cx);
+        let Some(thread_entry) = acp_thread.entries().get(index) else {
             return;
         };
 
         match thread_entry {
             AgentThreadEntry::UserMessage(message) => {
-                let can_rewind = thread
-                    .read(cx)
-                    .can_rewind_to(message.client_id.as_ref(), cx);
+                let is_editable = user_message_is_editable(&self.agent_id, acp_thread, message, cx);
                 let source_blocks = message.content.source_blocks();
                 let source_version = message.content.source_version();
-                let source_is_representable = source_blocks
-                    .iter()
-                    .all(acp_thread::content::can_convert_to_v1);
-                let is_editable = can_rewind && source_is_representable;
                 if let Some(Entry::UserMessage {
                     editor,
                     synced_source_version,
@@ -362,7 +373,7 @@ impl EntryViewState {
                             window,
                             cx,
                         );
-                        if self.agent_id.as_ref() != "zepi-pi" && !is_editable {
+                        if !is_editable {
                             editor.set_read_only(true, cx);
                         }
                         editor.set_source_message(source_blocks, window, cx);

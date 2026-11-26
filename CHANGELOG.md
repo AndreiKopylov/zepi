@@ -6,8 +6,14 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the bundled pi agent to 1.6.1.
+
 ### Fixed
 
+- **Send question again** now sends the question as a new pi message without changing the
+  conversation history or the composer draft.
 - Scrolling across page boundaries in the Word viewer no longer jumps to the start of a page.
 - Scrolling between slides in the PowerPoint viewer no longer snaps to the start of a slide.
 
