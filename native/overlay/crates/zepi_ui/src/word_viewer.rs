@@ -16,7 +16,7 @@ use crate::slides_viewer::{office_knob, office_thumb_color, place_region_toolbar
 use wordcraft_doc::Document;
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Placed, ViewMode};
 use wordcraft_render::{RenderOptions, render_page};
-use editor::{Editor, EditorEvent};
+use editor::{Editor, EditorEvent, EditorMode};
 use gpui::prelude::*;
 use gpui::{EntityId, 
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, ImageFormat,
@@ -297,7 +297,6 @@ pub struct WordView {
     search_open: bool,
     search_editor: Option<Entity<Editor>>,
     page_editor: Option<Entity<Editor>>,
-    page_editing: bool,
     focus_page_on_render: bool,
     focus_search_on_render: bool,
     focus_on_first_render: bool,
@@ -378,7 +377,6 @@ impl WordView {
             search_open: false,
             search_editor: None,
             page_editor: None,
-            page_editing: false,
             focus_page_on_render: false,
             focus_search_on_render: false,
             focus_on_first_render: true,
@@ -647,8 +645,11 @@ impl WordView {
         self.index_at(-f32::from(self.scroll.offset().y), cx)
     }
 
-    fn create_page_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Editor> {
-        let editor = cx.new(|cx| Editor::single_line(window, cx));
+    fn create_page_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Editor> {
+        let page = (self.current_index(cx) + 1).to_string();
+        let buffer = cx.new(|cx| language::Buffer::local(page, cx));
+        let buffer = cx.new(|cx| multi_buffer::MultiBuffer::singleton(buffer, cx));
+        let editor = cx.new(|cx| Editor::new(EditorMode::SingleLine, buffer, None, window, cx));
         cx.subscribe(&editor, move |this, editor, event: &EditorEvent, cx| {
             match event {
                 EditorEvent::BufferEdited => {
@@ -661,7 +662,7 @@ impl WordView {
                     }
                 }
                 EditorEvent::Blurred => {
-                    this.page_editing = false;
+                    this.page_editor = None;
                     cx.notify();
                 }
                 _ => {}
@@ -1448,8 +1449,7 @@ impl gpui::Render for WordView {
             let handle = self.focus_handle.clone();
             window.defer(cx, move |window, cx| window.focus(&handle, cx));
         }
-        if self.focus_page_on_render && self.page_editing {
-            self.focus_page_on_render = false;
+        if std::mem::take(&mut self.focus_page_on_render) {
             if let Some(editor) = self.page_editor.clone() {
                 let handle = editor.read(cx).focus_handle(cx);
                 window.defer(cx, move |window, cx| {
@@ -1469,35 +1469,19 @@ impl gpui::Render for WordView {
                 window.defer(cx, move |window, cx| window.focus(&handle, cx));
             }
         }
-        if self.page_editor.is_none() {
-            let editor = self.create_page_editor(window, cx);
-            self.page_editor = Some(editor);
-        }
-        let page_ed = self.page_editor.clone().expect("page editor just created");
-        let current = self.current_index(cx) + 1;
-        if !page_ed.read(cx).focus_handle(cx).is_focused(window) {
-            let want = current.to_string();
-            if page_ed.read(cx).text(cx) != want {
-                page_ed.update(cx, |editor, cx| editor.set_text(want, window, cx));
-            }
-        }
-        let page_slot = if self.page_editing {
-            div().id("page-edit").w(px(28.)).child(page_ed.clone())
+        let page_slot = if let Some(editor) = &self.page_editor {
+            div().id("page-edit").w(px(28.)).child(editor.clone())
         } else {
+            let current = self.current_index(cx) + 1;
             div()
                 .id("page-label")
                 .cursor_pointer()
                 .tooltip(Tooltip::text("Click to jump to a page"))
-                .on_click({
-                    let view = view.clone();
-                    move |_, _, cx| {
-                        let _ = view.update(cx, |this, cx| {
-                            this.page_editing = true;
-                            this.focus_page_on_render = true;
-                            cx.notify();
-                        });
-                    }
-                })
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.page_editor = Some(this.create_page_editor(window, cx));
+                    this.focus_page_on_render = true;
+                    cx.notify();
+                }))
                 .child(
                     Label::new(SharedString::from(current.to_string()))
                         .size(LabelSize::Small)

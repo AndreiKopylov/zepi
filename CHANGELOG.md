@@ -4,6 +4,12 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Scrolling across page boundaries in the Word viewer no longer jumps to the start of a page.
+
 ## [0.0.10] - 2026-11-25
 
 ### Changed
