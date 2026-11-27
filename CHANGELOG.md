@@ -28,6 +28,8 @@ All notable changes to Zepi are documented here. The format follows
   conversation history or the composer draft.
 - Scrolling across page boundaries in the Word viewer no longer jumps to the start of a page.
 - Scrolling between slides in the PowerPoint viewer no longer snaps to the start of a slide.
+- Automatic `browse` setup leaves an unreadable or malformed `mcp.json` untouched instead of
+  replacing it with a configuration containing only `browse`.
 
 ## [0.0.10] - 2026-11-25
 
