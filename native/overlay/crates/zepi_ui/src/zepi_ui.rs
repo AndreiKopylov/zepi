@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
-use agent_ui::AgentPanel;
-use gpui::{App, Context, KeyBinding, Window, actions};
+use agent_ui::{AgentPanel, ConversationView};
+use gpui::{App, Context, Entity, KeyBinding, RenderImage, Window, actions};
 use project_panel::ProjectPanel;
-use workspace::{MultiWorkspace, Workspace};
+use util::ResultExt as _;
+use workspace::{MultiWorkspace, Toast, Workspace, notifications::NotificationId};
 
 mod sheet_formula;
 pub mod sheet_raster;
@@ -28,24 +29,28 @@ pub(crate) enum OfficeContent {
     },
 }
 
-pub(crate) fn send_office_to_agent(content: OfficeContent, window: &mut Window, cx: &mut App) -> bool {
-    let workspace = window.root::<Workspace>().flatten().or_else(|| {
+fn window_workspace(window: &Window, cx: &App) -> Option<Entity<Workspace>> {
+    window.root::<Workspace>().flatten().or_else(|| {
         window
             .root::<MultiWorkspace>()
             .flatten()
             .map(|multi| multi.read(cx).workspace().clone())
-    });
-    let thread = workspace
-        .and_then(|workspace| workspace.read(cx).panel::<AgentPanel>(cx))
-        .and_then(|panel| {
-            let panel = panel.read(cx);
-            panel
-                .visible_conversation_view()
-                .or_else(|| panel.active_conversation_view())?
-                .read(cx)
-                .active_thread()
-                .cloned()
-        });
+    })
+}
+
+fn active_conversation(workspace: &Workspace, cx: &App) -> Option<Entity<ConversationView>> {
+    let panel = workspace.panel::<AgentPanel>(cx)?;
+    let panel = panel.read(cx);
+    panel
+        .visible_conversation_view()
+        .or_else(|| panel.active_conversation_view())
+        .cloned()
+}
+
+pub(crate) fn send_office_to_agent(content: OfficeContent, window: &mut Window, cx: &mut App) -> bool {
+    let thread = window_workspace(window, cx)
+        .and_then(|workspace| active_conversation(workspace.read(cx), cx))
+        .and_then(|conversation| conversation.read(cx).active_thread().cloned());
     let Some(thread) = thread else {
         log::error!("office viewer send: no active agent thread");
         return false;
@@ -62,9 +67,90 @@ pub(crate) fn send_office_to_agent(content: OfficeContent, window: &mut Window, 
         OfficeContent::Image { path, location, image } => {
             let file = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
             let name = format!("{file} · {location}");
-            editor.zepi_append_office_image(image, name.into(), window, cx)
+            editor.zepi_append_image(image, name.into(), None, window, cx)
         }
     })
+}
+
+pub fn attach_image_region_to_agent(
+    path: PathBuf,
+    rect: [u32; 4],
+    image: Arc<RenderImage>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let Some(workspace) = window_workspace(window, cx) else {
+        return false;
+    };
+    let Some(thread) = active_conversation(workspace.read(cx), cx)
+        .and_then(|conversation| conversation.read(cx).active_thread().cloned())
+    else {
+        show_region_error(&workspace, "Open an agent thread to attach the image region.", cx);
+        return false;
+    };
+    let editor = thread.read(cx).message_editor.downgrade();
+    let workspace = workspace.downgrade();
+    let crop = cx.background_executor().spawn(async move { crop_rendered_region(&image, rect) });
+    window
+        .spawn(cx, async move |cx| {
+            let cropped = crop.await;
+            cx.update(|window, cx| {
+                let Some(editor) = editor.upgrade() else { return };
+                let Some(image) = cropped else {
+                    if let Some(workspace) = workspace.upgrade() {
+                        show_region_error(&workspace, "Could not crop the selected image region.", cx);
+                    }
+                    return;
+                };
+                let [left, top, right, bottom] = rect;
+                let coords = format!("({left}, {top}, {right}, {bottom})");
+                let file = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+                let name = format!("{file} · {coords}");
+                let source = format!(
+                    "[Image source: {} | pixel box {coords} (left, top, right, bottom; right/bottom exclusive; after EXIF orientation)]",
+                    path.display(),
+                );
+                editor.update(cx, |editor, cx| {
+                    editor.zepi_append_image(image, name.into(), Some(&source), window, cx);
+                });
+            })
+            .log_err();
+        })
+        .detach();
+    true
+}
+
+fn show_region_error(workspace: &Entity<Workspace>, message: &str, cx: &mut App) {
+    struct ImageRegionError;
+    workspace.update(cx, |workspace, cx| {
+        workspace.show_toast(
+            Toast::new(NotificationId::unique::<ImageRegionError>(), message.to_owned()),
+            cx,
+        );
+    });
+}
+
+fn crop_rendered_region(
+    image: &RenderImage,
+    [left, top, right, bottom]: [u32; 4],
+) -> Option<gpui::Image> {
+    let size = image.size(0).map(u32::from);
+    if left >= right || top >= bottom || right > size.width || bottom > size.height {
+        return None;
+    }
+    let bytes = image.as_bytes(0)?;
+    let mut rgba = Vec::with_capacity((right - left) as usize * (bottom - top) as usize * 4);
+    for y in top..bottom {
+        let row = y as usize * size.width as usize * 4;
+        rgba.extend_from_slice(bytes.get(row + left as usize * 4..row + right as usize * 4)?);
+    }
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    let cropped = image::RgbaImage::from_raw(right - left, bottom - top, rgba)?;
+    let mut png = std::io::Cursor::new(Vec::new());
+    cropped.write_to(&mut png, image::ImageFormat::Png).ok()?;
+    Some(gpui::Image::from_bytes(gpui::ImageFormat::Png, png.into_inner()))
 }
 
 pub(crate) fn crop_office_region(
@@ -211,7 +297,19 @@ fn register_actions(workspace: &mut Workspace) {
 
 #[cfg(test)]
 mod tests {
-    use super::{crop_office_region, office_page_indices};
+    use super::{crop_office_region, crop_rendered_region, office_page_indices};
+
+    #[test]
+    fn image_region_crops_only_requested_pixels_in_rgba_order() {
+        let pixels = image::RgbaImage::from_fn(4, 3, |x, y| image::Rgba([7, y as u8, x as u8, 123]));
+        let render = gpui::RenderImage::new([image::Frame::new(pixels)]);
+        let crop = crop_rendered_region(&render, [1, 1, 3, 3]).unwrap();
+        let crop = image::load_from_memory(crop.bytes()).unwrap().to_rgba8();
+        assert_eq!(crop.dimensions(), (2, 2));
+        assert_eq!(crop.get_pixel(0, 0).0, [1, 1, 7, 123]);
+        assert_eq!(crop.get_pixel(1, 1).0, [2, 2, 7, 123]);
+        assert!(crop_rendered_region(&render, [2, 0, 5, 1]).is_none());
+    }
 
     #[test]
     fn office_image_clips_to_the_selection_and_uses_a_content_id() {

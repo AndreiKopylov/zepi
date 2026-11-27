@@ -10,7 +10,7 @@ use anyhow::Result;
 use deckcraft_geom::{Affine as DAffine, Point as DPoint};
 use deckcraft_model::Presentation;
 use deckcraft_render::{RenderOpts, place_slide, render_slide};
-use editor::{Editor, EditorEvent};
+use editor::{Editor, EditorEvent, EditorMode};
 use gpui::prelude::*;
 use gpui::{EntityId, 
     actions, App, AppContext, ClipboardItem, Context, Entity, FocusHandle, ImageFormat,
@@ -256,6 +256,7 @@ impl project::ProjectItem for SlidesItem {
 
 #[derive(Clone, Copy)]
 struct PanDrag {
+    button: MouseButton,
     start_pos: Point<Pixels>,
     start_offset: Point<Pixels>,
 }
@@ -306,7 +307,6 @@ pub struct SlidesView {
     search_open: bool,
     search_editor: Option<Entity<Editor>>,
     page_editor: Option<Entity<Editor>>,
-    page_editing: bool,
     focus_page_on_render: bool,
     focus_search_on_render: bool,
     focus_on_first_render: bool,
@@ -386,7 +386,6 @@ impl SlidesView {
             search_open: false,
             search_editor: None,
             page_editor: None,
-            page_editing: false,
             focus_page_on_render: false,
             focus_search_on_render: false,
             focus_on_first_render: true,
@@ -628,8 +627,11 @@ impl SlidesView {
         ((pos / step).round() as isize).clamp(0, count as isize - 1) as usize
     }
 
-    fn create_page_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Editor> {
-        let editor = cx.new(|cx| Editor::single_line(window, cx));
+    fn create_page_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Editor> {
+        let page = (self.current_index(cx) + 1).to_string();
+        let buffer = cx.new(|cx| language::Buffer::local(page, cx));
+        let buffer = cx.new(|cx| multi_buffer::MultiBuffer::singleton(buffer, cx));
+        let editor = cx.new(|cx| Editor::new(EditorMode::SingleLine, buffer, None, window, cx));
         cx.subscribe(&editor, move |this, editor, event: &EditorEvent, cx| {
             match event {
                 EditorEvent::BufferEdited => {
@@ -642,7 +644,7 @@ impl SlidesView {
                     }
                 }
                 EditorEvent::Blurred => {
-                    this.page_editing = false;
+                    this.page_editor = None;
                     cx.notify();
                 }
                 _ => {}
@@ -1200,7 +1202,8 @@ impl gpui::Render for SlidesView {
                 .relative()
                 .shadow_lg()
                 .overflow_hidden()
-                .cursor_crosshair();
+                .cursor_crosshair()
+                .when(self.pan.is_some(), |page| page.cursor_grabbing());
             slide = match image {
                 Some(image) => slide.child(img(ImageSource::from(image)).w(px(slide_w)).h(px(slide_h))),
                 None => slide.child(
@@ -1265,8 +1268,9 @@ impl gpui::Render for SlidesView {
         }
 
         let view = cx.entity();
-        let wrapper = ui::v_flex()
+        let mut wrapper = ui::v_flex()
             .cursor_grab()
+            .when(self.pan.is_some(), |tape| tape.cursor_grabbing())
             .on_scroll({
                 let view = view.clone();
                 move |event, _, cx| {
@@ -1281,22 +1285,23 @@ impl gpui::Render for SlidesView {
                     });
                     cx.stop_propagation();
                 }
-            })
-            .on_mouse_down(MouseButton::Left, {
-                let view = view.clone();
-                move |event, _, cx| {
-                    let offset = view.read(cx).scroll.offset();
-                    let drag = PanDrag {
-                        start_pos: event.position,
-                        start_offset: offset,
-                    };
-                    let _ = view.update(cx, |this, cx| {
-                        this.pan = Some(drag);
+            });
+        for button in [MouseButton::Left, MouseButton::Right] {
+            let view = view.clone();
+            wrapper = wrapper.on_mouse_down(button, move |event, _, cx| {
+                view.update(cx, |this, cx| {
+                    if !this.sel_drag_active() {
+                        this.pan = Some(PanDrag {
+                            button,
+                            start_pos: event.position,
+                            start_offset: this.scroll.offset(),
+                        });
                         cx.notify();
-                    });
-                }
-            })
-            .child(tape);
+                    }
+                });
+            });
+        }
+        let wrapper = wrapper.child(tape);
 
         let scroll_area = div()
             .id("slides-scroll")
@@ -1456,8 +1461,7 @@ impl gpui::Render for SlidesView {
             let handle = self.focus_handle.clone();
             window.defer(cx, move |window, cx| window.focus(&handle, cx));
         }
-        if self.focus_page_on_render && self.page_editing {
-            self.focus_page_on_render = false;
+        if std::mem::take(&mut self.focus_page_on_render) {
             if let Some(editor) = self.page_editor.clone() {
                 let handle = editor.read(cx).focus_handle(cx);
                 window.defer(cx, move |window, cx| {
@@ -1477,35 +1481,19 @@ impl gpui::Render for SlidesView {
                 window.defer(cx, move |window, cx| window.focus(&handle, cx));
             }
         }
-        if self.page_editor.is_none() {
-            let editor = self.create_page_editor(window, cx);
-            self.page_editor = Some(editor);
-        }
-        let page_ed = self.page_editor.clone().expect("page editor just created");
-        let current = self.current_index(cx) + 1;
-        if !page_ed.read(cx).focus_handle(cx).is_focused(window) {
-            let want = current.to_string();
-            if page_ed.read(cx).text(cx) != want {
-                page_ed.update(cx, |editor, cx| editor.set_text(want, window, cx));
-            }
-        }
-        let page_slot = if self.page_editing {
-            div().id("page-edit").w(px(28.)).child(page_ed.clone())
+        let page_slot = if let Some(editor) = &self.page_editor {
+            div().id("page-edit").w(px(28.)).child(editor.clone())
         } else {
+            let current = self.current_index(cx) + 1;
             div()
                 .id("page-label")
                 .cursor_pointer()
                 .tooltip(Tooltip::text("Click to jump to a page"))
-                .on_click({
-                    let view = view.clone();
-                    move |_, _, cx| {
-                        let _ = view.update(cx, |this, cx| {
-                            this.page_editing = true;
-                            this.focus_page_on_render = true;
-                            cx.notify();
-                        });
-                    }
-                })
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.page_editor = Some(this.create_page_editor(window, cx));
+                    this.focus_page_on_render = true;
+                    cx.notify();
+                }))
                 .child(
                     Label::new(SharedString::from(current.to_string()))
                         .size(LabelSize::Small)
@@ -1769,6 +1757,13 @@ impl gpui::Render for SlidesView {
                                     return;
                                 }
                                 if let Some(drag) = this.pan {
+                                    if event.pressed_button != Some(drag.button) {
+                                        if event.pressed_button.is_none() {
+                                            this.pan = None;
+                                            cx.notify();
+                                        }
+                                        return;
+                                    }
                                     let max = this.scroll.max_offset();
                                     let current =
                                         drag.start_offset + (event.position - drag.start_pos);
@@ -1784,12 +1779,18 @@ impl gpui::Render for SlidesView {
                     });
                     window.on_mouse_event({
                         let view = view.clone();
-                        move |_: &gpui::MouseUpEvent, phase, _, cx: &mut App| {
+                        move |event: &gpui::MouseUpEvent, phase, _, cx: &mut App| {
                             if phase != gpui::DispatchPhase::Bubble {
                                 return;
                             }
                             let _ = view.update(cx, |this, cx| {
-                                this.pan = None;
+                                if this.pan.is_some_and(|pan| pan.button == event.button) {
+                                    this.pan = None;
+                                }
+                                if event.button != MouseButton::Left {
+                                    cx.notify();
+                                    return;
+                                }
                                 this.thumb_drag = None;
                                 if let Some(region) = this.region.as_mut() {
                                     if region.live {

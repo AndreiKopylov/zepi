@@ -4695,38 +4695,59 @@ pub(crate) mod tests {
     use super::*;
 
     #[gpui::test]
-    async fn test_zepi_recall_and_resend_restored_question_preserve_composer_draft(cx: &mut TestAppContext) {
+    async fn test_zepi_recall_and_resend_restored_question_preserve_composer_draft(
+        cx: &mut TestAppContext,
+    ) {
+        use acp_v1::SessionUpdate::{AgentMessageChunk, UserMessageChunk};
+
         init_test(cx);
-        let connection = StubAgentConnection::new().with_agent_id(AgentId::new("zepi-pi"));
-        let (conversation, cx) = setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
+        let connection = StubAgentConnection::new()
+            .with_agent_id(AgentId::new("zepi-pi"))
+            .with_supports_truncate(false);
+        let (conversation, cx) =
+            setup_conversation_view(StubAgentServer::zepi(connection.clone()), cx).await;
         add_to_workspace(conversation.clone(), cx);
         let view = active_thread(&conversation, cx);
         let id = view.read_with(cx, |view, cx| view.thread.read(cx).session_id().clone());
-        // Restored pi messages have no native truncate capability/client ID.
-        cx.update(|_, cx| connection.send_update(id.clone(), serde_json::from_value(json!({
-            "sessionUpdate":"user_message_chunk", "content":{"type":"text","text":"Previous question"}
-        })).unwrap(), cx));
-        cx.run_until_parked();
+        for update in [
+            UserMessageChunk(acp_v1::ContentChunk::new("Previous".into())),
+            UserMessageChunk(acp_v1::ContentChunk::new(" question".into())),
+            AgentMessageChunk(acp_v1::ContentChunk::new("Original answer".into())),
+        ] {
+            cx.update(|_, cx| connection.send_update(id.clone(), update, cx));
+            cx.run_until_parked();
+        }
         let editor = view.read_with(cx, |view, _| view.message_editor.clone());
-        editor.update_in(cx, |editor, window, cx| editor.focus_handle(cx).focus(window, cx));
+        cx.focus(&editor);
         cx.simulate_keystrokes("up");
         assert_eq!(editor.read_with(cx, |editor, cx| editor.text(cx)), "Previous question");
         editor.update_in(cx, |editor, window, cx| editor.set_text("Preserved draft", window, cx));
         cx.simulate_keystrokes("up");
         assert_eq!(editor.read_with(cx, |editor, cx| editor.text(cx)), "Preserved draft");
-        let historical = view.read_with(cx, |view, cx| view.entry_view_state.read(cx).entry(0).unwrap().message_editor().unwrap().clone());
-        historical.update_in(cx, |editor, window, cx| editor.set_text("Edited question", window, cx));
-        view.update_in(cx, |view, window, cx| {
-            view.editing_message = Some(0);
-            view.regenerate(0, historical.clone(), window, cx);
+        let historical = view.read_with(cx, |view, cx| {
+            view.entry_view_state.read(cx).entry(0).unwrap().message_editor().unwrap().clone()
+        });
+        connection.set_next_prompt_updates(vec![AgentMessageChunk(acp_v1::ContentChunk::new(
+            "Repeated answer".into(),
+        ))]);
+        view.update_in(cx, |view, window, cx| view.regenerate(0, historical.clone(), window, cx));
+        cx.run_until_parked();
+
+        cx.focus(&historical);
+        historical.update_in(cx, |editor, window, cx| {
+            editor.set_text("Edited question", window, cx);
+            window.dispatch_action(Box::new(Chat), cx);
         });
         cx.run_until_parked();
         assert_eq!(editor.read_with(cx, |editor, cx| editor.text(cx)), "Preserved draft");
         assert_eq!(historical.read_with(cx, |editor, cx| editor.text(cx)), "Previous question");
         view.read_with(cx, |view, cx| {
-            let users = view.thread.read(cx).entries().iter().filter_map(|entry| entry.user_message())
+            let entries = view.thread.read(cx).entries();
+            let users = entries.iter().filter_map(AgentThreadEntry::user_message)
                 .map(|message| message.content.to_markdown(cx)).collect::<Vec<_>>();
-            assert_eq!(users, vec!["Previous question", "Edited question"]);
+            assert_eq!(users, vec!["Previous question", "Previous question", "Edited question"]);
+            assert_eq!(entries[1].to_markdown(cx), "## Assistant\n\nOriginal answer\n\n");
+            assert_eq!(entries[3].to_markdown(cx), "## Assistant\n\nRepeated answer\n\n");
         });
         cx.update(|_, _| connection.end_turn(id, acp_v1::StopReason::EndTurn));
         cx.run_until_parked();

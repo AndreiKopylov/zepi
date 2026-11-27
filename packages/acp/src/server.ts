@@ -151,7 +151,7 @@ export async function startZepiAgent(agentDir: string, sessionDir: string, strea
             hasOfficePython
               ? "Zepi's bundled Office Python is available. Run Office scripts with `& $env:ZEPI_PYTHON <file>`. It includes python-docx, openpyxl, python-pptx, pypdf and Pillow; never run pip in it."
               : "Zepi's bundled Office Python is unavailable. If the task requires Office Python, tell the user it is unavailable instead of attempting to run scripts. Native Office viewers and `zepi office render` do not require Python.",
-            "Never substitute `python`, `python3` or `py` for `$env:ZEPI_PYTHON` in Office tasks, guess an alternative path or install packages as a workaround. For non-Office Python tasks use `py -3` and create a project venv with `py -3 -m venv .venv`. If `py` is missing, tell the user the task needs system Python.",
+            "Use the bundled Pillow via `$env:ZEPI_PYTHON` for `zepi-image-edit` too. If the bundled runtime is unavailable, do not substitute another Python or install packages as a workaround for a bundled skill. For other Python tasks use `py -3` and create a project venv with `py -3 -m venv .venv`. If `py` is missing, tell the user the task needs system Python.",
             "fetch_content fetches http(s) URLs only. Local files are read with the read tool.",
           ];
         }

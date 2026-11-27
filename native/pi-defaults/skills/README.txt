@@ -12,6 +12,7 @@ Bundled:
   zepi-deck-design  design rules: grid, type scale, colour, slide compositions, charts, tables
   zepi-deck-build   building decks with python-pptx: template layouts, tables, native charts, Gantt
   zepi-office-qa    render with `zepi office render` and check the result before reporting it done
+  zepi-image-edit   apply a described change to an image crop or its editable diagram source
 
 Put your own skills next to it, in %LOCALAPPDATA%\Zepi\pi\skills\<name>\SKILL.md.
 Those are never touched by Zepi.

@@ -4,6 +4,33 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.11] - 2026-11-27
+
+### Added
+
+- Select a region of a still PNG, JPEG, or WebP and attach it to the agent draft from the floating
+  selection toolbar without sending the message. The agent receives the source path and pixel
+  coordinates without adding them to the draft text.
+- Bundled `zepi-image-edit` skill for targeted image and diagram edits. Its local Pillow helper
+  replaces a line of text on a flat background, preserves its visible left edge, and saves a new
+  PNG without changing pixels outside the approved area. If the text does not fit, it offers an
+  exact expansion over clear background or a smaller font size for the user to approve.
+- Pan with the right mouse button in image, Word, and PowerPoint viewers. On Windows, the
+  four-way move cursor appears during the drag.
+
+### Changed
+
+- Updated the bundled pi agent to 1.6.1.
+
+### Fixed
+
+- **Send question again** now sends the question as a new pi message without changing the
+  conversation history or the composer draft.
+- Scrolling across page boundaries in the Word viewer no longer jumps to the start of a page.
+- Scrolling between slides in the PowerPoint viewer no longer snaps to the start of a slide.
+- Automatic `browse` setup leaves an unreadable or malformed `mcp.json` untouched instead of
+  replacing it with a configuration containing only `browse`.
+
 ## [0.0.10] - 2026-11-25
 
 ### Changed

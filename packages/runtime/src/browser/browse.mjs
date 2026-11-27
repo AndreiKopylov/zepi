@@ -178,11 +178,27 @@ export async function setBrowseSettings(dir, changes) {
   return JSON.parse(stdout);
 }
 
-export async function writeBrowseMcp(directory, dir, tools) {
-  await mkdir(directory, { recursive: true });
+async function readMcpConfig(path) {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8"));
+    const servers = value?.mcpServers ?? {};
+    if (value && typeof value === "object" && !Array.isArray(value)
+        && typeof servers === "object" && !Array.isArray(servers)) return value;
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+  }
+  throw new Error("Unable to read mcp.json. It was not changed.");
+}
+
+async function addBrowseMcp(directory, dir, tools, onlyMissing) {
   const path = join(directory, "mcp.json");
-  const value = await readFile(path, "utf8").then(t => JSON.parse(t)).catch(() => ({ mcpServers: {} }));
-  value.mcpServers = value.mcpServers ?? {};
+  const value = await readMcpConfig(path).catch(error => {
+    if (onlyMissing) return null;
+    throw error;
+  });
+  if (!value || (onlyMissing && value.mcpServers?.browse)) return false;
+  await mkdir(directory, { recursive: true });
+  value.mcpServers ??= {};
   value.mcpServers.browse = {
     command: join(dir, "bun.exe"),
     args: [join(dir, "cli.mjs"), "mcp"],
@@ -192,20 +208,22 @@ export async function writeBrowseMcp(directory, dir, tools) {
   const tmp = path + ".tmp";
   await writeFile(tmp, JSON.stringify(value, null, 2) + "\n");
   await rename(tmp, path);
+  return true;
+}
+
+export async function writeBrowseMcp(directory, dir, tools) {
+  await addBrowseMcp(directory, dir, tools, false);
 }
 
 export async function ensureBrowseMcp(directory, dir, tools) {
   try { await access(join(dir, "cli.mjs")); } catch { return false; }
-  const value = await readFile(join(directory, "mcp.json"), "utf8").then(t => JSON.parse(t)).catch(() => ({ mcpServers: {} }));
-  if (value?.mcpServers?.browse) return false;
-  await writeBrowseMcp(directory, dir, tools);
-  return true;
+  return addBrowseMcp(directory, dir, tools, true);
 }
 
 export async function removeBrowseMcp(directory) {
   const path = join(directory, "mcp.json");
-  const value = await readFile(path, "utf8").then(t => JSON.parse(t)).catch(() => null);
-  if (!value?.mcpServers?.browse) return;
+  const value = await readMcpConfig(path);
+  if (!value.mcpServers?.browse) return;
   delete value.mcpServers.browse;
   const tmp = path + ".tmp";
   await writeFile(tmp, JSON.stringify(value, null, 2) + "\n");
