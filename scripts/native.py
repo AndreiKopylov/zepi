@@ -68,6 +68,9 @@ def prepare():
     if digest(archive) != manifest['sha256']:
         raise RuntimeError('Local Zed archive does not match the pinned SHA-256')
     previous_state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    previous_pin = previous_state.get('upstreamSha256')
+    if SOURCE.exists() and previous_pin and previous_pin != digest(MANIFEST):
+        raise RuntimeError(f'Zed pin changed; move {SOURCE} aside before preparing the new base')
     previous = previous_state.get('files', previous_state)
     overlay = ROOT / 'native' / 'overlay'
     removed = removed_paths()
@@ -198,6 +201,8 @@ def guard():
     if not STATE.exists():
         raise RuntimeError('Run npm run native:prepare first')
     prepared = json.loads(STATE.read_text())
+    if not SOURCE.is_dir() or prepared.get('upstreamSha256') != digest(MANIFEST):
+        raise RuntimeError('Zed source is missing or the pin changed; run npm run native:prepare')
     if prepared.get('overlayStamp') != overlay_stamp():
         raise RuntimeError('Overlay changed since the last prepare; run npm run native:prepare before compiling (cargo would build a stale tree otherwise)')
     print('overlay up to date with ' + str(LOCAL / 'upstream/zed'))

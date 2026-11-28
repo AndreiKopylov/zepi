@@ -2,6 +2,7 @@ mod branch_mode;
 
 use git_ui_core::askpass_modal::AskPassModal;
 pub(crate) use git_ui_core::notifications::{open_output, show_error_toast};
+use language_model_selector::{LanguageModelSelector, language_model_picker, toggle_in_settings};
 
 use crate::branch_diff::BranchDiff;
 use crate::commit_context_menu::{
@@ -30,7 +31,7 @@ use db::kvp::KeyValueStore;
 use editor::{Editor, EditorElement, EditorMode, MultiBuffer, MultiBufferOffset, SizingBehavior};
 use editor::{EditorStyle, RewrapOptions};
 use file_icons::FileIcons;
-use futures::StreamExt as _;
+use futures::{AsyncWriteExt as _, StreamExt as _};
 use futures::channel::oneshot::Canceled;
 use git::Oid;
 use git::commit::ParsedCommitMessage;
@@ -118,6 +119,8 @@ use zed_actions::{
 const GIT_PANEL_KEY: &str = "GitPanel";
 const UPDATE_DEBOUNCE: Duration = Duration::from_millis(50);
 const RECENT_COMMIT_COUNT: usize = 3;
+const PI_COMMIT_HISTORY_LIMIT: usize = 30;
+const PI_COMMIT_EXAMPLE_COUNT: usize = 5;
 // TODO: We should revise this part. It seems the indentation width is not aligned with the one in project panel
 const TREE_INDENT: f32 = 16.0;
 const MAX_HISTORY_TAG_CHIPS: usize = 3;
@@ -1369,6 +1372,7 @@ pub struct GitPanel {
     git_access: Option<GitAccess>,
     commit_menu_handle: PopoverMenuHandle<ContextMenu>,
     changes_actions_menu_handle: PopoverMenuHandle<ContextMenu>,
+    commit_message_model_selector: Entity<LanguageModelSelector>,
     remote_action_menu_handle: PopoverMenuHandle<ContextMenu>,
     changes_mode: ChangesMode,
     changes_mode_menu_handle: PopoverMenuHandle<ContextMenu>,
@@ -1678,6 +1682,40 @@ impl GitPanel {
             )
             .detach();
 
+            let picker = cx.new(|cx| {
+                language_model_picker(
+                    |cx| LanguageModelRegistry::read_global(cx).commit_message_model(cx),
+                    {
+                        let fs = fs.clone();
+
+                        move |model, cx| {
+                            let provider = model.provider_id().0.to_string();
+                            let model_id = model.id().0.to_string();
+
+                            update_settings_file(fs.clone(), cx, move |settings, _cx| {
+                                settings
+                                    .agent
+                                    .get_or_insert_default()
+                                    .set_commit_message_model(provider, model_id);
+                            });
+                        }
+                    },
+                    {
+                        let fs = fs.clone();
+
+                        move |model, should_be_favorite, cx| {
+                            toggle_in_settings(model, should_be_favorite, fs.clone(), cx)
+                        }
+                    },
+                    true,
+                    focus_handle.clone(),
+                    window,
+                    cx,
+                )
+            });
+            let model_selector =
+                cx.new(|_| LanguageModelSelector::new(picker).cycle_favorite_models_enabled(false));
+
             let mut this = Self {
                 active_repository,
                 commit_editor,
@@ -1743,6 +1781,7 @@ impl GitPanel {
                 git_access: None,
                 commit_menu_handle: PopoverMenuHandle::default(),
                 changes_actions_menu_handle: PopoverMenuHandle::default(),
+                commit_message_model_selector: model_selector,
                 remote_action_menu_handle: PopoverMenuHandle::default(),
                 changes_mode: ChangesMode::Uncommitted,
                 changes_mode_menu_handle: PopoverMenuHandle::default(),
@@ -4662,6 +4701,21 @@ impl GitPanel {
         }
     }
 
+    fn is_commit_style_example(message: &str) -> bool {
+        let subject = message.lines().next().unwrap_or_default().trim();
+        if subject.to_ascii_lowercase().starts_with("merge ") {
+            return false;
+        }
+        subject.split_whitespace().any(|word| {
+            let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-');
+            let ticket = word.split_once('-').is_some_and(|(prefix, number)| {
+                !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_alphabetic())
+                    && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
+            });
+            !ticket && word.chars().filter(|c| c.is_alphabetic()).count() >= 4
+        })
+    }
+
     fn build_commit_message_prompt(
         prompt: &str,
         user_agents_md: Option<&str>,
@@ -4720,35 +4774,99 @@ impl GitPanel {
         )
     }
 
-    /// Generates a commit message using an LLM.
-    // Zepi: native LLM commit generation is inactive until it is routed through pi.
+    async fn generate_pi_commit_message(prompt: &str) -> anyhow::Result<String> {
+        use util::command::{Stdio, new_command};
+
+        let root = std::path::PathBuf::from(
+            std::env::var_os("ZEPI_ROOT").context("Missing Zepi runtime directory")?,
+        );
+        let agent = std::env::var_os("ZEPI_AGENT")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| root.join("agent.exe"));
+        let mut command = if agent.is_file() {
+            new_command(agent)
+        } else {
+            let mut command =
+                new_command(std::env::var_os("ZEPI_NODE").context("Missing pi runtime")?);
+            command.arg(root.join("packages/acp/src/cli.js"));
+            command
+        };
+        let mut child = command
+            .arg("commit-message")
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .context("Unable to start pi")?;
+        let mut input = child.stdin.take().context("Unable to open pi input")?;
+        input
+            .write_all(prompt.as_bytes())
+            .await
+            .context("Unable to send the request to pi")?;
+        input.close().await.context("Unable to finish sending the request to pi")?;
+        let output = child.output().await.context("Unable to read the pi response")?;
+        let reply: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .context("Invalid response from pi; the agent may need to be rebuilt")?;
+        if !output.status.success() || reply["ok"] != true {
+            anyhow::bail!(
+                "{}",
+                reply["error"].as_str().unwrap_or("pi could not generate a commit message")
+            );
+        }
+        let message = reply["message"]
+            .as_str()
+            .filter(|text| !text.trim().is_empty() && !text.contains('\0'))
+            .context("pi did not return a valid commit message")?;
+        Ok(message.to_owned())
+    }
+
+    /// Generates a draft commit message without committing it.
     pub fn generate_commit_message(&mut self, cx: &mut Context<Self>) {
-        if std::env::var_os("ZEPI_ROOT").is_some() {
+        if self.generate_commit_message_task.is_some()
+            || !self.can_commit()
+            || !AgentSettings::get_global(cx).enabled(cx)
+        {
             return;
         }
-        if !self.can_commit() || !AgentSettings::get_global(cx).enabled(cx) {
-            return;
-        }
-
-        let registry = LanguageModelRegistry::read_global(cx);
-        let Some(model) = registry.commit_message_model(cx) else {
-            return;
-        };
-        let provider = match registry.provider_for_model(&model) {
-            Ok(provider) => provider,
-            Err(error) => {
-                if let Some(workspace) = self.workspace.upgrade() {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace
-                            .show_error(format!("Failed to generate commit message: {error}"), cx);
-                    });
-                }
-                return;
-            }
-        };
-
         let Some(repo) = self.active_repository.clone() else {
             return;
+        };
+        let use_pi = std::env::var_os("ZEPI_ROOT").is_some();
+        let pi_draft = if use_pi {
+            let buffer = self.commit_message_buffer(cx);
+            if repo.read(cx).commit_message_buffer() != Some(&buffer) {
+                return;
+            }
+            let draft = buffer.read(cx);
+            let version = draft.version();
+            let subject = draft.text().lines().next().unwrap_or_default().to_owned();
+            Some((buffer, version, subject))
+        } else {
+            None
+        };
+        let zed_model = if use_pi {
+            None
+        } else {
+            let registry = LanguageModelRegistry::read_global(cx);
+            let Some(model) = registry.commit_message_model(cx) else {
+                return;
+            };
+            let provider = match registry.provider_for_model(&model) {
+                Ok(provider) => provider,
+                Err(error) => {
+                    if let Some(workspace) = self.workspace.upgrade() {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.show_error(format!("Failed to generate commit message: {error}"), cx);
+                        });
+                    }
+                    return;
+                }
+            };
+            let temperature = AgentSettings::temperature_for_model(&model, cx);
+            Some((model, provider, temperature))
         };
 
         telemetry::event!("Git Commit Message Generated");
@@ -4762,7 +4880,7 @@ impl GitPanel {
         });
 
         let recent_commit_tasks = repo.update(cx, |repo, _| {
-            (0..RECENT_COMMIT_COUNT)
+            (0..if use_pi { PI_COMMIT_HISTORY_LIMIT } else { RECENT_COMMIT_COUNT })
                 .map(|index| {
                     let revision = if index == 0 {
                         "HEAD".to_string()
@@ -4774,10 +4892,8 @@ impl GitPanel {
                 .collect::<Vec<_>>()
         });
 
-        let temperature = AgentSettings::temperature_for_model(&model, cx);
-
-        let include_project_rules =
-            AgentSettings::get_global(cx).commit_message_include_project_rules;
+        let include_project_rules = !use_pi
+            && AgentSettings::get_global(cx).commit_message_include_project_rules;
 
         let instructions = AgentSettings::get_global(cx)
             .commit_message_instructions
@@ -4786,14 +4902,12 @@ impl GitPanel {
         let repo_work_dir = repo.read(cx).work_directory_abs_path.clone();
 
         self.generate_commit_message_task = Some(cx.spawn(async move |this, mut cx| {
-            async move {
-                let _defer = cx.on_drop(&this, |this, _cx| {
-                    this.generate_commit_message_task.take();
-                });
-
-                if let Some(task) = cx.update(|cx| {
-                    (!provider.is_authenticated(cx)).then(|| provider.authenticate(cx))
-                }) {
+            let result = async {
+                if let Some((_, provider, _)) = &zed_model
+                    && let Some(task) = cx.update(|cx| {
+                        (!provider.is_authenticated(cx)).then(|| provider.authenticate(cx))
+                    })
+                {
                     task.await.log_err();
                 }
 
@@ -4819,7 +4933,14 @@ impl GitPanel {
                     .into_iter()
                     .enumerate()
                     .filter_map(|(index, result)| match result {
-                        Ok(Ok(commit)) => Some(commit.message.to_string()),
+                        Ok(Ok(commit)) if !use_pi || Self::is_commit_style_example(&commit.message) => {
+                            Some(if use_pi {
+                                commit.message.chars().take(2000).collect()
+                            } else {
+                                commit.message.to_string()
+                            })
+                        }
+                        Ok(Ok(_)) => None,
                         Ok(Err(error)) => {
                             if index == 0 {
                                 log::debug!("failed to load recent commit messages: {error:?}");
@@ -4833,6 +4954,7 @@ impl GitPanel {
                             None
                         }
                     })
+                    .take(if use_pi { PI_COMMIT_EXAMPLE_COUNT } else { RECENT_COMMIT_COUNT })
                     .collect::<Vec<_>>();
 
                 let rules_content = if include_project_rules {
@@ -4851,15 +4973,19 @@ impl GitPanel {
 
                 let prompt = include_str!("../src/commit_message_prompt.txt");
 
-                let subject = this.update(cx, |this, cx| {
-                    this.commit_editor
-                        .read(cx)
-                        .text(cx)
-                        .lines()
-                        .next()
-                        .map(ToOwned::to_owned)
-                        .unwrap_or_default()
-                })?;
+                let subject = if let Some((_, _, subject)) = &pi_draft {
+                    subject.clone()
+                } else {
+                    this.update(cx, |this, cx| {
+                        this.commit_editor
+                            .read(cx)
+                            .text(cx)
+                            .lines()
+                            .next()
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_default()
+                    })?
+                };
 
                 let text_empty = subject.trim().is_empty();
 
@@ -4873,6 +4999,25 @@ impl GitPanel {
                     &diff_text,
                 );
 
+                if let Some((buffer, version, _)) = pi_draft {
+                    match Self::generate_pi_commit_message(&content).await {
+                        Ok(message) => this.update(cx, |this, cx| {
+                            if this.active_repository.as_ref() == Some(&repo)
+                                && this.commit_message_buffer(cx) == buffer
+                            {
+                                buffer.update(cx, |buffer, cx| {
+                                    if buffer.version() == version {
+                                        buffer.edit([(0..buffer.len(), message)], None, cx);
+                                    }
+                                });
+                            }
+                        })?,
+                        Err(error) => Self::show_commit_message_error(&this, &error, cx),
+                    }
+                    return anyhow::Ok(());
+                }
+
+                let (model, provider, temperature) = zed_model.context("Missing commit message model")?;
                 let request = LanguageModelRequest {
                     thread_id: None,
                     prompt_cache_key: None,
@@ -4940,9 +5085,15 @@ impl GitPanel {
 
                 anyhow::Ok(())
             }
-            .log_err()
-            .await
+            .await;
+            this.update(cx, |this, cx| {
+                this.generate_commit_message_task.take();
+                cx.notify();
+            })
+            .ok();
+            result.log_err()
         }));
+        cx.notify();
     }
 
     fn get_fetch_options(
@@ -5543,7 +5694,7 @@ impl GitPanel {
                     .clone()
                     .or_else(|| participant.user.name.clone())
                     .unwrap_or_else(|| participant.user.username.clone().to_string());
-                new_co_authors.push((name.clone(), email.clone()))
+                new_co_authors.push((name, email.clone()))
             }
         }
         if !project.is_local()
@@ -5816,6 +5967,7 @@ impl GitPanel {
         let active_repository_changed = self.active_repository.as_ref().map(Entity::entity_id)
             != new_active_repository.as_ref().map(Entity::entity_id);
         if active_repository_changed {
+            self.generate_commit_message_task.take();
             self.clear_marks();
             self.set_skip_hooks_enabled(false, cx);
             if self.amend_pending {
@@ -5981,6 +6133,7 @@ impl GitPanel {
 
         let active_repository = self.project.read(cx).active_repository(cx);
         if active_repository != self.active_repository {
+            self.generate_commit_message_task.take();
             self.active_repository = active_repository;
             self.git_access = None;
             self.clear_marks();
@@ -6843,11 +6996,10 @@ impl GitPanel {
 
     pub(crate) fn render_generate_commit_message_button(
         &self,
+        model_selector_enabled: bool,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
-        if std::env::var_os("ZEPI_ROOT").is_some() {
-            return None;
-        }
+        let use_pi = std::env::var_os("ZEPI_ROOT").is_some();
         if !agent_settings::AgentSettings::get_global(cx).enabled(cx) {
             return None;
         }
@@ -6876,10 +7028,10 @@ impl GitPanel {
             );
         }
 
-        let model_registry = LanguageModelRegistry::read_global(cx);
-        let has_commit_model_configuration_error = model_registry
-            .configuration_error(model_registry.commit_message_model(cx), cx)
-            .is_some();
+        let has_commit_model_configuration_error = !use_pi && {
+            let registry = LanguageModelRegistry::read_global(cx);
+            registry.configuration_error(registry.commit_message_model(cx), cx).is_some()
+        };
         let can_commit = self.can_commit();
 
         let editor_focus_handle = self.commit_editor.focus_handle(cx);
@@ -6904,6 +7056,8 @@ impl GitPanel {
             button.tooltip(move |_window, cx| {
                 if !can_commit {
                     Tooltip::simple("No Changes to Commit", cx)
+                } else if use_pi {
+                    Tooltip::simple("Generate Commit Message with pi (sends the diff and recent commit messages to your default provider)", cx)
                 } else {
                     Tooltip::for_action_in(
                         "Generate Commit Message",
@@ -6915,7 +7069,18 @@ impl GitPanel {
             })
         };
 
-        Some(button.into_any_element())
+        if !model_selector_enabled || use_pi {
+            return Some(button.into_any_element());
+        }
+
+        Some(
+            h_flex()
+                .gap_0p5()
+                .child(button)
+                .child(Divider::vertical())
+                .child(self.commit_message_model_selector.clone())
+                .into_any_element(),
+        )
     }
 
     pub(crate) fn render_co_authors(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -7512,7 +7677,7 @@ impl GitPanel {
                                 h_flex()
                                     .gap_0p5()
                                     .child(toggle_commit_editor_button)
-                                    .children(self.render_generate_commit_message_button(cx)),
+                                    .children(self.render_generate_commit_message_button(true, cx)),
                             )
                             .child(
                                 h_flex()
@@ -10773,6 +10938,16 @@ mod tests {
             editor::init(cx);
             crate::init(cx);
         });
+    }
+
+    #[test]
+    fn commit_style_examples_exclude_merges_and_ticket_only_subjects() {
+        assert!(!GitPanel::is_commit_style_example("Merge branch 'feature/STAFF-1890' into 'develop'"));
+        assert!(!GitPanel::is_commit_style_example("STAFF-1890"));
+        assert!(!GitPanel::is_commit_style_example("  \n"));
+        assert!(GitPanel::is_commit_style_example("STAFF-1861 Добавляет интеграционный тест"));
+        assert!(GitPanel::is_commit_style_example("Fix payment handling"));
+        assert!(GitPanel::is_commit_style_example("feat(prod): включить функционал"));
     }
 
     #[test]

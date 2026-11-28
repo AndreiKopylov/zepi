@@ -4,6 +4,20 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.12] - 2026-11-28
+
+### Added
+
+- Generate a draft commit message from the Git Panel using the default pi model, without opening
+  a chat or committing any changes. The model uses up to five meaningful recent commit messages
+  as examples for the language and style.
+
+### Changed
+
+- Updated the Zed base from 1.29.3 to 1.30.2.
+- Updated the bundled pi agent to 1.7.0.
+- Right-button panning in image, Word, and PowerPoint viewers no longer switches to a move cursor.
+
 ## [0.0.11] - 2026-11-27
 
 ### Added

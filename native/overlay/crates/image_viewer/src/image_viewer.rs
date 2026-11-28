@@ -144,6 +144,10 @@ impl ImageView {
         self.pan_drag.is_some()
     }
 
+    fn show_grabbing_cursor(&self) -> bool {
+        self.pan_drag.is_some_and(|(button, _)| button != MouseButton::Right)
+    }
+
     fn update_displayed_image(
         &mut self,
         image: &Arc<gpui::Image>,
@@ -565,6 +569,7 @@ impl Element for ImageContentElement {
         let border_color = cx.theme().colors().border;
 
         let is_dragging = image_view.is_dragging();
+        let show_grabbing_cursor = image_view.show_grabbing_cursor();
         let region = image_view.region;
         let selecting = region.is_some_and(|region| region.dragging);
 
@@ -661,7 +666,7 @@ impl Element for ImageContentElement {
                         .top(origin.y)
                         .w(image_bounds.size.width)
                         .h(image_bounds.size.height)
-                        .when(!is_dragging, |image| {
+                        .when(!show_grabbing_cursor, |image| {
                             image.cursor(gpui::CursorStyle::Crosshair)
                         })
                         .when_some(
@@ -1053,7 +1058,7 @@ impl Render for ImageView {
                     .id("image-container")
                     .size_full()
                     .overflow_hidden()
-                    .cursor(if self.is_dragging() {
+                    .cursor(if self.show_grabbing_cursor() {
                         gpui::CursorStyle::ClosedHand
                     } else {
                         gpui::CursorStyle::OpenHand

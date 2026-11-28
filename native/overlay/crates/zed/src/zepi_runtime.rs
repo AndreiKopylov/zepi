@@ -5,7 +5,7 @@ use std::{env, path::{Path, PathBuf}};
 /// Called from main before the application starts threads or resolves resources.
 /// A bundle carries code/resources only; all mutable state lives in user storage.
 /// Product version shown in the About window and by the installer.
-pub const PRODUCT_VERSION: &str = "0.0.11";
+pub const PRODUCT_VERSION: &str = "0.0.12";
 
 // Assign this process to a job with KILL_ON_JOB_CLOSE so the OS terminates
 // leftover children (language servers, agents, terminals) on any exit path.
@@ -146,7 +146,7 @@ pub fn configure() -> Result<Option<PathBuf>> {
         return Ok(None);
     }
     let manifest: Value = serde_json::from_slice(&std::fs::read(root.join("zepi-runtime.json"))?)?;
-    ensure!(manifest["version"] == 1 && manifest["pi"] == "1.6.1", "Unsupported Zepi runtime manifest");
+    ensure!(manifest["version"] == 1 && manifest["pi"] == "1.7.0", "Unsupported Zepi runtime manifest");
     let helpers = contents.join("Helpers");
     let node = helpers.join("node");
     ensure!(node.is_file() && root.join("packages/acp/src/cli.js").is_file(), "Bundled agent runtime is incomplete");
