@@ -53,6 +53,21 @@ class NativePrepareTests(unittest.TestCase):
         self.native.prepare()
         self.assertEqual((self.native.SOURCE / "legacy.rs").read_text(), "legacy code\n")
 
+    def test_pin_change_requires_a_fresh_source_tree(self):
+        self.native.prepare()
+        manifest = json.loads(self.native.MANIFEST.read_text())
+        manifest['commit'] = 'next'
+        self.native.MANIFEST.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(RuntimeError, 'pin changed'):
+            self.native.guard()
+        with self.assertRaisesRegex(RuntimeError, 'move .* aside'):
+            self.native.prepare()
+        backup = self.native.SOURCE.with_name('zed-old')
+        self.native.SOURCE.rename(backup)
+        self.native.prepare()
+        self.native.guard()
+        self.assertTrue((backup / 'legacy.rs').is_file())
+
     def test_removed_overlay_file_disappears_from_generated_source(self):
         (self.overlay / "bridge.rs").write_text("retired bridge\n")
         self.native.prepare()

@@ -1,6 +1,6 @@
 # AGENTS.md — zepi
 
-Windows port of zepi: an AI workspace on top of Zed v1.29.3 (pin in `native/zed.json`) with the
+Windows port of zepi: an AI workspace on top of Zed v1.30.2 (pin in `native/zed.json`) with the
 pi 1.7.0 agent (ACP) and office document viewers (xlsx with editing, docx, pptx) on vendored
 crafts. Rust (gpui) + TypeScript (pi layer). See README.md for the human-readable intro.
 
@@ -39,7 +39,7 @@ zepi/
 
 ## Stack
 
-- Native: Rust 1.98.1, Zed v1.29.3 (tarball by pin, sha256 verified), gpui; `release-fast` cargo
+- Native: Rust 1.98.1, Zed v1.30.2 (tarball by pin, sha256 verified), gpui; `release-fast` cargo
   profile (debug is unusable: laggy UI); `release-installer` (strip, thin-LTO) for the installer only;
   target dir outside the repo. Auto-update rides Zed's mechanism (GitHub releases/latest redirect,
   detached non-silent Inno installer). Version single source: `PRODUCT_VERSION` in `zepi_runtime.rs`.

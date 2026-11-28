@@ -6,8 +6,15 @@ All notable changes to Zepi are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Generate a draft commit message from the Git Panel using the default pi model, without opening
+  a chat or committing any changes. The model uses up to five meaningful recent commit messages
+  as examples for the language and style.
+
 ### Changed
 
+- Updated the Zed base from 1.29.3 to 1.30.2.
 - Updated the bundled pi agent to 1.7.0.
 - Right-button panning in image, Word, and PowerPoint viewers no longer switches to a move cursor.
 

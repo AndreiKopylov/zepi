@@ -16,6 +16,11 @@ if (process.versions.bun) {
 // Side tools (settings/extensions UI) run as subcommands of the compiled agent so
 // they use the embedded pi instead of a Node runtime plus on-disk node_modules.
 const subcommand = process.argv[2];
+if (subcommand === "commit-message") {
+  const { runCommitMessageCommand } = await import("./commit-message.ts");
+  await runCommitMessageCommand();
+  process.exit(process.exitCode ?? 0);
+}
 if (subcommand === "mcp-auth") {
   await import("../../runtime/bin/mcp-auth.mjs");
   process.exit(0);

@@ -17,7 +17,7 @@ default = []
 test-support = []
 
 [dependencies]
-open.workspace = true
+open = "5.0.0"
 anyhow.workspace = true
 audio.workspace = true
 client.workspace = true

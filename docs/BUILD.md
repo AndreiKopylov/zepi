@@ -55,6 +55,9 @@ python scripts\win-run.py
 
 - Run `prepare` after changing `native/overlay` or `native/removed-paths.json`. Cargo builds from
   `.local\upstream\zed`; `win-build.cmd` and `scripts\win-check.cmd` refuse a stale overlay.
+  After a Zed pin change, move that directory aside before running `python scripts\native.py fetch`
+  so unmodified sources also come from the new pin. Reuse the old `.webrtc-sys` assets only if
+  the WebRTC pin is unchanged.
 - `win-build.cmd` builds `zepi.exe` with `release-fast` into `..\zepi-build\release-fast` by
   default. It uses line-tables-only debug info, incremental compilation for workspace crates, and
   sccache when available. `ZEPI_DEBUG=full` restores full debug info at the cost of a full rebuild.
