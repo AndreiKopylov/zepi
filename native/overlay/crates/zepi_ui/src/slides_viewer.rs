@@ -1202,8 +1202,7 @@ impl gpui::Render for SlidesView {
                 .relative()
                 .shadow_lg()
                 .overflow_hidden()
-                .cursor_crosshair()
-                .when(self.pan.is_some(), |page| page.cursor_grabbing());
+                .cursor_crosshair();
             slide = match image {
                 Some(image) => slide.child(img(ImageSource::from(image)).w(px(slide_w)).h(px(slide_h))),
                 None => slide.child(
@@ -1270,7 +1269,6 @@ impl gpui::Render for SlidesView {
         let view = cx.entity();
         let mut wrapper = ui::v_flex()
             .cursor_grab()
-            .when(self.pan.is_some(), |tape| tape.cursor_grabbing())
             .on_scroll({
                 let view = view.clone();
                 move |event, _, cx| {

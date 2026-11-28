@@ -585,7 +585,7 @@ impl PiSettingsView {
             sections::MCP => "MCP servers".to_owned(),
             sections::SKILLS => "Skills".to_owned(),
             _ => {
-                let version = self.data.as_ref().and_then(|data| data["version"].as_str()).unwrap_or("1.6.1");
+                let version = self.data.as_ref().and_then(|data| data["version"].as_str()).unwrap_or("1.7.0");
                 format!("pi {version} · Built into Zepi")
             }
         }

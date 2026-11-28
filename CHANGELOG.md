@@ -4,6 +4,13 @@ All notable changes to Zepi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions use
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Updated the bundled pi agent to 1.7.0.
+- Right-button panning in image, Word, and PowerPoint viewers no longer switches to a move cursor.
+
 ## [0.0.11] - 2026-11-27
 
 ### Added
